@@ -1,0 +1,14 @@
+{
+  "name": "qqbotb",
+  "version": "0.1.0",
+  "private": true,
+  "description": "QQBot mod B 单体——协议端管理 / OneBot 连接 / WebUI 内嵌",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^44.7.0"
+  }
+}

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QQBot mod B</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">QQBot mod B</div>
+    <div class="states">
+      <span class="state"><i id="dot-napcat" class="dot"></i>协议端 <b id="txt-napcat">检测中</b></span>
+      <span class="state"><i id="dot-onebot" class="dot"></i>OneBot <b id="txt-onebot">未连接</b></span>
+    </div>
+    <div class="actions">
+      <button id="btn-napcat-toggle" class="btn">启动协议端</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-view="overview">概览</button>
+    <button class="tab" data-view="webui">协议端控制台</button>
+    <button class="tab" data-view="logs">日志</button>
+    <button class="tab" data-view="settings">设置</button>
+  </nav>
+
+  <main>
+    <section id="view-overview" class="view active">
+      <div class="cards">
+        <div class="card">
+          <h3>协议端</h3>
+          <p>状态：<b id="ov-napcat">检测中</b></p>
+          <p>进程：<span id="ov-napcat-pid">-</span></p>
+          <p>账号：<span id="ov-uin">-</span></p>
+          <p>WebUI：<span id="ov-webui">-</span></p>
+        </div>
+        <div class="card">
+          <h3>OneBot</h3>
+          <p>状态：<b id="ov-onebot">未连接</b></p>
+          <p>地址：<span id="ov-onebot-url">-</span></p>
+          <p>登录：<span id="ov-self">-</span></p>
+          <p>事件：<span id="ov-events">0</span></p>
+        </div>
+        <div class="card">
+          <h3>应用</h3>
+          <p>端口：<span id="ov-port">-</span></p>
+          <p>版本：<span id="ov-version">-</span></p>
+          <p>协议端目录：<span id="ov-shelldir" class="mono">-</span></p>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-webui" class="view">
+      <div class="webui-bar">
+        <span id="webui-hint">协议端启动后可在此操作（登录、配置、查看状态）</span>
+        <button id="btn-webui-open" class="btn small">在浏览器中打开</button>
+        <button id="btn-webui-reload" class="btn small">刷新</button>
+      </div>
+      <iframe id="webui-frame" title="协议端控制台"></iframe>
+    </section>
+
+    <section id="view-logs" class="view">
+      <div class="log-bar">
+        <label>落盘级别
+          <select id="log-level">
+            <option value="debug">debug</option>
+            <option value="info" selected>info</option>
+            <option value="warn">warn</option>
+            <option value="error">error</option>
+          </select>
+        </label>
+        <button id="btn-log-clear" class="btn small">清屏</button>
+      </div>
+      <pre id="log-view" class="log-view"></pre>
+    </section>
+
+    <section id="view-settings" class="view">
+      <div class="form">
+        <label>协议端目录<input id="cfg-shell-dir" type="text"></label>
+        <label>登录账号<input id="cfg-uin" type="text"></label>
+        <label>界面端口<input id="cfg-port" type="number"></label>
+        <label class="check"><input id="cfg-autostart" type="checkbox"> 启动时自动拉起协议端</label>
+        <div class="form-actions">
+          <button id="btn-config-save" class="btn">保存</button>
+          <span id="cfg-hint" class="hint"></span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

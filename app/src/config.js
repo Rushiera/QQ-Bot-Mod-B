@@ -1,0 +1,97 @@
+// config.js —— 配置读写
+//
+// 职责：解析路径基准 → 加载默认配置 → 叠加 data/config.json 覆盖 → 暴露读写接口。
+// 边界：协议端自身的参数（WebUI 端口与 token、OneBot 端口与 token）不在此重复声明——
+//       运行时从 NapCat 自己的配置文件读取（单点真相源，避免两处配置漂移）。
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+
+/** 应用根目录（app/）。 */
+export const APP_DIR = path.resolve(moduleDir, '..');
+
+/** 项目根目录（QQBotB/）。 */
+export const PROJECT_DIR = path.resolve(APP_DIR, '..');
+
+/** 数据根目录（app/data/）。 */
+export const DATA_DIR = path.join(APP_DIR, 'data');
+
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+
+/** 默认配置——用户可用 data/config.json 覆盖单项，未提交字段保持默认。 */
+const DEFAULTS = {
+  app: {
+    port: 3280,
+    autostartNapcat: true
+  },
+  napcat: {
+    shellDir: path.join(PROJECT_DIR, 'runtime', 'NapCat', 'NapCat.52230.Shell'),
+    uin: '2405997337'
+  },
+  onebot: {
+    autoConnect: true,
+    reconnectMs: 3000
+  }
+};
+
+/**
+ * 递归合并：以 defaults 为骨架，用 patch 覆盖同名叶子。
+ *
+ * @param {object} base 骨架对象
+ * @param {object} patch 覆盖对象
+ * @returns {object} 合并结果（新对象）
+ */
+function mergeDeep(base, patch) {
+  if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+    return patch === undefined ? base : patch;
+  }
+  const out = { ...base };
+  for (const key of Object.keys(patch)) {
+    out[key] = mergeDeep(base?.[key], patch[key]);
+  }
+  return out;
+}
+
+/**
+ * 读取磁盘配置（无文件时返回空对象）。
+ *
+ * @returns {object} 磁盘配置片段
+ */
+function readFileConfig() {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) return {};
+    const text = fs.readFileSync(CONFIG_FILE, 'utf8').replace(/^\uFEFF/, '');
+    return JSON.parse(text);
+  } catch (error) {
+    // 配置损坏时不得静默回落默认值——把问题亮出来，由调用方决定是否继续
+    throw new Error(`配置读取失败（${CONFIG_FILE}）：${error?.message ?? error}`);
+  }
+}
+
+/**
+ * 加载生效配置（默认值 + 磁盘覆盖）。
+ *
+ * @returns {object} 生效配置
+ */
+export function loadConfig() {
+  return mergeDeep(DEFAULTS, readFileConfig());
+}
+
+/**
+ * 写入配置片段（与现有磁盘内容合并后落盘）。
+ *
+ * @param {object} patch 待写入片段
+ * @returns {object} 落盘后的完整配置
+ */
+export function saveConfig(patch) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const next = mergeDeep(loadConfig(), patch);
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2), 'utf8');
+  return next;
+}
+
+/** 配置文件的绝对路径（供界面展示）。 */
+export const CONFIG_PATH = CONFIG_FILE;

@@ -36,3 +36,4 @@
 | v0.28 | 2026-10-11 | Cloudflare 处置——无头 UA 对齐（去 HeadlessChrome）+ 遇验证页走 headful 请人过一次（工具描述 + Browser Job 教材）；实锤：clearance 复用成功 |
 | v0.29 | 2026-10-11 | 有头关闭链路三修——优雅关闭（CDP Browser.close）· 收尾/域回收不关人工窗口 · 空闲回收 10→30 分钟 |
 | v0.30 | 2026-10-11 | 遇阻处置硬规则 6 条入前文 + 图片包裹兼容层放宽（不再要求首行）+ 主模型看不了图 → image-analyze |
+| v0.31 | 2026-10-11 | 项目更名 **QQBot mod B**（文档 / 代码注释 / 显示类全量）+ Git 托管（GitHub `Rushiera/QQ-Bot-Mod-B` · v0.1–v0.30 历史重建逐条推送） |

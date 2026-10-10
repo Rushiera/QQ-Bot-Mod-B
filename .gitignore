@@ -4,6 +4,8 @@
 # 运行区（协议端 NapCat 自带 NTQQ · 事件落盘 · 自测产物）
 runtime/*
 !runtime/napcat-host/
+# napcat-host 只收脚本与配置——Node 运行时（83 MB）不入仓
+runtime/napcat-host/node.exe
 
 # 第三方拆包产物（386 MB · 可弃）
 _unpack/

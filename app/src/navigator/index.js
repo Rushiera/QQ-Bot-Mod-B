@@ -168,6 +168,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   /** 出站记录（猫 key → { at, kind, replyAt }）——出站决策去重与限流用。 */
   const sentLog = new Map();
 
+  /** 等「本轮回复」的等待器（猫 key → Set<resolve>）——前文整理重启用：挂持久观测的轮结束信号，不设时限。 */
+  const roundWaiters = new Map();
+
   /** 本次领航统计（开启时归零）——关闭时进领航记录。 */
   const voyageStats = { replies: 0, progress: 0, tours: 0 };
 
@@ -946,6 +949,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     session.startedAt = Date.now();
     session.sawRun = false;
     session.blocks = [];
+    // 唤醒等「本轮回复」的等待器（前文整理重启）——「群里转发回复」的那一刻就是轮结束
+    notifyRoundEnd(session.key);
     let items = [];
     try {
       const info = await ch4.keyinfo(session.key, 12);
@@ -1043,31 +1048,96 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
-   * 等某猫出「本轮回复」——按 keyinfo 轮询，返回回复正文（超时返回已拿到的部分）。
+   * 取某猫 `since` 之后的回复正文（须同时出现轮结算行——中途插话不算一轮结束）。
+   *
+   * @param {string} key 猫 key
+   * @param {number} since 起点时刻
+   * @returns {Promise<string>} 回复正文（未结算则空串）
+   */
+  async function readReply(key, since) {
+    try {
+      const info = await ch4.keyinfo(key, 8);
+      const rows = (Array.isArray(info?.items) ? info.items : []).filter((row) => Number(row.time) >= since);
+      const reply = rows.filter((row) => row.role === 'reply')
+        .map((row) => String(row.content ?? '').trim())
+        .filter(Boolean)
+        .join('\n\n');
+      return reply && rows.some((row) => row.role === 'roundsum') ? reply : '';
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * 等下一次「轮结束」信号——持久观测收尾（`finishSession`）时唤醒；到点未见信号则返回（供调用方复查）。
+   *
+   * @param {string} key 猫 key
+   * @param {number} timeoutMs 本次最长等待（毫秒）
+   * @returns {Promise<void>} 完成
+   */
+  function waitRoundSignal(key, timeoutMs) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const set = roundWaiters.get(key);
+        if (set) {
+          set.delete(done);
+          if (set.size === 0) roundWaiters.delete(key);
+        }
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      let set = roundWaiters.get(key);
+      if (!set) {
+        set = new Set();
+        roundWaiters.set(key, set);
+      }
+      set.add(done);
+    });
+  }
+
+  /**
+   * 唤醒某猫的轮结束等待器（`finishSession` 调用）——「群里转发回复」的那一刻就是轮结束。
+   *
+   * @param {string} key 猫 key
+   * @returns {void}
+   */
+  function notifyRoundEnd(key) {
+    const set = roundWaiters.get(String(key));
+    if (!set) return;
+    for (const done of [...set]) {
+      try { done(); } catch { /* 单个等待器失败不影响其余 */ }
+    }
+  }
+
+  /**
+   * 等某猫出「本轮回复」——挂持久观测的轮结束信号唤醒，**默认不设时限**。
+   *
+   * 为什么不再用固定超时轮询（Rushiera 2026-10-11 定）：完整收工 + 落盘 + 推 git + 交接摘要，
+   * 大前文的猫实测 8 分钟——固定窗口（原 240s）必判失败。判例：R喵 434k 前文，
+   * 17:39:23 投递、17:43:24 判「交接摘要未取到」中止，而它 17:47:17 才产出摘要。
+   * 正常情形下收工报告必然产出，等待就挂到「转发回复」那一刻（持久观测 `finishSession`）。
    *
    * @param {string} key 猫 key
    * @param {object} options 选项
    * @param {number} options.since 起点时刻
-   * @param {number} [options.timeoutMs] 超时毫秒
-   * @returns {Promise<string>} 回复正文
+   * @param {number} [options.timeoutMs] 上限毫秒（0 = 不设上限；仅「等确认回复」这类非关键路径用）
+   * @returns {Promise<string>} 回复正文（空串 = 未取到）
    */
-  async function waitForReply(key, { since, timeoutMs = 240000 }) {
-    const deadline = Date.now() + timeoutMs;
-    let best = '';
-    while (Date.now() < deadline) {
-      try {
-        const info = await ch4.keyinfo(key, 8);
-        const rows = (Array.isArray(info?.items) ? info.items : []).filter((row) => Number(row.time) >= since);
-        const reply = rows.filter((row) => row.role === 'reply')
-          .map((row) => String(row.content ?? '').trim())
-          .filter(Boolean)
-          .join('\n\n');
-        if (reply) best = reply;
-        if (reply && rows.some((row) => row.role === 'roundsum')) return reply;
-      } catch { /* 单次失败继续轮询 */ }
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  async function waitForReply(key, { since, timeoutMs = 0 } = {}) {
+    const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Infinity;
+    for (;;) {
+      const reply = await readReply(key, since);
+      if (reply) return reply;
+      if (Date.now() >= deadline) return '';
+      const slice = Number.isFinite(deadline)
+        ? Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()))
+        : POLL_INTERVAL_MS;
+      await waitRoundSignal(key, slice);
     }
-    return best;
   }
 
   /**
@@ -1130,6 +1200,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       '',
       '①②③做完再输出摘要；报告与摘要都只输出正文（纯文本，小标题 + 列表），篇幅不设上限。'
     ].join('\n'));
+    // 不设时限——收工 + 落盘 + 推 git + 摘要，大前文的猫实测 8 分钟（等「转发回复」那一刻）
     const summary = await waitForReply(resolved, { since: askAt - 2000 });
     if (!summary) {
       record('error', `${name}：交接摘要未取到，整理中止`);

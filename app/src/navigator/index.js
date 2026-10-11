@@ -1248,13 +1248,14 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   /**
    * 领航记录——本次领航（开启 → 关闭）的终态小结。
    *
-   * 超时自关与主动退出都要有（Rushiera 2026-10-11）；落盘归档总是做，发群只随群内开启的场次。
+   * 超时自关与主动退出都要有（Rushiera 2026-10-11）；落盘归档总是做，发群随「关闭动作的发生地」。
    *
    * @param {object} snap 关闭前的状态快照
    * @param {string} reason 关闭原因
-   * @returns {object} { text, file }
+   * @param {string} [by] 关闭来源（qq=群内退出 / app=软件内退出或空闲自关）
+   * @returns {object} { text, file, brief }
    */
-  function buildVoyageLog(snap, reason) {
+  function buildVoyageLog(snap, reason, by = 'app') {
     const openedAt = Number(snap.openedAt) || 0;
     const closedAt = Date.now();
     const ms = openedAt > 0 ? closedAt - openedAt : 0;
@@ -1264,7 +1265,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     const lines = [
       `【领航记录】${fmt(openedAt)} → ${fmt(closedAt)}（共 ${dur}）`,
       `· 开启来源：${snap.openedBy === 'qq' ? '群内 @' : '应用内'}`,
-      `· 关闭原因：${reason === 'idle' ? '空闲暂关（超时）' : '手动退出'}`,
+      `· 关闭来源：${reason === 'idle' ? '空闲暂关（超时）' : (by === 'qq' ? '群内 @ 退出' : '应用内退出')}`,
       `· 指令：${cmds.length} 条`,
       `· 回复截图：${voyageStats.replies} 张`,
       `· 进度播报：${voyageStats.progress} 条`,
@@ -1274,7 +1275,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     if (last?.text) lines.push(`· 最近指令：${String(last.text).replace(/\s+/g, ' ').slice(0, 60)}`);
     const text = lines.join('\n');
     // 群记条目（一行版小结）——进记忆面用；业务面按 200 字符截断
-    const brief = `领航场次 ${fmt(openedAt)} → ${fmt(closedAt)}（${dur}）：开启来源 ${snap.openedBy === 'qq' ? '群内 @' : '应用内'}，关闭原因 ${reason === 'idle' ? '空闲超时自关' : '手动退出'}；指令 ${cmds.length} 条 / 回复截图 ${voyageStats.replies} 张 / 进度播报 ${voyageStats.progress} 条 / 开场巡检 ${voyageStats.tours} 张${last?.text ? `；最近指令：${String(last.text).replace(/\s+/g, ' ').slice(0, 30)}` : ''}。`;
+    const brief = `领航场次 ${fmt(openedAt)} → ${fmt(closedAt)}（${dur}）：开启来源 ${snap.openedBy === 'qq' ? '群内 @' : '应用内'}，关闭来源 ${reason === 'idle' ? '空闲超时自关' : (by === 'qq' ? '群内 @ 退出' : '应用内退出')}；指令 ${cmds.length} 条 / 回复截图 ${voyageStats.replies} 张 / 进度播报 ${voyageStats.progress} 条 / 开场巡检 ${voyageStats.tours} 张${last?.text ? `；最近指令：${String(last.text).replace(/\s+/g, ' ').slice(0, 30)}` : ''}。`;
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const file = path.join(dataDir, `nav-log-${stamp}.md`);
     try {
@@ -1291,19 +1292,24 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
    *
    * @param {object} options 选项
    * @param {string} [options.reason] 原因（manual / idle）
-   * @param {boolean} [options.notify] 保留参数（现行语义：发不发群由开启来源决定，不看它）
+   * @param {string} [options.by] 关闭来源（qq=群内退出 / app=软件内退出或空闲自关）
+   * @param {string|number|null} [options.chat] 退出动作发生的群（空=按新鲜 VIP 群消息解析）
+   * @param {boolean} [options.notify] 保留参数（现行语义：发不发群由关闭来源决定，不看它）
    * @returns {Promise<object>} 状态快照
    */
-  async function close({ reason = 'manual', notify = false } = {}) {
+  async function close({ reason = 'manual', by = 'app', chat = null, notify = false } = {}) {
     const before = state.snapshot();
     const next = state.close(reason);
     disarmAll();
     // 领航记录：超时自关与主动退出都要有（Rushiera 2026-10-11）
-    // 落盘归档总是做；发群只随「群内 @ 开启」的场次（软件内开启不打扰群）
-    const voyage = buildVoyageLog(before, reason);
-    if (before.openedBy === 'qq' && before.activeChat) {
-      await say(before.activeChat, voyage.text);
-    }
+    // 落盘归档总是做；发群目标群按「动作的发生地」定（Rushiera 2026-10-11 定口径）：
+    //   群内退出 → 退出那个群；超时自关 → 最后一次群内指令的群（activeChat，
+    //   软件内开启但群内下过指令的场次同样发）；软件内手动退出 / 无群内指令 → 静默整理。
+    const voyage = buildVoyageLog(before, reason, by);
+    const target = by === 'qq'
+      ? (resolveChat(chat) || before.activeChat)
+      : (reason === 'idle' ? before.activeChat : null);
+    if (target) await say(target, voyage.text);
     // 场次小结进群记——「退出领航员是体面退出」：R喵 要知道自己在这段时间做过什么。
     // 手动退出与空闲自关都走这里（两条关闭路径共用一处沉淀）。
     if (before.activeChat) await sedimentVoyage(before.activeChat, voyage.brief);
@@ -1406,7 +1412,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       const cats = await ch4.cats();
       const working = cats.filter((row) => row?.runState && row.runState !== 'idle');
       if (working.length > 0) return;
-      log.info('navigator', '全猫停工且无指令超时——自动暂关');
+      log.info('navigator', '全猫停工且无指令超时——自动暂关（静默整理，不发群）');
       await close({ reason: 'idle', notify: true });
     } catch (error) {
       log.warn('navigator', `空闲巡检失败：${error?.message ?? error}`);
@@ -1448,7 +1454,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       })
     }),
     'POST /api/nav/close': async ({ body }) => ({
-      body: await close({ reason: body?.reason || 'manual', notify: body?.notify === true })
+      body: await close({
+        reason: body?.reason || 'manual',
+        by: body?.by || 'app',
+        chat: body?.chat ?? null,
+        notify: body?.notify === true
+      })
     }),
     'POST /api/nav/send': async ({ body }) => ({
       body: await send({

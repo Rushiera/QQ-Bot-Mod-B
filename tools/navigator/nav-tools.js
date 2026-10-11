@@ -164,13 +164,16 @@ export function registerNavTools() {
     id: 'nav_close',
     name: '领航员·关闭',
     description: `关闭领航员模式。
-🔴 同样只接受 QQ 569145850 本人的请求。关闭后群里回到普通参与模式。`,
+🔴 同样只接受 QQ 569145850 本人的请求。关闭后群里回到普通参与模式。
+发群按「哪里退出哪里回应」：群内退出 → 系统把领航记录发到本群；软件内退出 / 空闲自关 → 静默整理，不发群。`,
     category: 'system',
     icon: '🛑',
     parameters: { type: 'object', properties: {}, required: [] },
     async execute() {
       try {
-        const data = await call('/api/nav/close', { method: 'POST', body: { reason: 'manual', notify: false } });
+        // by:'qq'——本工具只从群内被调用（应用面板走前端通道，自带 by:'app'）；
+        // 不带 chat：回消息群由自研单体按「最近一条 VIP 群消息」解析（与 nav_send 同口径）。
+        const data = await call('/api/nav/close', { method: 'POST', body: { reason: 'manual', by: 'qq', notify: false } });
         return ok(data.enabled === false ? '领航员已关闭。' : '关闭请求已发出，但状态仍为开启——请再查一次状态。');
       } catch (error) {
         return err(`领航员服务不可达（自研单体没在跑？）：${error?.message ?? error}`);

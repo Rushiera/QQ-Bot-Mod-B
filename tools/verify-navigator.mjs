@@ -123,6 +123,39 @@ check('编排·新会话通道可用', typeof navIdem.newSession === 'function')
 const noTarget = await navIdem.newSession({ keys: ' , ' });
 check('编排·新会话·空目标报错退出', noTarget.ok === false && noTarget.total === 0, noTarget.error || '');
 
+// ── 5b 关闭发群判据：哪里开启哪里回应、哪里退出哪里回应（Rushiera 2026-10-11）────
+// 判据：群内退出（by=qq）→ 领航记录发到「退出那个群」；软件内退出 / 空闲自关（by=app）→ 静默。
+// 群号用非数字串：发群走 mock onebot（只收集）；群记沉淀按「群号不可用」跳过（不污染真实群记）。
+const closeChat = 'selftest';
+await navIdem.close({ reason: 'manual', by: 'app' });
+check('编排·软件内退出静默（不发群）', sent.length === 0, `发群次数 ${sent.length}`);
+
+await navIdem.open({ by: 'app', chat: closeChat, receipt: false });
+sent.length = 0;
+await navIdem.close({ reason: 'manual', by: 'qq', chat: closeChat });
+check('编排·群内退出发到退出那个群', sent.length === 1 && String(sent[0]?.params?.group_id) === closeChat,
+  `发群 ${sent.length} 次 → ${sent[0]?.params?.group_id ?? '-'}`);
+
+await navIdem.open({ by: 'qq', chat: closeChat, receipt: false });
+sent.length = 0;
+await navIdem.close({ reason: 'idle' });
+check('编排·空闲自关发到最后指令群', sent.length === 1 && String(sent[0]?.params?.group_id) === closeChat,
+  `发群 ${sent.length} 次 → ${sent[0]?.params?.group_id ?? '-'}`);
+
+// 软件内开启、从未有群内指令 → 超时静默（新实例：activeChat 干净）
+const sentIdle = [];
+const navIdle = createNavigator({
+  log,
+  dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-idle-')),
+  config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
+  onebot: { call: async (action, params) => { sentIdle.push({ action, params }); return {}; } }
+});
+await navIdle.open({ by: 'app', receipt: false });
+sentIdle.length = 0;
+await navIdle.close({ reason: 'idle' });
+check('编排·无群内指令的超时静默', sentIdle.length === 0, `发群次数 ${sentIdle.length}`);
+navIdle.stop();
+
 // ── 6 会话分析：直接读 think（Rushiera 2026-10-11）──────────────────────────
 // 判据：view 事件的 reason 块（persist.items）被收集 → thinkText 直接读回——
 //       会话分析据此报「它现在在干什么」，不再走截图 + 视觉判读。

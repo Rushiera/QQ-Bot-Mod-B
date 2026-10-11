@@ -13,6 +13,7 @@ import { createLogTail } from './napcat/logtail.js';
 import { createOnebotClient } from './onebot/client.js';
 import { createWebServer } from './web/server.js';
 import { createCompanion } from './companion.js';
+import { createNavigator } from './navigator/index.js';
 
 /**
  * 创建应用实例。
@@ -43,13 +44,17 @@ export async function createApp() {
   });
 
   // 壳层能力注入点（截图等）——核心不依赖 Electron，由 main.js 按需挂上
-  const hooks = { capture: null };
+  const hooks = { capture: null, shot: null };
+
+  // 领航员（design-qqbotb-navigator.md）——状态机 + CH4 猫面 + 观测 + 空闲守护 + 本地 API
+  const navigator = createNavigator({ log, dataDir: DATA_DIR, config, onebot, hooks });
 
   const web = createWebServer({
     port: config.app.port,
     uiDir: path.join(APP_DIR, 'ui'),
     log,
     api: {
+      ...navigator.api,
       'GET /api/status': async () => ({ body: await status() }),
       'GET /api/logs': async ({ query }) => ({ body: { logs: log.recent(Number(query.get('limit')) || 200) } }),
       'GET /api/config': async () => ({
@@ -166,6 +171,7 @@ export async function createApp() {
     if (config.onebot.autoConnect) {
       onebot.connect();
     }
+    navigator.start();
     return port;
   }
 
@@ -175,11 +181,12 @@ export async function createApp() {
    * @returns {Promise<void>} 完成
    */
   async function stop() {
+    navigator.stop();
     onebot.close();
     logTail.stop();
     await web.stop();
     log.info('app', 'QQBot mod B 已停止');
   }
 
-  return { start, stop, status, log, config, layout, hooks, webuiCredential, stopNapcat: () => napcat.stop() };
+  return { start, stop, status, log, config, layout, hooks, navigator, webuiCredential, stopNapcat: () => napcat.stop() };
 }

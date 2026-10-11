@@ -41,6 +41,21 @@ const DEFAULTS = {
     enabled: true,
     exe: path.join(PROJECT_DIR, '_unpack', 'QQ Agent.exe'),
     cwd: path.join(PROJECT_DIR, '_unpack')
+  },
+  // 领航员模式（design-qqbotb-navigator.md）——QQ 群指挥 CH4 猫群。
+  // mainPort / vipUser / idleCloseMs 是行为参数；services 是开启回执的健康检查清单
+  // （url 空 = 未接入，回执显示「未接入」）。
+  navigator: {
+    enabled: true,
+    mainPort: 8080,
+    vipUser: '569145850',
+    idleCloseMs: 30 * 60 * 1000,
+    // 开场巡检最多截几只猫（0 = 不限——开启时把有会话的猫全部发一遍）
+    tourLimit: 0,
+    services: [
+      { key: 'ApiSiteAnalyzer', name: 'ApiSiteAnalyzer', kind: 'apisite', url: 'http://127.0.0.1:8766/api/sites' },
+      { key: 'ComfyDock', name: 'ComfyDock', url: 'http://127.0.0.1:8971/' }
+    ]
   }
 };
 

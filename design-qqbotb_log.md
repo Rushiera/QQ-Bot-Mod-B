@@ -758,3 +758,81 @@
 | 2 | 入口四步的 `taskkill /IM "QQ Agent.exe" /T /F` 会连带杀掉它拉起的 shim（及其拉起的协议端）——首次切换时协议端因此重启一次（`-q` 快速登录，无需扫码）；协议端改由应用接管后，应用侧以 `detached` 启动，后续重启不再牵连它 | 已观察，符合预期 |
 | 3 | §二十一「不动 NapCat」的边界随本次入口切换失效——协议端生命周期归应用 | 取代 |
 | 4 | 自研单体仍以 Electron 开发态运行（`app/node_modules/electron`）——打包 / 发布面未做 | 未做 |
+
+## 二十五、领航员模式（2026-10-11）
+
+> 触发：Rushiera 2026-10-11 口述规格——「给软件加一个领航员模式」+ 三问拍板（LLM 用 R喵 现役端点 / 截图走 history 自渲染 / 领航员就是 R喵）+ 补充约束（共存期可写 QQ Agent，但终态要进自研单体）。
+
+| 面 | 落点 | 证据 |
+|:--|:--|:--|
+| 设计 | `design-qqbotb-navigator.md`（12 节——含 §十二 迁移路径） | 新建 ✅ |
+| 自研单体·状态机 | `app/src/navigator/state.js`——开关 / 回消息群 / 指令流水 / 空闲阈值（30 分钟） | 自测「落盘可复读」「跨群跟随」✅ |
+| 自研单体·CH4 猫面 | `app/src/navigator/ch4.js`——`/api/v1/cats` 读猫群 · `/api/v1/cat-detail` 单猫详情 · `cat.chat`（非主干）/ `Chat `（主干 8081）双通道投递 | 自测 10 只猫 + 主干端口 8081 ✅ |
+| 自研单体·观测 | `app/src/navigator/watch.js`——每猫端口 SSE 订阅 + 帧解析 | 代码就位（真链路待 N5） |
+| 自研单体·截图与解读 | `app/src/navigator/shot.js`——视图块 → 对话卡 HTML → 离屏窗口 `capturePage` → 视觉模型解读（复用业务面端点） | 实测：`POST /api/nav/shot` 出图 + 解读文本 ✅ |
+| 自研单体·编排 | `app/src/navigator/index.js`——健康检查 / 回执模板 / 投递 + 观测登记 / 空闲暂关守护 / VIP 消息监听 / 本地 API | 实测 `/api/nav/status` 200 · `/api/nav/health` 全绿 ✅ |
+| 壳层截图 | `app/main.js` `core.hooks.shot`——离屏 BrowserWindow 按内容高度整页截图 | 实测出图 ✅ |
+| 界面 | `app/ui/index.html` + `app/ui/app.js` + `style.css`——「领航员」页签（开关 / 会话 / 猫群 / 健康检查 / 指令流水） | 截图核验：页签高亮 + 三卡片渲染 ✅ |
+| 业务面·工具组 | `tools/navigator/nav-tools.js`（5 件）+ `tools/patch-qqagent-navigator.mjs`（6 补丁点） | `/api/tools/availability` 五件 enabled ✅（工具集 41→46） |
+| 业务面·教材 | `tools/apply-qqagent-config.mjs` `NAV_RULES` 段（开关 / 判断 / 怎么做 / 回话口径 / VIP 通道） | roleText 91277→91388 字符 ✅ |
+| 业务面·VIP 通道 | `sender.js` 三点——`atUserId === 569145850` 时跳过发言配额与硬限（技术限频仍在） | 补丁 applied · `node --check` 通过 ✅ |
+| 自测 | `tools/verify-navigator.mjs` | **17/17 通过** ✅ |
+
+**关键设计（三条）：**
+
+1. **单向依赖**——业务面 → 自研单体（工具调本地 API）；自研单体的出站（回执 / 截图）直经自己的 OneBot 连接发出，不经业务面闸门（这正是「不设发言墙」的落点）
+2. **触发者硬校验**——自研单体监听 OneBot 群消息，只认 VIP（569145850）在群里 @ 本 bot 的消息；`nav_open` 带 `requireVip` 时无新鲜 VIP 消息即拒
+3. **双通道投递**——非主干走 `cat.chat <key> <内容>`（8080）；主干走 `Chat <内容>`（其对话端口；`cat.chat` 拒主干自锁）
+
+**边界与遗留：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 真链路验收（群内 @ 开启 → 下指令 → 截图回群） | **已验收 2026-10-11**——群内 @ 开启成功（`openedBy: qq` · `activeChat: 1097492606`）· 指令投递成功（`commandLog` 记「链路通了」→ majordomo）· 观测已登记（`watching: [majordomo]`） |
+| 2 | ComfyDock 健康检查显示「离线」——面板端口 8971 当前无监听 | 观察项（服务没跑，非缺陷） |
+| 3 | 业务面 VIP 通道是过渡态——终态由自研单体出站承载（本就无闸） | 已记入 design §十二 |
+| 4 | 领航员出站图片为 `file:///` 绝对路径（OneBot image 段） | 真链路待验 |
+
+### 二十五·补记——SSE 判据纠偏 + 开场巡检 + 可观测（2026-10-11）
+
+> 触发：Rushiera 反馈「等了半天没看到群里回的消息」+「10 只猫都在待命，希望区分有会话和确实待命的场合，有会话的也该把最后回复截图发出来」。
+
+**根因（实测）：** 每猫端口的 `GET /api/v1/stream` **不推渲染块**——`event: view` 的 data 是视图状态 `{v, state, persist, live}`（无 renderType）；渲染块只能从 `GET /api/v1/keyinfo?max=N` 取（四部分：加载报告 / user 消息 / 正式回复 / 轮结算）。原实现按「view + renderType=roundsum」判轮结束 → 永不触发。
+
+**同时实测：** `GET /api/v1/history` 在每猫端口 **404**（该端点不在每猫 host 注册）。
+
+| 面 | 修正 | 证据 |
+|:--|:--|:--|
+| 轮结束判据 | 主判据改 `event: sessionstate` 的 `runState` run→idle；加 5 秒兜底轮询（`keyinfo` 末尾出现「投递之后」的 roundsum 行即收尾） | `tools/probe-sse.mjs` 事件签名实测（`view \| renderType=（空） keys=v,state,persist,live`） |
+| 渲染块来源 | `finishSession` 改拉 `keyinfo`（`itemsToBlocks` 把 role→renderType：user / reply→text / roundsum）；SSE 攒的块作回落 | 实测截图「3 块」= user + reply + roundsum ✅ |
+| 分帧 | SSE 帧分隔兼容 CRLF（`/\r?\n\r?\n/`）——Kestrel 用 CRLF，原按 `'\n\n'` 切一帧都切不出来 | 代码 |
+| 工作 / 待命判据 | `hasSession(row)` = `runState !== 'idle'` **或** `contextCount > 1`——有会话正文内容的猫不算待命 | 回执实测：「当前 majordomo 正在跑；rb，rc 有会话在手，其他 7 只猫待命中」 |
+| 开场巡检 | 开启后自动对有会话的猫（按最近活跃排序，`navigator.tourLimit` 默认 3）截图最后一段会话发群 | activity 实测：majordomo / rc / rb 三张图均已发 ✅ |
+| 可观测 | 活动流（环形 40 条）——订阅 / 事件 / 截图 / 发群 / 错误全留痕：日志 `[navigator] [kind] …` + `GET /api/nav/status` 的 `activity` + 界面「领航员活动」卡片 | 界面 + status 实测 ✅ |
+| 诊断工具 | `tools/probe-sse.mjs`——打印前 8 帧的「事件名 / renderType / data 键 + data 原文」与事件签名统计 | 保留为常备诊断入口 |
+
+**端到端实锤（2026-10-11 10:34）：** 投递 rf → `订阅 639270055721496090（端口 8092）` → `rf 截图完成（3 块）` → `已发图到群 1097492606`（全程 11 秒）✅
+
+### 二十五·再补——持久观测 + 前文整理重启（2026-10-11）
+
+> 触发：Rushiera 要求「有实际回复就截图发，没有例外」+「让领航员清理 majordomo 前文，收工整理含推 git，先拿 R喵喵 实验」。
+
+| 面 | 实现 | 证据 |
+|:--|:--|:--|
+| 持久观测 | `armCat` / `armAll` / `disarmAll`——开启时对全部运行中的猫建立常驻订阅；`finishSession` 发完即推进观测点（增量取） | 实测 `watching` 10 只 · 任何一轮回复都发群 ✅ |
+| 开场全量 | `tourLimit=0`（不限）· `keyinfo?max=20`（较完整，含开场问候） | 实测「开场巡检：majordomo，rf，rc，rb（共 4 只有会话，全部）」+ 4 张图 ✅ |
+| 前文整理重启 | `resetSession` + `POST /api/nav/reset` + 业务面工具 `nav_reset`——① 完整收工（落盘 + **推 git**）② 新会话 ③ 注入交接摘要 ④ 自动继续 | R喵喵 实测全链通过 ✅ |
+| 教材 | `NAV_RULES` 补「前文整理重启」段 + 持久观测口径 | roleText 91388→91559 字符 ✅ |
+
+**R喵喵 实测实锤（2026-10-11 10:47–10:51）：**
+
+```
+R喵喵：前文整理重启开始
+R喵喵 截图完成（3 块）→ 已发图到群 1097492606     ← 摘要回复被持久观测捕获
+R喵喵：交接摘要已取到（1140 字符）
+R喵喵：新会话已请求（cmd-5 · frame 98557）
+R喵喵：交接摘要已注入，等待确认
+→ R喵喵 回复「接上了。前文面已注入…」（891 字符 · 172.9 秒 · 工具 13 次）
+```
+
+**顺带发现（非本功能缺陷）：** R喵喵 的 `enabledRoots` 仅 `[workspace]`、工具面无宿主管理组——它自报「CCBP 知识根不可达 + 管理工具面不在本会话」。属该猫配置面问题，待面板勾选。

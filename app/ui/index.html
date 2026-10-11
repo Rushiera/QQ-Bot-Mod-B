@@ -22,6 +22,7 @@
     <button class="tab active" data-view="overview">概览</button>
     <button class="tab" data-view="webui">协议端控制台</button>
     <button class="tab" data-view="logs">日志</button>
+    <button class="tab" data-view="nav">领航员</button>
     <button class="tab" data-view="settings">设置</button>
   </nav>
 
@@ -73,6 +74,40 @@
         <button id="btn-log-clear" class="btn small">清屏</button>
       </div>
       <pre id="log-view" class="log-view"></pre>
+    </section>
+
+    <section id="view-nav" class="view">
+      <div class="nav-bar">
+        <button id="btn-nav-toggle" class="btn">开启领航员</button>
+        <span id="nav-hint" class="hint">未开启</span>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <h3>会话</h3>
+          <p>回消息群：<b id="nav-chat">-</b></p>
+          <p>目标猫：<span id="nav-target">-</span></p>
+          <p>最后指令：<span id="nav-last">-</span></p>
+          <p>空闲计时：<span id="nav-idle">-</span></p>
+          <p>开启来源：<span id="nav-by">-</span></p>
+        </div>
+        <div class="card">
+          <h3>猫群</h3>
+          <pre id="nav-cats" class="mono">-</pre>
+        </div>
+        <div class="card">
+          <h3>健康检查</h3>
+          <pre id="nav-health" class="mono">-</pre>
+        </div>
+        <div class="card">
+          <h3>领航员活动（最近 40 条）</h3>
+          <pre id="nav-activity" class="mono">-</pre>
+        </div>
+      </div>
+      <div class="log-bar">
+        <span>指令流水</span>
+        <button id="btn-nav-refresh" class="btn small">刷新</button>
+      </div>
+      <pre id="nav-log" class="log-view"></pre>
     </section>
 
     <section id="view-settings" class="view">

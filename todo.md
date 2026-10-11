@@ -26,3 +26,9 @@
 | # | 项 | 说明 |
 |:--:|:--|:--|
 | B15 | 真实链路验收：收工轮 → 群记 topic | 群里聊到超阈值触发收工轮后，确认 `_group.json` 的 topic 条目被刷新（来源：`design-qqbotb_log.md` §十一 遗留 1） |
+
+## 五、领航员模式（Rushiera 2026-10-11 口述规格 · `design-qqbotb-navigator.md`）
+
+| # | 项 | 说明 |
+|:--:|:--|:--|
+| N6 | 迁移：指令判断器与话术收进自研单体（终态） | 待排期（`design-qqbotb-navigator.md` §十二 迁移路径） |

@@ -176,6 +176,32 @@ app.whenReady().then(async () => {
       fs.writeFileSync(file, image.toPNG());
       return file;
     };
+    // 壳层能力：领航员截图——离屏窗口加载渲染好的对话卡 HTML，按内容高度整页截图
+    core.hooks.shot = async (htmlFile, outFile) => {
+      const win = new BrowserWindow({
+        width: 800,
+        height: 900,
+        show: false,
+        backgroundColor: '#0f1115',
+        webPreferences: { contextIsolation: true, nodeIntegration: false }
+      });
+      try {
+        await win.loadFile(htmlFile);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const height = await win.webContents.executeJavaScript(
+          'Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)'
+        );
+        const target = Math.min(Math.max(Number(height) || 600, 300), 4000);
+        win.setContentSize(800, target);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const image = await win.webContents.capturePage();
+        fs.mkdirSync(path.dirname(outFile), { recursive: true });
+        fs.writeFileSync(outFile, image.toPNG());
+        return outFile;
+      } finally {
+        try { win.destroy(); } catch { /* 已销毁 */ }
+      }
+    };
     createTray();
     bootLog('托盘已创建');
   } catch (error) {

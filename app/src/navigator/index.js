@@ -665,9 +665,15 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       '【领航员·前文整理】你现在做一次**完整收工**，按顺序：',
       '① 落盘——把该写的写进文件（进度 / 变更 / 设计文档 / todo / CHANGELOG，按你所在项目的收工清单）。',
       '② **推 git**——把当前工作提交并推送（能推的都推掉，别留着）。',
-      '③ 然后输出一份**交接摘要**：当前工作状态、正在做的事、未完成事项、关键结论、继续工作所必需的上下文。',
+      '③ 然后输出一份**交接摘要**——要足量、详尽，宁多勿漏；接手方是你的下一个会话，它只有这份摘要，猜不到你没写的：',
+      '   · 任务全貌与背景（在做什么、为什么做）',
+      '   · 已完成的步骤与做法（关键路径 / 命令 / 文件 / 接口）',
+      '   · 未完成事项与下一步',
+      '   · 关键结论、踩过的坑、被否决的方案与原因',
+      '   · 继续工作所必需的上下文（路径 / 参数 / 约定 / 凭证位置）',
+      '   · 不确定或待确认的点（明确标注，别让接手方当成事实）',
       '',
-      '①②做完再输出摘要；摘要只输出正文（纯文本，可用小标题与列表），不要解释你在做什么。'
+      '①②做完再输出摘要；摘要只输出正文（纯文本，小标题 + 列表），篇幅不设上限。'
     ].join('\n'));
     const summary = await waitForReply(resolved, { since: askAt - 2000 });
     if (!summary) {
@@ -804,10 +810,13 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     }
   }
 
-  /** 启动守护。 */
+  /** 启动守护（含重启后重建持久观测）。 */
   function start() {
     if (watchTimer) return;
     watchTimer = setInterval(() => { tick().catch(() => { /* 已在内部记录 */ }); }, WATCH_INTERVAL_MS);
+    if (state.snapshot().enabled) {
+      armAll().catch((error) => record('error', `重启后重建持久观测失败：${error?.message ?? error}`));
+    }
   }
 
   /** 停止守护（含订阅）。 */

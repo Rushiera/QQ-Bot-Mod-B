@@ -819,7 +819,7 @@
 
 | 面 | 实现 | 证据 |
 |:--|:--|:--|
-| 持久观测 | `armCat` / `armAll` / `disarmAll`——开启时对全部运行中的猫建立常驻订阅；`finishSession` 发完即推进观测点（增量取） | 实测 `watching` 10 只 · 任何一轮回复都发群 ✅ |
+| 持久观测 | `armCat` / `armAll` / `disarmAll`——开启时对全部运行中的猫建立常驻订阅；`finishSession` 发完即推进观测点（增量取）；**宿主重启后由 `start()` 自动重建**（`enabled=true` 即 armAll） | 实测 `watching` 10 只 · 任何一轮回复都发群 · 重启后自动重建 ✅ |
 | 开场全量 | `tourLimit=0`（不限）· `keyinfo?max=20`（较完整，含开场问候） | 实测「开场巡检：majordomo，rf，rc，rb（共 4 只有会话，全部）」+ 4 张图 ✅ |
 | 前文整理重启 | `resetSession` + `POST /api/nav/reset` + 业务面工具 `nav_reset`——① 完整收工（落盘 + **推 git**）② 新会话 ③ 注入交接摘要 ④ 自动继续 | R喵喵 实测全链通过 ✅ |
 | 教材 | `NAV_RULES` 补「前文整理重启」段 + 持久观测口径 | roleText 91388→91559 字符 ✅ |

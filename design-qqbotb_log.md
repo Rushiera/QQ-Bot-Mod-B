@@ -1397,3 +1397,73 @@ R喵喵：交接摘要已注入，等待确认
 **教材落盘**：`node tools/apply-qqagent-config.mjs --roletext-only` → `roleTextChars` 94523 → **94367**（-156，骨架比一句话长）。
 
 **生效**：教材改动——**业务面开新会话**才读得到（主理方发起）。
+
+## 四十五、搜索通道精简 + 百度网页解析（v0.56 · 2026-10-11）
+
+> 触发：Rushiera——「你把 provider 分派里的东西都验证一下 如果不可用的话去掉，我们主力用 baidu」→ 追问「那你能不能直接用起浏览器的通道，直接 `https://www.baidu.com/s?ie=UTF-8&wd=百度` 这个样子」。
+
+**逐 provider 实测（真链路——探针直接 import 业务面 `web-search.js` 的导出函数，不另写一份实现）：**
+
+| provider | 结果 | 证据 |
+|:--|:--|:--|
+| bing | ✅ 可用 | `bingSearch` 6 条 / 313ms |
+| deepseek | ❌ 缺凭据 | 裸探端点 401 `Authentication Fails (governor)` |
+| zhipu | ❌ 缺凭据 | 401 `code 1001 未收到 Authorization` |
+| bocha | ❌ 缺凭据 | 401 `Invalid API KEY` |
+| baidu（千帆） | ❌ 缺凭据 | 401 `216003 get authorization error`——端点与路径正确，只差 Key |
+| metaso | ❌ 已废 | HTTP 200 但 body `errCode:401`——免费额度路径没了 |
+| custom | ❌ 无配置 | `providers=[]` + 单槽位空 |
+
+**百度网页通道可行性（新增能力的判据）：**
+
+| 项 | 证据 |
+|:--|:--|
+| 裸抓可达 | `https://www.baidu.com/s?ie=UTF-8&wd=…` → 200 / 1.0MB / **无安全验证页**（`安全验证` 0 命中） |
+| 结构可解析 | `result c-container` 块 7 个；标题取 `<h3>`；**真实链接取块内 `mu` 属性**（不必解百度跳转链） |
+| 摘要 | 块内最长可读文本（滤掉 script/style 与 JS 特征）——7 条中 5 条有摘要、2 条空（聚合卡片本就无摘要） |
+| 移动版对比 | `m.baidu.com/s` 无 `result c-container`（结构不同）——**取 PC 版** |
+
+**改动（落成 `tools/patch-qqagent-search.mjs` · 7 补丁点 · 幂等 · 链尾）：**
+
+| # | 文件 | 动作 |
+|:--:|:--|:--|
+| 1–2 | `src/web-search.js` | 删 DeepSeek 实现（1876 字符）· 删 智谱 / 博查 / 千帆 / 秘塔 / 自定义两件（10598 字符） |
+| 3 | `src/web-search.js` | 新增 `parseBaiduResults` + `pickBaiduSnippet` + `baiduHtmlSearch` |
+| 4 | `src/web-search.js` | 分派只认 baidu（默认）\| bing；未知提供方**抛错**（不静默回落） |
+| 5 | `src/config.js` | `webSearch` 默认段精简（provider 默认 baidu · `baidu.searchUrl` · bing `searchUrl` · providers/custom 容器保留） |
+| 6–7 | `ui/app/06-settings-render.js` | 提示文案改「无需 API Key」· 下拉只留两项 |
+| — | `_unpack/data/config.json` | `provider` → `baidu` + 段精简（运行区配置，随重启生效） |
+
+**验证实锤：**
+
+| 面 | 证据 |
+|:--|:--|
+| 语法 | `node --check` × 3 文件（`web-search.js` / `config.js` / `06-settings-render.js`）退出 0 |
+| 真链路 | `webSearch('上海天气')`（provider=baidu）→ **809ms / 6 条 / 真实 URL**（`qq.weather.com.cn` · `sh.weather.com.cn` · `weibo.com` …） |
+| 导出面 | `Object.keys(mod)` 只剩 `baiduHtmlSearch` · `bingSearch` · 图片组 · 查询处理 · `webFetch`——四家 API 与 custom 函数已消失 |
+| 幂等 | `--dry` 首跑 7 点全命中 → 应用 **7/7** → 复跑 **applied 0 / skipped 7** |
+
+**🔴 判例（当日修）——删导出未同步消费方：**
+
+| 项 | 内容 |
+|:--|:--|
+| 现象 | 22:41:35 自研单体拉起业务面（pid 27536）→ 业务面**无任何启动日志**（最后一条启动记录停在 21:09:11）→ 22:45:32 领航员报「群记沉淀失败：业务面记忆 API 不可达（试过 3210-3219）」；`tasklist` 查无进程 = 启动即闪退 |
+| 根因 | `routes.js:17` 仍 `import { customSearch } from './web-search.js'`，而本次把该导出删了 → ESM 静态导入报「does not provide an export named」→ 模块图加载失败，logger 都没起来 |
+| 修法 | 删该 import + `/api/search-providers/test` 改明确回执（不再调 `customSearch`）+ 删除自定义服务时回落提供方改 baidu；**同步进补丁脚本**（补丁 8 / 9 / 10） |
+| 验证 | ①跨模块 import 符号完整性静态扫描：59 文件 / 310 符号 / 0 真实缺失（固化脚本 `tools/verify-import-integrity.mjs`）②静态依赖链实加载：`config.js` · `web-search.js` · `tools.js` · `routes.js` 四模块全部 import 成功 ③`node --check` 全绿 ④补丁 `--dry` **10/10 skip** |
+| 教训 | **删导出 = 改接口**——`node --check` 只查语法，ESM 符号缺失是加载期错误，必须扫消费方（`grep import`）或在真实模块图上加载一次；「模块自身能加载」≠「消费方能加载」 |
+
+**判例与边界：**
+
+1. **metaso 分支的静默误报**（随本次删除消失）：原实现只判 `res.ok`，200 就往下解析字段——上游用 `errCode:401` 表达未授权，被报成「没有返回有效结果」。
+2. **不静默回落**：未知 provider 抛错而非回落 bing——回落到别的引擎会让「配置写错了」看起来像「搜到了」。
+3. **UI 各 API 表单块保留但永不显示**（下拉已无对应值）——为不打断 `07-settings-events.js` / `08-modals.js` 的绑定链（元素缺失会让整段事件绑定抛错）；彻底清干净属 modB 迁移的活。
+4. **裸抓风控**：本次单次请求未触发验证页；若日后高频触发，退路 = 业务面 `browser-*`（CDP 有头）通道。
+
+**遗留：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | **生效需重启业务面**（改的是 `_unpack/resources/app/` 与 `_unpack/data/`） | 待执行——重启后群里搜一次即验 |
+| 2 | 补丁链复核清单未登记本补丁（§十九 / §二十 的「补丁链复核」表） | 下次复核时并入（本补丁排链尾，依赖 cattools 先跑） |
+| 3 | 摘要抽取为启发式（块内最长文本） | 有意为之——百度结构多变，精确选择器更脆 |

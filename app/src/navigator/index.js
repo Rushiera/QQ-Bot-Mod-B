@@ -49,6 +49,9 @@ const ANALYZE_DELAY_MS = 60 * 1000;
  */
 const PROGRESS_QUESTION = '这是 CH4 猫的会话截图。用三四句中文说清楚：① 它现在做到哪一步（正在干什么）② 有没有卡点或异常（有就点出来）③ 大概还要多久能做完（给个粗估，如「1-3 分钟」）。只描述图里能看到的，看不清就说看不清，不要编造。';
 
+/** 「还在跑」播报的冷却（毫秒）——同一只猫两次播报的最小间隔（多猫并行时不刷屏）。 */
+const PROGRESS_COOLDOWN_MS = 3 * 60 * 1000;
+
 /** 计入卡片的视图块类型。 */
 const BLOCK_TYPES = ['user', 'stream', 'text', 'reason', 'toolcard'];
 
@@ -138,6 +141,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
 
   /** 投递后「猫会话分析」定时器（猫 key → 定时器）——每猫同一时刻只留一个。 */
   const analyzeTimers = new Map();
+
+  /** 出站记录（猫 key → { at, kind, replyAt }）——出站决策去重与限流用。 */
+  const sentLog = new Map();
 
   /**
    * 记一条活动（界面显示与事后排查共用）。
@@ -440,81 +446,118 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
-   * 做一次猫会话分析——未回复走「进度播报」（纯文字 + @），已回复走「回复截图」。
+   * 出站决策——**所有发群都先过这里**（Rushiera 2026-10-11：回复事件先给领航员，由它决定发什么）。
    *
-   * 未回复不截图（图里没有回复内容）；截图只截猫的回复内容（Rushiera 2026-10-11）。
+   * 规则（每猫）：
+   *   ① **有新回复**（自上次出站以来）→ 截图（只截回复内容）
+   *   ② **没有新回复** + 检查点触发 + 该猫还在跑 + 冷却已过 → 文字播报 + @ 触发者
+   *   ③ 其余 → **静默**（没拿到信息就不发——避免刷屏）
    *
-   * @param {string} key 猫 key
-   * @param {string|null} chat 回报群
-   * @param {string} [reason] 触发来源标签（进播报标题，如「投递后 60 秒」）
-   * @returns {Promise<void>} 完成
+   * @param {object} options 选项
+   * @param {string} options.key 猫 key
+   * @param {string|number|null} [options.chat] 回报群
+   * @param {string} options.trigger 触发来源（`roundEnd` 轮结束 / `checkpoint` 检查点）
+   * @param {Array<object>} [options.items] 会话条目
+   * @param {string} [options.reason] 标签（进标题与日志）
+   * @returns {Promise<object>} { ok, sent }——sent = reply / progress / none
    */
-  async function runAnalysis(key, chat, reason = '') {
+  async function emitOutbound({ key, chat = null, trigger, items = [], reason = '' }) {
     const target = resolveChat(chat) ?? state.snapshot().activeChat;
     if (!target) {
-      record('error', `会话分析（${key}）：没有回消息群，跳过`);
-      return;
+      record('error', `出站（${key}）：没有回消息群，跳过`);
+      return { ok: false, sent: 'none', error: 'no-chat' };
     }
-    // 在跑 / 已停——决定播报语气与是否 @（没回复要估个时间并提醒触发者）
+    const rows = Array.isArray(items) ? items : [];
+    const catName = await catNameOf(key);
+    const prev = sentLog.get(key) ?? { at: 0, kind: '', replyAt: 0 };
+    const lastReply = [...rows].reverse().find((row) => String(row?.role ?? '') === 'reply');
+    const replyAt = Number(lastReply?.time ?? 0) || 0;
+    const label = reason ? `·${reason}` : '';
+
+    // ① 有新回复 → 截图（只截回复内容）
+    if (replyAt > prev.replyAt) {
+      let png = '';
+      try {
+        png = await shot.shoot({ catName, blocks: replyBlocksOf(rows), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
+      } catch (error) {
+        record('error', `出站（${key}）：截图失败（${error?.message ?? error}）`);
+        return { ok: false, sent: 'none', error: 'shot' };
+      }
+      if (!png) {
+        record('error', `出站（${key}）：截图为空，跳过`);
+        return { ok: false, sent: 'none', error: 'empty' };
+      }
+      const sent = await sayImage(target, png, `${catName} 的回复${label}`);
+      if (sent.ok) sentLog.set(key, { at: Date.now(), kind: 'reply', replyAt });
+      record(sent.ok ? 'send' : 'error', sent.ok
+        ? `回复截图已发群 ${target}（${catName}）`
+        : `回复截图发送失败：${sent.error}`);
+      return { ok: sent.ok, sent: 'reply' };
+    }
+
+    // ② 检查点：没新回复，但该猫还在跑 → 播报（冷却内静默）
+    if (trigger !== 'checkpoint') {
+      record('watch', `${catName}：无新回复，静默`);
+      return { ok: true, sent: 'none' };
+    }
     let running = false;
     try {
       const id = await ch4.resolveKey(key);
-      const rows = await ch4.cats();
-      const row = rows.find((item) => String(item?.id) === String(id));
+      const cats = await ch4.cats();
+      const row = cats.find((item) => String(item?.id) === String(id));
       const runState = String(row?.runState ?? 'idle');
       running = runState.toLowerCase() !== 'idle';
     } catch (error) {
-      record('error', `会话分析（${key}）：取状态失败（${error?.message ?? error}）——按已停处理`);
+      record('error', `出站（${key}）：取状态失败（${error?.message ?? error}）——按已停处理`);
     }
+    if (!running) {
+      record('watch', `${catName}：已停且无新回复，静默`);
+      return { ok: true, sent: 'none' };
+    }
+    const gap = Date.now() - prev.at;
+    if (gap < PROGRESS_COOLDOWN_MS) {
+      record('watch', `${catName}：播报静默（距上次发群 ${Math.round(gap / 1000)} 秒，冷却 ${Math.round(PROGRESS_COOLDOWN_MS / 1000)} 秒）`);
+      return { ok: true, sent: 'none', reason: 'cooldown' };
+    }
+    let insight = '';
+    try {
+      const png = await shot.shoot({ catName, blocks: replyBlocksOf(rows), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
+      if (png) insight = await shot.analyze(png, PROGRESS_QUESTION);
+    } catch (error) {
+      record('error', `播报（${key}）：判读失败（${error?.message ?? error}）——仅发事实`);
+    }
+    const head = `⏳ ${catName} 还在跑${label}，尚未回复`;
+    const body = [head, progressFacts(rows), insight].filter((line) => String(line ?? '').trim()).join('\n');
+    const sent = await sayAt(target, body, vipUser);
+    if (sent.ok) sentLog.set(key, { at: Date.now(), kind: 'progress', replyAt: prev.replyAt });
+    record(sent.ok ? 'send' : 'error', sent.ok
+      ? `进度播报已发群 ${target}（${catName}·@触发者）`
+      : `进度播报发送失败：${sent.error}`);
+    return { ok: sent.ok, sent: 'progress' };
+  }
+
+  /**
+   * 检查点——抓该猫会话交给出站决策（投递后 / 整理后 / 手动触发共用）。
+   *
+   * @param {string} key 猫 key
+   * @param {string|null} chat 回报群
+   * @param {string} [reason] 标签
+   * @returns {Promise<object>} 决策结果
+   */
+  async function runAnalysis(key, chat, reason = '') {
     let items = [];
     try {
       const info = await ch4.keyinfo(key, 20);
       items = Array.isArray(info?.items) ? info.items : [];
     } catch (error) {
-      record('error', `会话分析（${key}）：拉会话失败（${error?.message ?? error}）`);
-      return;
+      record('error', `出站（${key}）：拉会话失败（${error?.message ?? error}）`);
+      return { ok: false, sent: 'none', error: 'keyinfo' };
     }
     if (items.length === 0) {
-      record('watch', `会话分析（${key}）：会话为空，跳过`);
-      return;
+      record('watch', `出站（${key}）：会话为空，跳过`);
+      return { ok: true, sent: 'none' };
     }
-    const catName = await catNameOf(key);
-    const label = reason ? `·${reason}` : '';
-
-    // ① 还没回复 → 只发文字播报（截图仅作判读输入，不发群）+ @ 触发者
-    if (running) {
-      let insight = '';
-      try {
-        const png = await shot.shoot({ catName, blocks: replyBlocksOf(items), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
-        if (png) insight = await shot.analyze(png, PROGRESS_QUESTION);
-      } catch (error) {
-        record('error', `进度播报（${key}）：判读失败（${error?.message ?? error}）——仅发事实`);
-      }
-      const head = `⏳ ${catName} 还在跑${label}，尚未回复`;
-      const body = [head, progressFacts(items), insight].filter((line) => String(line ?? '').trim()).join('\n');
-      const sent = await sayAt(target, body, vipUser);
-      record(sent.ok ? 'send' : 'error', sent.ok
-        ? `进度播报已发群 ${target}（${catName}·@触发者）`
-        : `进度播报发送失败：${sent.error}`);
-      return;
-    }
-
-    // ② 已回复 → 截回复内容发群
-    let png = '';
-    try {
-      png = await shot.shoot({ catName, blocks: replyBlocksOf(items), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
-    } catch (error) {
-      record('error', `会话分析（${key}）：截图失败（${error?.message ?? error}）`);
-      return;
-    }
-    if (!png) {
-      record('error', `会话分析（${key}）：截图为空，跳过`);
-      return;
-    }
-    const sent = await sayImage(target, png, `${catName} 的回复${label}`);
-    record(sent.ok ? 'send' : 'error', sent.ok
-      ? `回复截图已发群 ${target}（${catName}）`
-      : `回复截图发送失败：${sent.error}`);
+    return emitOutbound({ key, chat, trigger: 'checkpoint', items, reason });
   }
 
   /**
@@ -566,6 +609,15 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     session.pollTimer = setInterval(() => {
       pollRoundEnd(session).catch(() => { /* 内部已留痕 */ });
     }, POLL_INTERVAL_MS);
+    // 出站基线：以当前最后一条回复为起点——重启后不把历史回复当「新回复」再发一遍
+    try {
+      const info = await ch4.keyinfo(key, 12);
+      const rows = Array.isArray(info?.items) ? info.items : [];
+      const last = [...rows].reverse().find((row) => String(row?.role ?? '') === 'reply');
+      sentLog.set(key, { at: 0, kind: '', replyAt: Number(last?.time ?? 0) || 0 });
+    } catch (error) {
+      record('error', `${session.name}：出站基线取不到（${error?.message ?? error}）——首轮可能多一次截图`);
+    }
     record('watch', `订阅 ${session.name}（端口 ${port}）`);
     return session;
   }
@@ -750,52 +802,26 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
-   * 轮结束收尾——渲染截图 → 图片解读 → 发群。
+   * 轮结束收尾——拉会话条目交给出站决策（有回复才截图发群，没信息就静默）。
    *
    * @param {object} session 观测会话
-   * @param {object} roundsum 轮结算块
    * @returns {Promise<void>} 完成
    */
   async function finishSession(session) {
     if (session.done) return;
     // 立刻推进观测点——本轮内容归本次，下一轮从此刻起算（持久观测不撤订）
-    const since = session.startedAt;
-    const pendingBlocks = session.blocks.slice();
     session.startedAt = Date.now();
     session.sawRun = false;
     session.blocks = [];
-
-    // 渲染块来源：优先 keyinfo（每猫端口唯一可用的会话正文端点）；拉不到再回落 SSE 攒的块
-    let blocks = pendingBlocks;
+    let items = [];
     try {
       const info = await ch4.keyinfo(session.key, 12);
-      const fromKeyinfo = itemsToBlocks(info?.items, since);
-      if (fromKeyinfo.length > 0) blocks = fromKeyinfo;
+      items = Array.isArray(info?.items) ? info.items : [];
     } catch (error) {
       record('error', `拉 ${session.name} 会话关键信息失败：${error?.message ?? error}`);
     }
-    const at = new Date().toLocaleString('zh-CN', { hour12: false });
-    const catName = session.name || await catNameOf(session.key);
-    let png = '';
-    try {
-      png = await shot.shoot({ catName, blocks, at });
-    } catch (error) {
-      log.error('navigator', `截图失败（${session.key}）：${error?.message ?? error}`);
-    }
-    if (!png) {
-      record('error', `${session.key} 截图失败——本轮无图可发`);
-      return;
-    }
-    record('shot', `${catName} 截图完成：${path.basename(png)}（${blocks.length} 块）`);
-    const insight = await shot.analyze(png);
     const chat = resolveChat(session.chat) ?? state.snapshot().activeChat;
-    if (!chat) {
-      log.warn('navigator', '没有回消息群，截图未发出');
-      return;
-    }
-    const caption = insight ? `${catName} 的回复到了：\n${insight}` : `${catName} 的回复到了。`;
-    const sent = await sayImage(chat, png, caption);
-    record(sent.ok ? 'send' : 'error', sent.ok ? `已发图到群 ${chat}` : `发图失败：${sent.error}`);
+    await emitOutbound({ key: session.key, chat, trigger: 'roundEnd', items });
   }
 
   // ── 动作 ──────────────────────────────────────────────────────────────────
@@ -1025,8 +1051,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     const ack = await waitForReply(resolved, { since: injectAt - 2000, timeoutMs: 180000 });
     record('reset', `${name}：整理重启完成${ack ? '' : '（未见确认回复，可能仍在跑）'}`);
     if (target) {
-      await say(target, `前文整理重启完成：${name}${ack ? ' 已接上并继续' : ' 已注入交接摘要，正在接上'}。`);
-      // 整理后同样给一次进度播报（清理指令也要有反馈——Rushiera 2026-10-11）
+      // 不另发「整理完成」通知——猫的回复由出站决策发（有回复 → 截图；还没回复 → 检查点播报）
       scheduleAnalysis(resolved, target, { reason: '整理重启后' });
     }
     return { ok: true, key: resolved, name, summary, trace, ack, material: materialFile };

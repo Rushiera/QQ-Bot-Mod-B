@@ -12,6 +12,14 @@ import { createApp } from './src/app.js';
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const BOOT_LOG = path.join(moduleDir, 'data', 'boot.log');
 
+// 工作目录钉死（判例 2026-10-10）：绝不继承启动者的 cwd——被从别处拉起就会把那个目录
+// 锁住（宿主自更新部署会因此失败）。主进程与它拉起的全部子进程都钉在 app/ 下。
+try {
+  process.chdir(moduleDir);
+} catch (error) {
+  bootLog(`工作目录钉死失败：${String(error?.message ?? error)}`);
+}
+
 /**
  * 启动诊断：GUI 进程的 stdout 不落控制台，启动期问题只能靠文件取证。
  *

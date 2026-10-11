@@ -34,6 +34,13 @@ const DEFAULTS = {
   onebot: {
     autoConnect: true,
     reconnectMs: 3000
+  },
+  // 业务伴生进程（QQ Agent）——入口换成自研单体后，业务面由本应用按需拉起。
+  // exe / cwd 都显式给出：绝不让它继承本应用的 cwd（判例 2026-10-10 工作目录钉死）。
+  companion: {
+    enabled: true,
+    exe: path.join(PROJECT_DIR, '_unpack', 'QQ Agent.exe'),
+    cwd: path.join(PROJECT_DIR, '_unpack')
   }
 };
 

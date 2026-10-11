@@ -12,6 +12,7 @@ import { createNapcatHost } from './napcat/host.js';
 import { createLogTail } from './napcat/logtail.js';
 import { createOnebotClient } from './onebot/client.js';
 import { createWebServer } from './web/server.js';
+import { createCompanion } from './companion.js';
 
 /**
  * 创建应用实例。
@@ -32,6 +33,13 @@ export async function createApp() {
     token: onebotConfig.wsToken,
     log,
     reconnectMs: config.onebot.reconnectMs
+  });
+
+  const companion = createCompanion({
+    exe: config.companion.exe,
+    cwd: config.companion.cwd,
+    log,
+    enabled: config.companion.enabled
   });
 
   // 壳层能力注入点（截图等）——核心不依赖 Electron，由 main.js 按需挂上
@@ -88,7 +96,8 @@ export async function createApp() {
         uin: layout.uin,
         webuiUrl: `http://127.0.0.1:${webui.port}/webui/`
       },
-      onebot: onebot.status()
+      onebot: onebot.status(),
+      companion: companion.state
     };
   }
 
@@ -98,29 +107,38 @@ export async function createApp() {
    * 凭据算法来自协议端自身实现：hash = sha256(token + ".napcat")，
    * 登录成功后返回 base64 编码的凭据，前端把它写进 localStorage 的 token 键即视为已登录。
    *
+   * 协议端由本应用拉起时，界面帧会先于 WebUI 就绪——就绪前 fetch 必然失败，
+   * 故按轮次重试（每轮落日志，失败可见）；全部轮次用尽才回落空串。
+   *
+   * @param {number} [retries] 最大尝试次数
+   * @param {number} [delayMs] 每轮间隔毫秒
    * @returns {Promise<string>} 凭据（失败返回空串）
    */
-  async function webuiCredential() {
+  async function webuiCredential(retries = 40, delayMs = 1000) {
     const webui = readWebui(layout);
     if (!webui.token) {
       log.warn('webui', '协议端未配置 WebUI 访问密钥，无法自动登录');
       return '';
     }
-    try {
-      const hash = crypto.createHash('sha256').update(`${webui.token}.napcat`).digest('hex');
-      const response = await fetch(`http://127.0.0.1:${webui.port}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hash, totpCode: '' })
-      });
-      const data = await response.json();
-      const credential = data?.data?.Credential ?? '';
-      if (!credential) log.warn('webui', `自动登录失败：${data?.message ?? '未知原因'}`);
-      return credential;
-    } catch (error) {
-      log.warn('webui', `自动登录异常：${error?.message ?? error}`);
-      return '';
+    const hash = crypto.createHash('sha256').update(`${webui.token}.napcat`).digest('hex');
+    for (let attempt = 1; attempt <= retries; attempt += 1) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${webui.port}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hash, totpCode: '' })
+        });
+        const data = await response.json();
+        const credential = data?.data?.Credential ?? '';
+        if (credential) return credential;
+        log.warn('webui', `自动登录未取得凭据（第 ${attempt}/${retries} 次）：${data?.message ?? '未知原因'}`);
+      } catch (error) {
+        log.warn('webui', `自动登录异常（第 ${attempt}/${retries} 次）：${error?.message ?? error}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
+    log.warn('webui', `自动登录在 ${retries} 次尝试内未成功`);
+    return '';
   }
 
   /**
@@ -133,9 +151,18 @@ export async function createApp() {
     logTail.start();
     log.info('app', `QQBot mod B 启动（界面端口 ${port}）`);
 
-    if (config.app.autostartNapcat) {
-      napcat.start().catch((error) => log.error('app', `协议端自启失败：${error?.message ?? error}`));
-    }
+    // 顺序是硬要求：协议端就绪后才拉业务面——业务面自己也会经 snowluma 通道拉协议端，
+    // 协议端没起来就先拉它会出双实例（且那一路没有控制台隐藏）。
+    const napcatReady = config.app.autostartNapcat
+      ? napcat.start().catch((error) => {
+        log.error('app', `协议端自启失败：${error?.message ?? error}`);
+        return { ok: false };
+      })
+      : Promise.resolve({ ok: true, skipped: true });
+    napcatReady
+      .then(() => companion.ensure())
+      .catch((error) => log.error('app', `业务面拉起失败：${error?.message ?? error}`));
+
     if (config.onebot.autoConnect) {
       onebot.connect();
     }

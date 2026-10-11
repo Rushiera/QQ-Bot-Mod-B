@@ -282,10 +282,20 @@
 /* 截图场景：内容自然撑高、无滚动容器（CH4 页为 100vh + 内部滚动——此处覆盖） */
 html, body { height: auto; overflow: visible; }
 body { display: block; font-family: var(--ch-font-ui); background: var(--ch-bg-page); color: var(--ch-fg); }
-#chatMsgs { flex: none; overflow: visible; }
+#chatMsgs { flex: none; overflow: visible; padding-bottom: 20px; }
 /* 卡头（对齐 CH4 #chatbar——猫名 + 时间；来源 chat.css 行 114–115） */
 #chatbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--ch-line-faint); font-size: var(--ch-fs-tag); color: var(--ch-fg-weak); }
 #chatbar .sid { color: var(--ch-identity); font-weight: bold; }
 #chatbar .meta { margin-left: auto; }
 /* 轮次分隔留白：卡片通常单轮——200px 底边距浪费版面，压到 10px（仅影响卡片） */
 :root { --ch-round-gap: 10px; }
+
+/* ===== 5. 图片附件（chat.css 摘取——行 411–421）===== */
+/* A65 气泡内图片组——user 泡 / assistant 泡共用（缩略图 + 编号角标；点击新标签开原图） */
+.chat-img { position: relative; margin: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; max-width: 140px; }
+.chat-img img { max-height: 72px; max-width: 132px; display: block; border: 1px solid var(--ch-line); border-radius: 4px; }
+.chat-img figcaption { color: var(--ch-fg-muted); font-size: var(--ch-fs-tag); }
+.chat-img.missing { color: var(--ch-fg-muted); font-size: var(--ch-fs-tag); word-break: break-all; }
+.chat-imgs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.chat-imgs .chat-img img { max-height: 96px; max-width: 168px; }
+.chat-user-text { white-space: pre-wrap; }

@@ -355,3 +355,28 @@ Mau 链接状态 --OK
 - **落点**：业务面记忆 API（`POST /api/memory-files/group_<群号>/group`）——记忆面唯一所有者是业务面，自研单体不跨进程直写它的文件；终态记忆面并入自研单体后改本地写入（同 §十二 迁移原则）
 - **失败面**：写不进去只留痕（活动流 `[error]`），不阻断关闭
 - **配套**：领航员**开启**时置该群的「记忆回溯点」（`nav_open` → `memoryFloorTs`），收工轮取材据此回溯到开启那一刻——见 `design-qqbotb-memory.md` §3.8 / §3.9
+
+---
+
+## 十六、回执只读 + 直接读 think（2026-10-11）
+
+> 触发：Rushiera「我想要回执的意思就是想要那个会话分析，包括我想看一下各单位运行情况，这些都是领航员功能，而不应该给他们发消息让他们有实际回复，另外会话分析我的要求是直接读think的」。
+
+| # | 口径 | 内容 |
+|:--:|:--|:--|
+| 1 | **回执 = 只读** | 「回执 / 各单位运行情况 / 会话分析」= 读状态、读思考——**不向猫投递消息**（投递会让猫真的干活、回话，还往它前文各堆一条）。工具面补 `nav_health`（各单位运行情况）与 `nav_analyze`（会话分析）；教材明写「不许为了看状态去 `nav_send`」 |
+| 2 | **会话分析直接读 think** | 猫还在跑时，会话分析不再走「截图 → 视觉模型判读」——直接读它的**思考块**（`reason`），一手信息、无中转 |
+
+**为什么原先读不到 think：** 每猫端口的 view 事件载荷是**视图状态** `{v, state, persist:{items[]}, live}`——**没有顶层 renderType**，而 `onCatEvent` 见无 renderType 即早退。渲染块（inject_report / user / reason / toolcard…）一直在 `persist.items[]` 里，`reason` 块正文在 `item.text`。
+
+**实现：**
+
+| 面 | 落点 | 说明 |
+|:--|:--|:--|
+| think 采集 | `app/src/navigator/index.js` `collectThink` | 两态都认（`persist.items[]` / 顶层块）；`reason` 正文去重入环形（`THINK_KEEP` 200 条/猫） |
+| think 出口 | 同上 `thinkText(key)` | 取最近 3 条，正文上限 1200 字符 |
+| 会话分析改读 | 同上 `emitOutbound` ② | 有 think → 直接贴「它现在在想：…」+ 事实行 + @ 触发者；无 think → 回落原判读路径（失败可见） |
+| 只读工具 | `tools/navigator/nav-tools.js` | 新增 `nav_health` / `nav_analyze`（key 可省 = 全部在跑的猫） |
+| 教材 | `tools/apply-qqagent-config.mjs` `NAV_RULES` | 新增「回执 / 看运行情况（只读——不派活）」段 |
+
+**判据：** 投递只发生在**真派活**（点名猫 / 任务动词）；看状态一律走只读通道。

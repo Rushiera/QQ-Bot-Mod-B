@@ -55,6 +55,9 @@ const PROGRESS_COOLDOWN_MS = 3 * 60 * 1000;
 /** 计入卡片的视图块类型。 */
 const BLOCK_TYPES = ['user', 'stream', 'text', 'reason', 'toolcard'];
 
+/** 每猫留存的思考块条数上限（环形）——会话分析「直接读 think」的数据源。 */
+const THINK_KEEP = 200;
+
 /**
  * 带超时的 JSON 请求（探测外部服务用——失败即视为离线，不抛出）。
  *
@@ -586,15 +589,21 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       record('watch', `${catName}：播报静默（距上次发群 ${Math.round(gap / 1000)} 秒，冷却 ${Math.round(PROGRESS_COOLDOWN_MS / 1000)} 秒）`);
       return { ok: true, sent: 'none', reason: 'cooldown' };
     }
+    // 🔴 直接读 think（Rushiera 2026-10-11）：猫还在跑时，思考块（reason）就是「它现在在干什么」的
+    //    一手信息——直接读出来发群，不再走截图 + 视觉判读（慢、贵、二手）。取不到 think 才回落判读。
+    const think = thinkText(key);
     let insight = '';
-    try {
-      const png = await shot.shoot({ catName, blocks: replyBlocksOf(rows), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
-      if (png) insight = await shot.analyze(png, PROGRESS_QUESTION);
-    } catch (error) {
-      record('error', `播报（${key}）：判读失败（${error?.message ?? error}）——仅发事实`);
+    if (!think) {
+      try {
+        const png = await shot.shoot({ catName, blocks: replyBlocksOf(rows), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
+        if (png) insight = await shot.analyze(png, PROGRESS_QUESTION);
+      } catch (error) {
+        record('error', `播报（${key}）：判读失败（${error?.message ?? error}）——仅发事实`);
+      }
     }
     const head = `⏳ ${catName} 还在跑${label}，尚未回复`;
-    const body = [head, progressFacts(rows), insight].filter((line) => String(line ?? '').trim()).join('\n');
+    const body = [head, progressFacts(rows), think ? `· 它现在在想：\n${think}` : insight]
+      .filter((line) => String(line ?? '').trim()).join('\n');
     const sent = await sayAt(target, body, vipUser);
     if (sent.ok) {
       sentLog.set(key, { at: Date.now(), kind: 'progress', replyAt: prev.replyAt });
@@ -667,7 +676,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     }
     const session = {
       key, name: String(row?.name || key), port, chat: null,
-      blocks: [], startedAt: Date.now(), sawRun: false, pollTimer: null, done: false
+      blocks: [], thinks: [], thinkSeen: new Set(), startedAt: Date.now(), sawRun: false, pollTimer: null, done: false
     };
     sessions.set(key, session);
     await watcher.subscribe({
@@ -829,6 +838,51 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
+   * 从 view 事件载荷里收集「思考块」（reason）——会话分析「直接读 think」的数据源。
+   *
+   * 载荷两态都认：`persist.items[]`（视图状态）/ 顶层 `renderType`（单块推送）。
+   * 只做留存与去重，**不做判读**——取用归 `thinkText` / `emitOutbound`。
+   *
+   * @param {object} session 观测会话
+   * @param {object} data view 事件载荷
+   * @returns {void}
+   */
+  function collectThink(session, data) {
+    if (!session) return;
+    const items = Array.isArray(data?.persist?.items) ? data.persist.items : [data];
+    for (const item of items) {
+      const type = String(item?.type ?? item?.renderType ?? '');
+      if (type !== 'reason') continue;
+      const text = String(item?.text ?? '').trim();
+      if (!text || session.thinkSeen.has(text)) continue;
+      session.thinkSeen.add(text);
+      session.thinks.push({ ts: Number(item?.ts ?? item?.CreatedAt) || Date.now(), text });
+      while (session.thinks.length > THINK_KEEP) {
+        const dropped = session.thinks.shift();
+        if (dropped) session.thinkSeen.delete(dropped.text);
+      }
+    }
+  }
+
+  /**
+   * 取某猫最近的思考文本（think 块）——会话分析的「直接读 think」出口。
+   *
+   * @param {string} key 猫 key
+   * @param {object} [options] 选项
+   * @param {number} [options.max] 取末尾条数
+   * @param {number} [options.maxChars] 正文上限（字符）
+   * @returns {string} 思考正文（无则空串）
+   */
+  function thinkText(key, { max = 3, maxChars = 1200 } = {}) {
+    const session = sessions.get(String(key));
+    const list = Array.isArray(session?.thinks) ? session.thinks : [];
+    const picked = list.slice(-Math.max(1, max)).map((row) => String(row?.text ?? '').trim()).filter(Boolean);
+    if (picked.length === 0) return '';
+    const text = picked.join('\n…\n');
+    return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+  }
+
+  /**
    * 猫事件处理——累积视图块，遇轮结束触发收尾。
    *
    * @param {object} session 观测会话
@@ -856,8 +910,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       }
       return;
     }
-    // ② view 事件：每猫端口推的是「视图状态」（v/state/persist/live），不是渲染块——
-    //    渲染块在收尾时拉 /api/v1/keyinfo 取（2026-10-11 实测）。带 renderType 的形态仍兼容。
+    // ② view 事件：载荷两态——a) 视图状态 {v, state, persist:{items[]}, live}（每猫端口实测形态，
+    //    渲染块在 persist.items：inject_report / user / reason / toolcard…）b) 单块推送 {renderType, text}。
+    //    reason 块 = 猫的思考正文——**直接读 think**（会话分析数据源；不再靠截图 + 视觉判读）。
+    collectThink(session, frame.data);
     if (!Object.prototype.hasOwnProperty.call(frame.data, 'renderType')) return;
     const type = String(frame.data.renderType ?? '');
     if (type !== 'stream' && type !== 'reason') {
@@ -1423,7 +1479,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     state, ch4, watcher, shot,
     health, renderReceipt, open, close, send, status, say, sayAt, sayImage,
     armCat, armAll, disarmAll, resetSession, newSession, waitForReply,
-    scheduleAnalysis, runAnalysis, analyzeOnce,
+    scheduleAnalysis, runAnalysis, analyzeOnce, collectThink, thinkText,
     start, stop, api, idleCloseMs
   };
 }

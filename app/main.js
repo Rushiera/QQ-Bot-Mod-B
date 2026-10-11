@@ -188,10 +188,11 @@ app.whenReady().then(async () => {
       try {
         await win.loadFile(htmlFile);
         await new Promise((resolve) => setTimeout(resolve, 500));
+        // 高度贴合内容（body 为 height:auto——不用 scrollHeight：内容不足时它取视口高，底部留白）
         const height = await win.webContents.executeJavaScript(
-          'Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)'
+          'Math.ceil(document.body.getBoundingClientRect().height)'
         );
-        const target = Math.min(Math.max(Number(height) || 600, 300), 4000);
+        const target = Math.min(Math.max(Number(height) || 600, 200), 4000);
         win.setContentSize(800, target);
         await new Promise((resolve) => setTimeout(resolve, 300));
         const image = await win.webContents.capturePage();

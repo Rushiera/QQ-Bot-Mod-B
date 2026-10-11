@@ -32,6 +32,62 @@ const MAX_BLOCKS = 40;
 /** 视觉调用超时（毫秒）。 */
 const VISION_TIMEOUT_MS = 90000;
 
+/** 图片包裹（L1/Discipline §九——`[image-open]` / `[image-end]` 三行齐备才算数）。 */
+const IMAGE_BLOCK = /\[image-open\]([\s\S]*?)\[image-end\]/g;
+
+/**
+ * 切分图片包裹——条目行形态 `图片N-k：<路径>`（全角冒号，路径取到行尾）。
+ *
+ * @param {string} text 原文
+ * @returns {{images: Array<{label: string, path: string}>, rest: string}} 图片条目与剩余正文
+ */
+function splitImageBlocks(text) {
+  const images = [];
+  const rest = String(text ?? '').replace(IMAGE_BLOCK, (_match, body) => {
+    for (const line of String(body).split('\n')) {
+      const item = line.trim();
+      if (!item) continue;
+      const at = item.indexOf('：');
+      const label = (at >= 0 ? item.slice(0, at) : item).trim();
+      const file = (at >= 0 ? item.slice(at + 1) : '').trim();
+      if (file) images.push({ label, path: file });
+    }
+    return '';
+  });
+  return { images, rest: rest.trim() };
+}
+
+/**
+ * 本地路径 → file URL（http(s) / file 原样；相对路径与受控根寻址返回空串）。
+ *
+ * @param {string} target 路径
+ * @returns {string} file URL（不可渲染时空串）
+ */
+function toFileUrl(target) {
+  const s = String(target ?? '').trim();
+  if (!s) return '';
+  if (/^(https?:|file:)/i.test(s)) return s;
+  if (!/^[a-zA-Z]:[\\/]/.test(s) && !s.startsWith('\\\\')) return '';
+  return pathToFileURL(s).href;
+}
+
+/**
+ * 渲染气泡内图片组（CH4 同款 DOM：`.chat-imgs > figure.chat-img > a > img` + figcaption）。
+ *
+ * @param {Array<{label: string, path: string}>} images 图片条目
+ * @returns {string} HTML（无图片时空串）
+ */
+function renderImages(images) {
+  if (!Array.isArray(images) || images.length === 0) return '';
+  const figs = images.map((image) => {
+    const label = esc(image.label || '图片');
+    const url = toFileUrl(image.path);
+    if (!url) return `<figure class="chat-img missing">${label}（未取到本地文件）</figure>`;
+    return `<figure class="chat-img"><a href="${url}" target="_blank"><img src="${url}" alt="${label}"></a><figcaption>${label}</figcaption></figure>`;
+  });
+  return `<div class="chat-imgs">${figs.join('')}</div>`;
+}
+
 /**
  * HTML 转义（纯文本块用——MD 正文的转义由 md.js 内部完成）。
  *
@@ -76,13 +132,16 @@ export function createShotService({ log, dataDir, hooks, vision = null }) {
       const text = String(block?.text ?? block?.content ?? '').trim();
       if (!text) continue;
       if (type === 'user') {
-        rows.push(`<div class="chat-row user"><div class="chat-bubble">${esc(text)}</div></div>`);
+        const { images, rest } = splitImageBlocks(text);
+        rows.push(`<div class="chat-row user"><div class="chat-bubble">${renderImages(images)}${rest ? `<div class="chat-user-text">${esc(rest)}</div>` : ''}</div></div>`);
       } else if (type === 'reason') {
         rows.push(`<div class="chat-row assistant" data-type="reason"><div class="chat-bubble">${esc(text)}</div></div>`);
       } else if (type === 'roundsum') {
         rows.push(`<div class="chat-row assistant" data-type="roundsum"><div class="chat-bubble roundsum">${esc(text)}</div></div>`);
       } else {
-        rows.push(`<div class="chat-row assistant" data-type="text"><div class="chat-bubble"><div class="md-block">${mdToHtml(text)}</div></div></div>`);
+        const { images, rest } = splitImageBlocks(text);
+        const body = mdToHtml(rest);
+        rows.push(`<div class="chat-row assistant" data-type="text"><div class="chat-bubble">${renderImages(images)}${body ? `<div class="md-block">${body}</div>` : ''}</div></div>`);
       }
     }
     if (rows.length === 0) {

@@ -122,6 +122,29 @@ check('编排·重复开启幂等（不重发）', again.ok === true && again.al
 check('编排·新会话通道可用', typeof navIdem.newSession === 'function');
 const noTarget = await navIdem.newSession({ keys: ' , ' });
 check('编排·新会话·空目标报错退出', noTarget.ok === false && noTarget.total === 0, noTarget.error || '');
+
+// ── 6 会话分析：直接读 think（Rushiera 2026-10-11）──────────────────────────
+// 判据：view 事件的 reason 块（persist.items）被收集 → thinkText 直接读回——
+//       会话分析据此报「它现在在干什么」，不再走截图 + 视觉判读。
+const rfRow = cats.find((row) => row.running === true && Number(row.port) > 0)
+  || cats.find((row) => Number(row.port) > 0)
+  || cats[0];
+const armed = await navIdem.armCat(rfRow);
+check('会话分析·观测建立', !!armed && armed.key === String(rfRow.id), String(rfRow.id));
+if (armed) {
+  navIdem.collectThink(armed, { persist: { items: [
+    { type: 'user', text: '干活' },
+    { type: 'reason', ts: 1, text: '先读索引。' },
+    { type: 'reason', ts: 2, text: '落点定了。' },
+    { type: 'reason', ts: 2, text: '落点定了。' }
+  ] } });
+  check('会话分析·think 收集（去重）', armed.thinks.length === 2, `条数 ${armed.thinks.length}`);
+  const got = navIdem.thinkText(armed.key);
+  check('会话分析·直接读 think', got.includes('先读索引') && got.includes('落点定了'), got.replace(/\n/g, ' ').slice(0, 40));
+  check('会话分析·非 reason 不入', !got.includes('干活'));
+  navIdem.disarmAll();
+}
+
 navIdem.stop();
 
 const passed = results.filter((r) => r.ok).length;

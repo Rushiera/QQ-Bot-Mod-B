@@ -1027,3 +1027,89 @@ R喵喵：交接摘要已注入，等待确认
 **建议修法（未实施）**：把 `reply.loose-send` 的正则级实现落到壳内（判据：正文非计划腔 + 含成句中文 + 与触发消息有语义关联 → 抽成一条 `send_message`），并让 `cap()` 缺失时**出声**（`logger.error`）而不是静默返回空——现在「能力缝没人装」在运行详情里完全看不出来。
 
 **为什么本轮未修**：改动落在发送链路（壳里**最可能造成事故**的一环——判错就是把内心戏发进群），且本轮 Rushiera 只点了 A / B 两件；按「两个以上合理方案列选项等拍板」处理，先诊断落档。
+
+---
+
+## 三十四、回复卡对齐 CH4 会话页（2026-10-11 · v0.33）
+
+**缘起**：Rushiera 群内定——领航员发群的截图，猫娘回复的样式要与 CH4 内置会话页（chat.html）一致（群里先有「你这 md 渲染都没有也太丑了」的反馈）。
+
+**做法：三件同源**（不做近似，直接取 CH4 前端原件）：
+
+| 件 | 落点 | 来源 |
+|:--|:--|:--|
+| 样式表 | `app/src/navigator/chat-card.css` | CH4 `/css/tokens.css`（全文）+ `/css/chat.css`（L2 令牌 · 滚动条 · 行与气泡 · roundsum · md-block 摘取） |
+| MD 渲染器 | `app/src/navigator/md.js` | CH4 `/js/chat/lib/md.js`（副本 + 末尾 `export { mdToHtml }`） |
+| 内容字体 | `app/src/navigator/fonts/SarasaMonoSC-Regular.ttf` | CH4 `/fonts/SarasaMonoSC-Regular.ttf`（24.4 MB · 随仓库入库） |
+
+**渲染改动**（`app/src/navigator/shot.js`）：
+
+- `renderCard` 输出 CH4 会话区 DOM：`#chatbar`（猫名 + 时间）· `.chat-row.user > .chat-bubble` · `.chat-row.assistant[data-type=text] > .chat-bubble > .md-block` · `.chat-row.assistant[data-type=roundsum] > .chat-bubble.roundsum`
+- 回复正文走 `mdToHtml`——表格 / 代码块 / 列表 / 引用 / 标题 / 行内码全渲染
+- 样式内联进 HTML（离屏窗口 `loadFile` 零外链）；`@font-face` 的相对路径在卡片侧解析不到 → 载入时改写为绝对 `file://` URL
+- `main.js` 截图高度改取 `body.getBoundingClientRect().height`（原 `scrollHeight` 在内容不足时取视口高 → 底部大片空白）
+
+**实测口径**（真链路，重启后）：`POST /api/nav/shot`（blocks = user + 含表格/代码块/引用的回复 + roundsum）→ 产物 `app/data/nav-shot-2026-10-11T05-08-22-748Z.png`：卡高贴合内容 · 气泡底 `#1a1a1a` / 用户泡 `#0e639c` · 描边米白 20% · radius 8px · 正文 14px · 等宽字体生效 ✅；与 CH4 页（8081）计算样式逐项比对一致 ✅。
+
+**已知差异（数据不足，非样式差异）**：CH4 页的轮末结算是 `rs-*` 四段分片（📊 Round / 🎯 命中率 / Tool·Api·All / 四态用时）；卡片侧只有 `keyinfo` 的单行摘要原文，按 `.chat-bubble.roundsum` 单行渲染。
+
+**同步约定**：CH4 前端改样式或渲染器后，重新摘取上面三件覆盖（`chat-card.css` 整块替换 · `md.js` 除末尾导出行外原样覆盖）。
+
+
+---
+
+## 三十五、投递去来源头（2026-10-11 · v0.44）
+
+**缘起**：Rushiera 群内定——「转发的消息自己知道渠道就可以了，不用特地加个 `[来自QQ][群@|Rushiera(群主)·本人]` 污染会话前文，而且我也不是所有群都是群主，这会影响领航员的判断（@我/提到我）」。
+
+**两条理由**：① 该前缀进猫的会话前文——每条指令都多一段噪声；② 角色写死「群主」是错的——Rushiera 并非所有群都是群主，错标角色会误导领航员与猫的判断。
+
+**改动**：
+
+| 落点 | 改动 |
+|:--|:--|
+| `app/src/navigator/index.js` | `send()` 的 `sourceTag` 默认 `true` → **false**；`POST /api/nav/send` 的判定 `!== false` → `=== true`；保留标签形态但去掉角色（`(群主)` 删掉——只留 `[来自QQ][群@|Rushiera·本人]`，且仅显式要求时才加） |
+| `tools/navigator/nav-tools.js` | `nav_send` 描述改「猫那边看到的就是这条原文——系统不再加 [来自QQ]… 来源头，渠道由投递通道自身承载」；`text` 口径追加「不要带触发标记（如「（@我/提到我）」这类是给判断用的，不是指令内容）」 |
+| `tools/apply-qqagent-config.mjs` | 领航员教材「怎么做」段同步——投递不加来源头；新增一条：消息末尾的「（@我/提到我）」类触发标记投递时去掉 |
+| `design-qqbotb-navigator.md` §五 | 投递语义改写（原「按 CH4 现行 QQ 转发口径加来源头」→ 现「原文照抄，不加来源头」）+ 两条理由 |
+
+**生效链**：自研单体改码 → 重启单体（`启动QQBotB.bat`）→ 补丁 `patch-qqagent-navigator.mjs` 重跑（业务面工具描述同步）→ `apply-qqagent-config.mjs --roletext-only`（前文教材同步）。
+
+**真链路实锤**：`POST /api/nav/send` 投主干（自测句）→ `GET 8081/api/v1/keyinfo?max=1` 取末条 user：`len=29 · hasQQtag=false · hasRole=false`（无来源头、无角色标注）。
+
+**遗留**：业务面 R喵 仍会把「（@我/提到我）」触发标记当指令内容整段投递——教材已加禁令，需下一轮会话（新前文生效后）观察是否收敛。
+
+---
+
+## 三十三、回执只读 + 会话分析直接读 think（2026-10-11）
+
+> 触发：Rushiera 2026-10-11（群 689942975 · 12:56）——「让R喵喵喵喵开工qqbotB，我想要回执的意思就是想要那个会话分析，包括我想看一下各单位运行情况，这些都是领航员功能，而不应该给他们发消息让他们有实际回复，另外会话分析我的要求是直接读think的」。
+> 设计：`design-qqbotb-navigator.md` §十六。
+
+**背景（前一轮做反了）：** 12:53 前后「回报当前回执：你在做什么、做到哪、有没有卡点」被当指令投递到 3 只猫（majordomo / R喵喵 / R喵喵喵）——既拿不到分析，还往各自前文各堆一条（majordomo 当时 325k）。
+
+| 面 | 落点 | 说明 |
+|:--|:--|:--|
+| think 采集 | `app/src/navigator/index.js` | 新增 `collectThink`——view 事件两态都认（`persist.items[]` / 顶层 `renderType`）；`reason` 正文去重入环形（`THINK_KEEP` 200 条/猫） |
+| think 出口 | 同上 | 新增 `thinkText(key)`——取最近 3 条、上限 1200 字符 |
+| 会话分析 | 同上 `emitOutbound` ② | 有 think → 直接贴「它现在在想：…」；无 think → 回落截图 + 判读 |
+| 只读工具 | `tools/navigator/nav-tools.js` | 新增 `nav_health` / `nav_analyze`（工具组 7→9 件） |
+| 教材 | `tools/apply-qqagent-config.mjs` | `NAV_RULES` 新增「回执 / 看运行情况（只读——不派活）」段 |
+| 自测 | `tools/verify-navigator.mjs` | 新增 4 条（观测建立 / think 收集去重 / 直接读 / 非 reason 不入） |
+
+**根因（为什么读不到 think）：** `onCatEvent` 原判据「无顶层 renderType 即早退」——而每猫端口推的是视图状态 `{v, state, persist:{items[]}, live}`，渲染块一直在 `persist.items[]` 里（实测 6 秒样本：reason 34 条 / toolcard 55 条 / user 3 条 / inject_report 1 条）。
+
+**验证实锤：**
+
+| 项 | 结果 |
+|:--|:--|
+| 自测 | `node tools/verify-navigator.mjs` → **25/25 通过**（21 → 25，含 think 收集去重 / 直接读回 / 非 reason 不入） |
+| 业务面落盘 | `node tools/patch-qqagent-navigator.mjs` → `src/nav-tools.js` **updated**（其余 5 点 skipped） |
+| 教材落盘 | `node tools/apply-qqagent-config.mjs --roletext-only` → `roleTextChars` 92243 → **92862** |
+
+**遗留：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 生效面 | 自研单体（`app/`）改动需**重启 QQBotB 应用**；教材（`config.json` 的 roleText）需**业务面开新会话**——两者均由主理方发起，本轮不代起进程 |
+| 2 | 真链路 | 待验——群里 @ 一次「回执」/「各单位运行情况」，确认走只读且群内收到 think 播报（不再有投递） |

@@ -246,6 +246,76 @@ export function registerNavTools() {
     }
   });
 
+  // ── nav_health ──────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_health',
+    name: '领航员·运行情况',
+    description: `看「各单位」现在的运行情况——应用指令层 / CH4 宿主 / 猫群（在跑 / 有会话）/ 外部服务（ApiSiteAnalyzer、ComfyDock 等）。
+用途：群里问「各单位运行情况」「现在都怎么样」「状态如何」时调本工具。
+🔴 **只读**——看状态就读状态，**不要给猫发消息去问**（那会让它们真的干活、回话，还往各自前文堆一条）。`,
+    category: 'system',
+    icon: '🩺',
+    parameters: { type: 'object', properties: {}, required: [] },
+    async execute() {
+      try {
+        const data = await call('/api/nav/health');
+        const lines = [];
+        lines.push(`应用指令层 ${data?.app?.ok ? '--OK' : '--异常'}`);
+        lines.push(`CH4 宿主 ${data?.ch4?.ok ? '--OK' : `--异常（${data?.ch4?.error || '未连接'}）`}`);
+        for (const svc of data?.services || []) lines.push(`${svc.name}   ${svc.detail}`);
+        const cats = data?.cats || [];
+        const running = (data?.working || []).map((row) => row.name || row.id);
+        const busy = (data?.busy || []).map((row) => row.name || row.id);
+        lines.push(`猫群（${cats.length} 只）：${running.length ? `${running.join('，')} 正在跑` : '无猫在跑'}${busy.length ? `；有会话：${busy.join('，')}` : ''}`);
+        lines.push(renderCats(cats));
+        return ok(lines.join('\n'));
+      } catch (error) {
+        return err(`领航员服务不可达（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── nav_analyze ─────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_analyze',
+    name: '领航员·会话分析',
+    description: `对某只猫做一次「会话分析」——**直接读它的思考（think）**，报出它现在在干什么 / 做到哪 / 卡不卡。
+用途：群里要「回执」「看一下 X 现在干嘛」「进度怎么样」时调本工具；不传 key 就对所有在跑的猫各做一次。
+🔴 **只读**——分析是读会话与思考，**不是给猫发消息**；不要用 nav_send 去「问状态」（那会让猫真的回话、往它前文各堆一条）。
+分析结果由领航员自己发群（有回复 → 回复截图；还在跑 → 直接读 think 播报 + @ 你），你不用复述。`,
+    category: 'system',
+    icon: '🔬',
+    parameters: {
+      type: 'object',
+      properties: { key: { type: 'string', description: `目标猫（${CAT_HINT}）；留空 = 全部在跑的猫` } },
+      required: []
+    },
+    async execute(ctx, args) {
+      const raw = String(args?.key || '').trim();
+      try {
+        let keys = raw ? raw.split(/[,，、\s]+/).filter(Boolean) : [];
+        if (keys.length === 0) {
+          const st = await call('/api/nav/status');
+          keys = (st?.cats || [])
+            .filter((row) => row?.runState && row.runState !== 'idle')
+            .map((row) => row.id);
+          if (keys.length === 0) return ok('当前没有在跑的猫——不需要会话分析。要看整体状态用 nav_health。');
+        }
+        const done = [];
+        for (const key of keys) {
+          const data = await call('/api/nav/analyze', {
+            method: 'POST',
+            body: { key, delayMs: 0, reason: '群内回执' }
+          });
+          done.push(`${key}${data?.ok === true ? '' : '（未受理）'}`);
+        }
+        return ok(`会话分析已触发（只读，不发消息给猫）：${done.join('，')}\n结果由领航员自己发群。`);
+      } catch (error) {
+        return err(`会话分析失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
   // ── nav_new ─────────────────────────────────────────────────────────────
   registerTool({
     id: 'nav_new',

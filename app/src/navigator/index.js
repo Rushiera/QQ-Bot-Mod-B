@@ -41,6 +41,14 @@ const RESET_READY_TIMEOUT_MS = 30000;
 /** 投递后自动做一次「猫会话分析」的延迟（毫秒）——替代「已投递」式回话（Rushiera 2026-10-11）。 */
 const ANALYZE_DELAY_MS = 60 * 1000;
 
+/**
+ * 进度判读提示词——猫还在跑（尚未回复）时用（Rushiera 2026-10-11：要「做到哪 / 什么情况 / 还要多久」）。
+ *
+ * 判读走**带图模式**（截图只作输入，不发群）：该视觉模型对长中文纯文本提示词只产
+ * `reasoning_content`、`content` 恒空（实测 max_tokens 4000 亦然），带图则正常。
+ */
+const PROGRESS_QUESTION = '这是 CH4 猫的会话截图。用三四句中文说清楚：① 它现在做到哪一步（正在干什么）② 有没有卡点或异常（有就点出来）③ 大概还要多久能做完（给个粗估，如「1-3 分钟」）。只描述图里能看到的，看不清就说看不清，不要编造。';
+
 /** 计入卡片的视图块类型。 */
 const BLOCK_TYPES = ['user', 'stream', 'text', 'reason', 'toolcard'];
 
@@ -240,19 +248,45 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
    * @param {string|number} chat 群号
    * @param {string} file PNG 绝对路径
    * @param {string} [caption] 说明文字
+   * @param {string|number|null} [atQq] 需要 @ 的人（QQ 号；空 = 不 @）
    * @returns {Promise<object>} 结果
    */
-  async function sayImage(chat, file, caption = '') {
+  async function sayImage(chat, file, caption = '', atQq = null) {
     if (chat === null || chat === undefined || chat === '') return { ok: false, error: '未指定群' };
     const message = [];
     if (caption && String(caption).trim()) message.push({ type: 'text', data: { text: String(caption) } });
     message.push({ type: 'image', data: { file: `file:///${String(file).replace(/\\/g, '/')}` } });
+    if (atQq) message.push({ type: 'at', data: { qq: String(atQq) } });
     try {
       await onebot.call('send_group_msg', { group_id: Number(chat) || chat, message });
       log.info('navigator', `已发图到群 ${chat}：${path.basename(file)}`);
       return { ok: true };
     } catch (error) {
       log.error('navigator', `发图失败（${chat}）：${error?.message ?? error}`);
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  }
+
+  /**
+   * 发一条带 @ 的群消息（纯文字——进度播报用，不带图）。
+   *
+   * @param {string|number} chat 群号
+   * @param {string} text 正文
+   * @param {string|number} [qq] 需要 @ 的人（空 = 不 @）
+   * @returns {Promise<object>} 结果
+   */
+  async function sayAt(chat, text, qq = null) {
+    if (chat === null || chat === undefined || chat === '') return { ok: false, error: '未指定群' };
+    const content = String(text ?? '');
+    if (!content.trim()) return { ok: false, error: '内容为空' };
+    const message = [{ type: 'text', data: { text: content } }];
+    if (qq) message.push({ type: 'at', data: { qq: String(qq) } });
+    try {
+      await onebot.call('send_group_msg', { group_id: Number(chat) || chat, message });
+      log.info('navigator', `已发群 ${chat}（@${qq || '无'}）：${content.replace(/\n/g, ' | ').slice(0, 300)}`);
+      return { ok: true };
+    } catch (error) {
+      log.error('navigator', `发群失败（${chat}）：${error?.message ?? error}`);
       return { ok: false, error: String(error?.message ?? error) };
     }
   }
@@ -381,56 +415,94 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
-   * 排一次「猫会话分析」——投递后 analyzeDelayMs 抓该猫会话，截图 + 解读发群。
+   * 排一次「猫会话分析」——到点抓该猫会话 → 截图 → 判读 → 发群。
    *
-   * 静默执行的反馈替代（Rushiera 2026-10-11）：投递后不再回「已投给 X 了」，
-   * 改为过一会儿直接给一张「它现在在干什么」的会话分析。
+   * **独立功能，不是投递的附属**（Rushiera 2026-10-11）：入口可多个——当前是
+   * 「投递后 N 秒」与「整理重启后」，后续可加别的触发点；核心只有本函数 + `runAnalysis`。
    *
    * @param {string} key 猫 key
    * @param {string|null} chat 回报群
+   * @param {object} [options] 选项
+   * @param {number} [options.delayMs] 延迟毫秒（默认取配置）
+   * @param {string} [options.reason] 触发来源标签（进播报标题与日志）
    * @returns {void}
    */
-  function scheduleAnalysis(key, chat) {
-    if (!(analyzeDelayMs > 0)) return;
+  function scheduleAnalysis(key, chat, { delayMs = analyzeDelayMs, reason = '' } = {}) {
+    if (!(delayMs > 0)) return;
     const old = analyzeTimers.get(key);
     if (old) clearTimeout(old);
     const timer = setTimeout(() => {
       analyzeTimers.delete(key);
-      runAnalysis(key, chat).catch((error) => record('error', `会话分析（${key}）失败：${error?.message ?? error}`));
-    }, analyzeDelayMs);
+      runAnalysis(key, chat, reason).catch((error) => record('error', `会话分析（${key}）失败：${error?.message ?? error}`));
+    }, delayMs);
     analyzeTimers.set(key, timer);
-    record('watch', `${key}：已排 ${Math.round(analyzeDelayMs / 1000)} 秒后的猫会话分析`);
+    record('watch', `${key}：已排 ${Math.round(delayMs / 1000)} 秒后的猫会话分析${reason ? `（${reason}）` : ''}`);
   }
 
   /**
-   * 做一次猫会话分析——抓当前会话 → 截图 → 解读 → 发群。
+   * 做一次猫会话分析——未回复走「进度播报」（纯文字 + @），已回复走「回复截图」。
+   *
+   * 未回复不截图（图里没有回复内容）；截图只截猫的回复内容（Rushiera 2026-10-11）。
    *
    * @param {string} key 猫 key
    * @param {string|null} chat 回报群
+   * @param {string} [reason] 触发来源标签（进播报标题，如「投递后 60 秒」）
    * @returns {Promise<void>} 完成
    */
-  async function runAnalysis(key, chat) {
+  async function runAnalysis(key, chat, reason = '') {
     const target = resolveChat(chat) ?? state.snapshot().activeChat;
     if (!target) {
       record('error', `会话分析（${key}）：没有回消息群，跳过`);
       return;
     }
-    let blocks = [];
+    // 在跑 / 已停——决定播报语气与是否 @（没回复要估个时间并提醒触发者）
+    let running = false;
+    try {
+      const id = await ch4.resolveKey(key);
+      const rows = await ch4.cats();
+      const row = rows.find((item) => String(item?.id) === String(id));
+      const runState = String(row?.runState ?? 'idle');
+      running = runState.toLowerCase() !== 'idle';
+    } catch (error) {
+      record('error', `会话分析（${key}）：取状态失败（${error?.message ?? error}）——按已停处理`);
+    }
+    let items = [];
     try {
       const info = await ch4.keyinfo(key, 20);
-      blocks = itemsToBlocks(info?.items, 0);
+      items = Array.isArray(info?.items) ? info.items : [];
     } catch (error) {
       record('error', `会话分析（${key}）：拉会话失败（${error?.message ?? error}）`);
       return;
     }
-    if (blocks.length === 0) {
+    if (items.length === 0) {
       record('watch', `会话分析（${key}）：会话为空，跳过`);
       return;
     }
     const catName = await catNameOf(key);
+    const label = reason ? `·${reason}` : '';
+
+    // ① 还没回复 → 只发文字播报（截图仅作判读输入，不发群）+ @ 触发者
+    if (running) {
+      let insight = '';
+      try {
+        const png = await shot.shoot({ catName, blocks: replyBlocksOf(items), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
+        if (png) insight = await shot.analyze(png, PROGRESS_QUESTION);
+      } catch (error) {
+        record('error', `进度播报（${key}）：判读失败（${error?.message ?? error}）——仅发事实`);
+      }
+      const head = `⏳ ${catName} 还在跑${label}，尚未回复`;
+      const body = [head, progressFacts(items), insight].filter((line) => String(line ?? '').trim()).join('\n');
+      const sent = await sayAt(target, body, vipUser);
+      record(sent.ok ? 'send' : 'error', sent.ok
+        ? `进度播报已发群 ${target}（${catName}·@触发者）`
+        : `进度播报发送失败：${sent.error}`);
+      return;
+    }
+
+    // ② 已回复 → 截回复内容发群
     let png = '';
     try {
-      png = await shot.shoot({ catName, blocks, at: new Date().toLocaleString('zh-CN', { hour12: false }) });
+      png = await shot.shoot({ catName, blocks: replyBlocksOf(items), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
     } catch (error) {
       record('error', `会话分析（${key}）：截图失败（${error?.message ?? error}）`);
       return;
@@ -439,10 +511,31 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       record('error', `会话分析（${key}）：截图为空，跳过`);
       return;
     }
-    const insight = await shot.analyze(png);
-    const caption = insight ? `${catName} 当前会话分析：\n${insight}` : `${catName} 当前会话分析。`;
-    const sent = await sayImage(target, png, caption);
-    record(sent.ok ? 'send' : 'error', sent.ok ? `会话分析已发图到群 ${target}（${catName}）` : `会话分析发图失败：${sent.error}`);
+    const sent = await sayImage(target, png, `${catName} 的回复${label}`);
+    record(sent.ok ? 'send' : 'error', sent.ok
+      ? `回复截图已发群 ${target}（${catName}）`
+      : `回复截图发送失败：${sent.error}`);
+  }
+
+  /**
+   * 触发一次猫会话分析——`delayMs > 0` 排队，否则立即执行。
+   *
+   * 独立入口（API / 其他功能都走这里），核心逻辑仍归 `scheduleAnalysis` + `runAnalysis`。
+   *
+   * @param {object} options 选项
+   * @param {string} options.key 猫 key
+   * @param {string|number|null} [options.chat] 回报群
+   * @param {number} [options.delayMs] 延迟毫秒（0 = 立即）
+   * @param {string} [options.reason] 触发来源标签
+   * @returns {Promise<object>} 受理结果
+   */
+  async function analyzeOnce({ key, chat = null, delayMs = 0, reason = '' }) {
+    if (delayMs > 0) {
+      scheduleAnalysis(key, chat, { delayMs, reason });
+      return { ok: true, scheduled: true, key, delayMs, reason };
+    }
+    runAnalysis(key, chat, reason).catch((error) => record('error', `会话分析（${key}）失败：${error?.message ?? error}`));
+    return { ok: true, accepted: true, key, reason };
   }
 
   /**
@@ -572,6 +665,45 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       })
       .filter(Boolean)
       .join('\n\n');
+  }
+
+  /**
+   * 播报事实行——未回复时给「接的什么活 / 有没有产出」（判读之外的确定性信息）。
+   *
+   * @param {Array<object>} items keyinfo 条目
+   * @returns {string} 文本（每行一条，无内容返回空串）
+   */
+  function progressFacts(items) {
+    const rows = Array.isArray(items) ? items : [];
+    const lastUser = [...rows].reverse().find((row) => String(row?.role ?? '') === 'user');
+    const lastReply = [...rows].reverse().find((row) => String(row?.role ?? '') === 'reply');
+    const clip = (text, n) => {
+      const s = String(text ?? '').replace(/\s+/g, ' ').trim();
+      return s.length > n ? `${s.slice(0, n)}…` : s;
+    };
+    const lines = [];
+    if (lastUser) lines.push(`· 接的活：${clip(lastUser.content ?? lastUser.preview, 80)}`);
+    lines.push(lastReply ? `· 最近产出：${clip(lastReply.content ?? lastReply.preview, 80)}` : '· 还没有产出');
+    return lines.join('\n');
+  }
+
+  /**
+   * 会话条目 → 回复截图块（只留最后一条回复及其后的轮结算——截图截的是回复内容）。
+   *
+   * @param {Array<object>} items keyinfo 条目
+   * @returns {Array<object>} 块
+   */
+  function replyBlocksOf(items) {
+    const rows = Array.isArray(items) ? items : [];
+    const idx = rows.map((row) => String(row?.role ?? '')).lastIndexOf('reply');
+    if (idx < 0) return itemsToBlocks(rows, 0);
+    return rows.slice(idx)
+      .filter((row) => ['reply', 'roundsum'].includes(String(row?.role ?? '')))
+      .map((row) => ({
+        renderType: String(row?.role ?? '') === 'roundsum' ? 'roundsum' : 'text',
+        text: String(row?.content ?? row?.preview ?? '')
+      }))
+      .filter((row) => row.text.trim().length > 0);
   }
 
   /**
@@ -894,6 +1026,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     record('reset', `${name}：整理重启完成${ack ? '' : '（未见确认回复，可能仍在跑）'}`);
     if (target) {
       await say(target, `前文整理重启完成：${name}${ack ? ' 已接上并继续' : ' 已注入交接摘要，正在接上'}。`);
+      // 整理后同样给一次进度播报（清理指令也要有反馈——Rushiera 2026-10-11）
+      scheduleAnalysis(resolved, target, { reason: '整理重启后' });
     }
     return { ok: true, key: resolved, name, summary, trace, ack, material: materialFile };
   }
@@ -948,7 +1082,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       if (session) session.chat = chatResolved;
       result.watch = session ? { ok: true, persistent: true } : { ok: false, error: '该猫未在观测中' };
       // 静默执行的反馈替代：过一会儿主动给一次「猫会话分析」（不再回「已投递」）
-      scheduleAnalysis(result.key, chatResolved);
+      scheduleAnalysis(result.key, chatResolved, { reason: `投递后 ${Math.round(analyzeDelayMs / 1000)} 秒` });
     }
     return result;
   }
@@ -1049,6 +1183,14 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       })
     }),
     'POST /api/nav/say': async ({ body }) => ({ body: await say(body?.chat, body?.text) }),
+    'POST /api/nav/analyze': async ({ body }) => ({
+      body: await analyzeOnce({
+        key: body?.key || 'majordomo',
+        chat: body?.chat ?? null,
+        delayMs: Number(body?.delayMs ?? 0) || 0,
+        reason: body?.reason || '手动触发'
+      })
+    }),
     'POST /api/nav/shot': async ({ body }) => ({
       body: await (async () => {
         const catName = await catNameOf(body?.key || 'majordomo');
@@ -1070,8 +1212,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
 
   return {
     state, ch4, watcher, shot,
-    health, renderReceipt, open, close, send, status, say, sayImage,
+    health, renderReceipt, open, close, send, status, say, sayAt, sayImage,
     armCat, armAll, disarmAll, resetSession, waitForReply,
+    scheduleAnalysis, runAnalysis, analyzeOnce,
     start, stop, api, idleCloseMs
   };
 }

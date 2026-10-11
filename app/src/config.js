@@ -52,6 +52,10 @@ const DEFAULTS = {
     idleCloseMs: 30 * 60 * 1000,
     // 开场巡检最多截几只猫（0 = 不限——开启时把有会话的猫全部发一遍）
     tourLimit: 0,
+    // 前文整理重启：注入新会话的原文轨迹条数（0 = 不限）——「少量缩减」口径，保留近期原文
+    resetTraceLimit: 100,
+    // 投递指令后自动做一次「猫会话分析」的延迟毫秒（0 = 关闭）——静默执行的反馈替代
+    analyzeDelayMs: 60 * 1000,
     services: [
       { key: 'ApiSiteAnalyzer', name: 'ApiSiteAnalyzer', kind: 'apisite', url: 'http://127.0.0.1:8766/api/sites' },
       { key: 'ComfyDock', name: 'ComfyDock', url: 'http://127.0.0.1:8971/' }

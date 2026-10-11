@@ -29,6 +29,18 @@ const WATCH_TIMEOUT_MS = 10 * 60 * 1000;
 /** 兜底轮询间隔（毫秒）——SSE 判据落空时按 keyinfo 的轮结算行收尾。 */
 const POLL_INTERVAL_MS = 5000;
 
+/** 交接轨迹默认条数（0 = 不限）——「少量缩减」口径：保留近期原文，不追求一句不丢。 */
+const RESET_TRACE_LIMIT = 100;
+
+/** 单条回复在轨迹里的截断长度（字符）——用户原话不截断。 */
+const RESET_TRACE_REPLY_MAX = 8000;
+
+/** 新会话就绪等待上限（毫秒）——等 keyinfo 出现加载报告再注入，替代固定等待。 */
+const RESET_READY_TIMEOUT_MS = 30000;
+
+/** 投递后自动做一次「猫会话分析」的延迟（毫秒）——替代「已投递」式回话（Rushiera 2026-10-11）。 */
+const ANALYZE_DELAY_MS = 60 * 1000;
+
 /** 计入卡片的视图块类型。 */
 const BLOCK_TYPES = ['user', 'stream', 'text', 'reason', 'toolcard'];
 
@@ -100,6 +112,11 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   const watcher = createCatWatcher({ log });
   const shot = createShotService({ log, dataDir, hooks, vision: loadVision() });
   const idleCloseMs = Number(navConfig.idleCloseMs) || IDLE_CLOSE_MS;
+  const traceLimitRaw = Number(navConfig.resetTraceLimit);
+  const traceLimit = Number.isFinite(traceLimitRaw) && traceLimitRaw >= 0 ? traceLimitRaw : RESET_TRACE_LIMIT;
+  const analyzeDelayMs = navConfig.analyzeDelayMs === undefined
+    ? ANALYZE_DELAY_MS
+    : Number(navConfig.analyzeDelayMs) || 0;
   const services = Array.isArray(navConfig.services) ? navConfig.services : [];
   const vipUser = String(navConfig.vipUser || '');
   let watchTimer = null;
@@ -110,6 +127,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
 
   /** 活动流（最近 40 条）——观测窗口：订阅 / 事件 / 截图 / 发群都留痕。 */
   const activity = [];
+
+  /** 投递后「猫会话分析」定时器（猫 key → 定时器）——每猫同一时刻只留一个。 */
+  const analyzeTimers = new Map();
 
   /**
    * 记一条活动（界面显示与事后排查共用）。
@@ -361,6 +381,71 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
+   * 排一次「猫会话分析」——投递后 analyzeDelayMs 抓该猫会话，截图 + 解读发群。
+   *
+   * 静默执行的反馈替代（Rushiera 2026-10-11）：投递后不再回「已投给 X 了」，
+   * 改为过一会儿直接给一张「它现在在干什么」的会话分析。
+   *
+   * @param {string} key 猫 key
+   * @param {string|null} chat 回报群
+   * @returns {void}
+   */
+  function scheduleAnalysis(key, chat) {
+    if (!(analyzeDelayMs > 0)) return;
+    const old = analyzeTimers.get(key);
+    if (old) clearTimeout(old);
+    const timer = setTimeout(() => {
+      analyzeTimers.delete(key);
+      runAnalysis(key, chat).catch((error) => record('error', `会话分析（${key}）失败：${error?.message ?? error}`));
+    }, analyzeDelayMs);
+    analyzeTimers.set(key, timer);
+    record('watch', `${key}：已排 ${Math.round(analyzeDelayMs / 1000)} 秒后的猫会话分析`);
+  }
+
+  /**
+   * 做一次猫会话分析——抓当前会话 → 截图 → 解读 → 发群。
+   *
+   * @param {string} key 猫 key
+   * @param {string|null} chat 回报群
+   * @returns {Promise<void>} 完成
+   */
+  async function runAnalysis(key, chat) {
+    const target = resolveChat(chat) ?? state.snapshot().activeChat;
+    if (!target) {
+      record('error', `会话分析（${key}）：没有回消息群，跳过`);
+      return;
+    }
+    let blocks = [];
+    try {
+      const info = await ch4.keyinfo(key, 20);
+      blocks = itemsToBlocks(info?.items, 0);
+    } catch (error) {
+      record('error', `会话分析（${key}）：拉会话失败（${error?.message ?? error}）`);
+      return;
+    }
+    if (blocks.length === 0) {
+      record('watch', `会话分析（${key}）：会话为空，跳过`);
+      return;
+    }
+    const catName = await catNameOf(key);
+    let png = '';
+    try {
+      png = await shot.shoot({ catName, blocks, at: new Date().toLocaleString('zh-CN', { hour12: false }) });
+    } catch (error) {
+      record('error', `会话分析（${key}）：截图失败（${error?.message ?? error}）`);
+      return;
+    }
+    if (!png) {
+      record('error', `会话分析（${key}）：截图为空，跳过`);
+      return;
+    }
+    const insight = await shot.analyze(png);
+    const caption = insight ? `${catName} 当前会话分析：\n${insight}` : `${catName} 当前会话分析。`;
+    const sent = await sayImage(target, png, caption);
+    record(sent.ok ? 'send' : 'error', sent.ok ? `会话分析已发图到群 ${target}（${catName}）` : `会话分析发图失败：${sent.error}`);
+  }
+
+  /**
    * 为一只猫建立持久观测（领航员开启期间常驻——任何一轮回复都截图发群，无例外）。
    *
    * @param {object} row 猫状态（cat 清单条目）
@@ -411,7 +496,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     return sessions.size;
   }
 
-  /** 撤除全部观测。 */
+  /** 撤除全部观测（含未到点的会话分析定时器）。 */
   function disarmAll() {
     for (const session of sessions.values()) {
       session.done = true;
@@ -419,6 +504,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       watcher.unwatch(session.key);
     }
     sessions.clear();
+    for (const timer of analyzeTimers.values()) clearTimeout(timer);
+    analyzeTimers.clear();
   }
 
   /**
@@ -455,6 +542,36 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
         return { renderType: type, text: String(row?.content ?? row?.preview ?? '') };
       })
       .filter((row) => row.text.trim().length > 0);
+  }
+
+  /**
+   * 会话条目 → 原文轨迹文本（前文整理重启用——留存用户原话与猫的回复原文）。
+   *
+   * 交接摘要由猫自己写、必然有取舍；原文轨迹是客观留存。两者一起注入才能保住延续性
+   * （Rushiera 2026-10-11：「重启结果应优先确保当前会话内容的延续性」）。
+   *
+   * @param {Array<object>} items keyinfo 条目
+   * @param {number} limit 取末尾条数上限
+   * @returns {string} 轨迹文本（无内容时为空串）
+   */
+  function traceText(items, limit) {
+    const rows = Array.isArray(items) ? items : [];
+    const keep = ['user', 'reply', 'roundsum'];
+    return rows
+      .filter((row) => keep.includes(String(row?.role ?? '')))
+      .slice(Number(limit) > 0 ? -Number(limit) : 0)
+      .map((row) => {
+        const role = String(row?.role ?? '');
+        const tag = role === 'user' ? '用户' : role === 'reply' ? '我' : '轮结算';
+        const text = String(row?.content ?? row?.preview ?? '').trim();
+        if (!text) return '';
+        const body = role === 'reply' && text.length > RESET_TRACE_REPLY_MAX
+          ? `${text.slice(0, RESET_TRACE_REPLY_MAX)}…（后略）`
+          : text;
+        return `[${tag}] ${body}`;
+      })
+      .filter(Boolean)
+      .join('\n\n');
   }
 
   /**
@@ -646,7 +763,35 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
-   * 前文整理重启——收工整理 → 新会话 → 注入交接摘要 → 自动继续（全自动，无人干预）。
+   * 等新会话就绪——轮询 keyinfo 直到出现加载报告（替代固定等待；猫多 / 前文大时更稳）。
+   *
+   * @param {string} key 猫 key
+   * @param {object} options 选项
+   * @param {number} options.beforeCount 清前文前的条目总数（新会话应显著低于它）
+   * @param {number} [options.timeoutMs] 超时毫秒
+   * @returns {Promise<boolean>} 是否就绪
+   */
+  async function waitSessionReady(key, { beforeCount = 0, timeoutMs = RESET_READY_TIMEOUT_MS } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const info = await ch4.keyinfo(key, 5);
+        const items = Array.isArray(info?.items) ? info.items : [];
+        const count = Number(info?.count ?? items.length);
+        const hasReport = items.some((row) => String(row?.role) === 'report');
+        if (hasReport && (beforeCount === 0 || count < beforeCount)) return true;
+      } catch { /* 单次失败继续轮询 */ }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    record('error', `${key}：新会话就绪等待超时（${timeoutMs}ms）——仍按当前状态注入`);
+    return false;
+  }
+
+  /**
+   * 前文整理重启——收工整理 → 抓原文轨迹 → 新会话 → 注入「摘要 + 轨迹」→ 自动继续。
+   *
+   * 延续性优先（Rushiera 2026-10-11）：交接材料 = 猫自述摘要 + 领航员客观抓取的原文轨迹，
+   * 两者一起注入——单靠摘要会丢细节，单靠轨迹会太长。
    *
    * @param {object} options 选项
    * @param {string} options.key 目标猫
@@ -672,6 +817,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       '   · 关键结论、踩过的坑、被否决的方案与原因',
       '   · 继续工作所必需的上下文（路径 / 参数 / 约定 / 凭证位置）',
       '   · 不确定或待确认的点（明确标注，别让接手方当成事实）',
+      '   · 用户提过的原始要求（照抄关键句，别改写）',
       '',
       '①②做完再输出摘要；摘要只输出正文（纯文本，小标题 + 列表），篇幅不设上限。'
     ].join('\n'));
@@ -682,19 +828,64 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     }
     record('reset', `${name}：交接摘要已取到（${summary.length} 字符）`);
 
+    // ①b 抓原文轨迹（必须在清前文之前——清掉就没了）：摘要之外的客观留存
+    let trace = '';
+    let beforeCount = 0;
+    try {
+      const info = await ch4.keyinfo(resolved, 10000);
+      beforeCount = Number(info?.count ?? 0);
+      trace = traceText(info?.items, traceLimit);
+    } catch (error) {
+      record('error', `${name}：原文轨迹抓取失败（${error?.message ?? error}）——本次仅注入摘要`);
+    }
+    record('reset', `${name}：原文轨迹已抓取（${trace.length} 字符 / 清前文前 ${beforeCount} 条）`);
+
+    // ①c 交接材料存盘（可事后核对——失败必须可见）
+    const material = [
+      `# 交接材料 · ${name}（${new Date().toLocaleString('zh-CN', { hour12: false })}）`,
+      '',
+      '## 交接摘要（猫自述）',
+      '',
+      summary,
+      '',
+      '## 原文轨迹（领航员抓取）',
+      '',
+      trace || '（未抓到）',
+      ''
+    ].join('\n');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const materialFile = path.join(dataDir, `nav-reset-${resolved}-${stamp}.md`);
+    try {
+      fs.writeFileSync(materialFile, material, 'utf8');
+      record('reset', `${name}：交接材料已存盘 ${path.basename(materialFile)}`);
+    } catch (error) {
+      record('error', `${name}：交接材料存盘失败（${error?.message ?? error}）`);
+    }
+
     // ② 新会话——清前文 + 重新注入
     const newSession = await ch4.command(`cat.new-session ${resolved}`, ch4.mainPort);
     record('reset', `${name}：新会话已请求（${JSON.stringify(newSession).slice(0, 80)}）`);
-    await new Promise((resolve) => setTimeout(resolve, 8000));
+    await waitSessionReady(resolved, { beforeCount });
 
     // ③ 注入交接摘要 + ④ 自动继续（同一条消息即"继续"）
     const injectAt = Date.now();
-    await ch4.send(resolved, [
+    const parts = [
       '【交接摘要·来自上一段会话】',
-      summary,
+      summary
+    ];
+    if (trace) {
+      parts.push(
+        '',
+        '【上一段会话原文轨迹】（末尾若干条，原文照录——供你核对细节，别只信摘要）',
+        trace
+      );
+    }
+    parts.push(
       '',
-      '以上是你上一段工作的交接摘要（前文已按此重置）。请据此继续工作——先确认你已接上，再推进未完成的事项。'
-    ].join('\n'));
+      '以上是你上一段工作的交接摘要与前文轨迹（前文已按此重置，你的记忆就靠这两份材料）。',
+      '据此继续工作——别重新调研已经做过的事：先回一句你在接着做什么，然后直接动手推进未完成的事项。'
+    );
+    await ch4.send(resolved, parts.join('\n'));
     record('reset', `${name}：交接摘要已注入，等待确认`);
 
     // ⑤ 等它接上（回复由持久观测自动截图发群，不额外截图）
@@ -703,7 +894,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     if (target) {
       await say(target, `前文整理重启完成：${name}${ack ? ' 已接上并继续' : ' 已注入交接摘要，正在接上'}。`);
     }
-    return { ok: true, key: resolved, name, summary, ack };
+    return { ok: true, key: resolved, name, summary, trace, ack, material: materialFile };
   }
 
   /**
@@ -755,6 +946,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       const session = sessions.get(result.key);
       if (session) session.chat = chatResolved;
       result.watch = session ? { ok: true, persistent: true } : { ok: false, error: '该猫未在观测中' };
+      // 静默执行的反馈替代：过一会儿主动给一次「猫会话分析」（不再回「已投递」）
+      scheduleAnalysis(result.key, chatResolved);
     }
     return result;
   }

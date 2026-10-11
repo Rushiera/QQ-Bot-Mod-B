@@ -8,11 +8,14 @@
 //   POST /api/nav/open               开启（body { by:'qq', requireVip:true }）
 //   POST /api/nav/close              关闭
 //   POST /api/nav/send               投递（body { key, text }）
+//   POST /api/nav/new-session        新会话（body { keys: 'a,b,c' }——发布 /new，不清前文交接）
 //
 // 「指令 / 闲聊」的语义判断归模型——本模块不做判定，也不替猫编造进度。
 // 依赖：QQBot mod B 自研单体（Electron 应用）在 127.0.0.1:3280 在跑。
 
 import { registerTool } from './tool-registry.js';
+// 记忆回溯点（收工轮取材回溯到领航员开启那一刻）——[qqagent-navigator-patch:memory-reach-import]
+import { setMemoryFloor } from './session-state.js';
 
 /** 自研单体的界面 / API 端口。 */
 const ENDPOINT = 'http://127.0.0.1:3280';
@@ -125,6 +128,7 @@ export function registerNavTools() {
     name: '领航员·开启',
     description: `开启领航员模式（QQ 群指挥 CH4 猫群）。
 🔴 只有 QQ 569145850 本人在群里 @ 我 说「打开 / 开启 / 启动…领航员」时才可调用——其他任何人（含管理员）的请求一律不要调用本工具。
+🔴 领航员**已经开着**时就不要再调本工具（不确定状态先调 nav_status）——重复开启不会重发任何东西，但那是无意义动作；重复的「开工报告 + 开场巡检」已经在系统侧做了幂等保护。
 调用后我（自研单体）会自动在下指令的群发一条健康检查回执；你不需要再复述回执内容，也不要重复发送。`,
     category: 'system',
     icon: '🚀',
@@ -133,7 +137,22 @@ export function registerNavTools() {
       try {
         const data = await call('/api/nav/open', { method: 'POST', body: { by: 'qq', requireVip: true } });
         if (data.ok === false) return err(`领航员未开启：${data.error ?? '未知原因'}`);
-        return ok(`领航员已开启（回执已自动发到下指令的群）。猫群：\n${renderCats(data.health?.cats)}`);
+        // 记忆回溯点：本次领航开启时刻置位 —— 收工轮取材据此回溯到这一刻起（不只吃本会话）。
+        // [qqagent-navigator-patch:memory-reach-open]
+        let reachNote = '';
+        try {
+          const st = await call('/api/nav/status');
+          const chatId = String(st?.activeChat ?? '').replace(/^group:/, '').trim();
+          if (/^\d+$/.test(chatId)) {
+            setMemoryFloor(`group:${chatId}`, Date.now());
+            reachNote = `\n记忆回溯点已置位（group:${chatId}）——本轮收工取材会回溯到此刻起。`;
+          } else {
+            reachNote = `\n⚠️ 记忆回溯点未置位：未读到回消息群（activeChat=${st?.activeChat ?? '空'}）。`;
+          }
+        } catch (error) {
+          reachNote = `\n⚠️ 记忆回溯点未置位：${error?.message ?? error}`;
+        }
+        return ok(`领航员已开启（回执已自动发到下指令的群）。猫群：\n${renderCats(data.health?.cats)}${reachNote}`);
       } catch (error) {
         return err(`领航员服务不可达（自研单体没在跑？）：${error?.message ?? error}`);
       }
@@ -163,9 +182,9 @@ export function registerNavTools() {
   registerTool({
     id: 'nav_send',
     name: '领航员·投递指令',
-    description: `把一条指令投递给 CH4 的某只猫执行（在猫那边显示为「人在 QQ 群里说的话」，与现有 QQ 转发同源）。
+    description: `把一条指令投递给 CH4 的某只猫执行（猫那边看到的就是这条原文——系统不再加 [来自QQ]… 来源头，渠道由投递通道自身承载）。
 - key：猫名或 id——${CAT_HINT}；拿不准目标时传 majordomo。
-- text：给猫的**完整指令原文**——照抄用户的话，不要改写、不要加解释、不要加礼貌语。
+- text：给猫的**完整指令原文**——照抄用户的指令内容，不要改写、不要加解释、不要加礼貌语、不要带触发标记（如「（@我/提到我）」这类是给判断用的，不是指令内容）。
 🔴 只投递**指令**（要猫干活的）；群里的闲聊不要调本工具。
 投递成功后猫会在 CH4 里干活；猫的回复到达时系统会自动截图发群，你不需要再复述。`,
     category: 'system',
@@ -227,6 +246,38 @@ export function registerNavTools() {
     }
   });
 
+  // ── nav_new ─────────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_new',
+    name: '领航员·新会话',
+    description: `给一只或多只猫**直接开新会话**（等价于在该猫对话页发布 /new）——清掉前文 + 重新注入知识文件，**不保留旧前文的交接摘要**。
+用途：群里说「清掉 X 的会话」「把 X 的前文清了，直接开新会话即可」时调本工具。
+- key：猫名或 id——${CAT_HINT}；**多只用逗号分隔**（如 "R喵喵,rb,rc,rd,rf"）。
+🔴 与 nav_reset 的区别：nav_reset 是「前文整理重启」（先收工出交接摘要 → 再开新会话 → 注入摘要 → 让它接着干），用于**前文太长且工作要继续**；本工具只开新会话，不清点工作、也不让它继续。
+🔴 只接受 QQ 569145850 本人的请求。执行静默——投递后不要回话。`,
+    category: 'system',
+    icon: '🆕',
+    parameters: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: `目标猫，多只用逗号分隔（${CAT_HINT}）` }
+      },
+      required: ['key']
+    },
+    async execute(ctx, args) {
+      const key = String(args?.key || '').trim();
+      if (!key) return err('key 不能为空——要给哪只猫开新会话？');
+      try {
+        const data = await call('/api/nav/new-session', { method: 'POST', body: { keys: key } });
+        if (data?.ok !== true) return err(`新会话未受理：${JSON.stringify(data).slice(0, 200)}`);
+        const done = (data.results || []).filter((row) => row.ok).map((row) => row.key).join('，');
+        return ok(`已请求新会话（/new）：${done || key}（${data.count}/${data.total}）。执行静默——不用回话。`);
+      } catch (error) {
+        return err(`新会话失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
   // ── nav_reset ───────────────────────────────────────────────────────────
   registerTool({
     id: 'nav_reset',
@@ -234,6 +285,7 @@ export function registerNavTools() {
     description: `把某只猫的前文整理重启——全自动四步：① 让它先做一次收工整理（产出交接摘要）② 清前文开新会话（重新注入知识文件）③ 把交接摘要注入新会话 ④ 让它据此继续工作。
 用途：某只猫前文太长、快撑不住上下文时，用户说一句「清理一下 X 的前文，然后让工作继续」就调本工具。
 - key：要整理的猫（${CAT_HINT}）。
+🔴 只要「清掉会话 / 直接开新会话」用 nav_new——本工具会先让它收工出交接摘要，耗时几分钟；别拿它当清会话使。
 🔴 只接受 QQ 569145850 本人的请求。整个过程无需人干预，进度看领航员活动流；耗时几分钟（要等它先写摘要，再等它接上）。`,
     category: 'system',
     icon: '♻️',

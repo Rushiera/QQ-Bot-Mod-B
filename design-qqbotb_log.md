@@ -917,3 +917,113 @@ R喵喵：交接摘要已注入，等待确认
 **设计口径：** 领航员的对外可见度由**开启来源**决定——群内 @ 开启 = 全程可见（开工报告 / 回复截图 / 播报 / 领航记录）；软件内开启 = 只在应用内可见，不打扰群。
 
 **本轮领航实录（2026-10-11）：** 群内 @ 开启 → 指挥猫群；全程 v0.33 → v0.40 八轮迭代；真链路验收点：R喵喵 整理重启全链、rd 投递后 60 秒分析、在跑猫播报 + @、空闲猫静默。收工报告已发群。
+
+### 三十一、领航员开启幂等 + 新会话轻通道（2026-10-11）
+
+> 触发：Rushiera——「我只开了一次领航员，然后发布了『清掉 R喵喵，rb，rc，rd，rf 的会话，直接开新会话即可』的指令，然后他就又开启了一次领航员给我把所有会话又发了一遍——后续如果已经是领航员就不要再发了；另外清理会话就不是清理前文并重建了，直接发布 /new 即可」。
+
+**存档取证（`app/data/logs/2026-10-11.log` + `_unpack/data/sessions/`）：**
+
+| 时刻 | 事实 |
+|:--|:--|
+| 12:25:47 | VIP 群 @「开启领航员模式」→ 12:26:00 开启（来源 qq）→ 开工报告 + 开场巡检（6 张会话卡） |
+| 12:27:46 | VIP 群 @「清掉R喵喵，rb，rc，rd，rf的会话，直接开新会话即可」 |
+| 12:28:10 | **领航员已开启（来源 qq）again** → 开工报告 + 开场巡检又发一遍（同 6 张） ← 报的问题 |
+| 12:28:23 | 5 只猫各被投一条「领航员·前文整理」完整收工提示 |
+| 12:32:24 | 5 条「交接摘要未取到，整理中止」（各自白等 240 秒） |
+
+**根因（两条，业务面推理原文可查）：**
+
+| # | 根因 | 证据 |
+|:--:|:--|:--|
+| 1 | **`open()` 无幂等**——不管是否已开启，一律重跑健康检查 → 发开工报告 → 开场巡检；教材也只教了「@ + 开启关键词 → nav_open」，没教「已经是领航员就别再开」 | `mv3bqwru-bc32b3e4.json`：R喵 推理「先 nav_open，然后并行 nav_reset 五只」→ 12:28:10 二次开启 |
+| 2 | **没有「新会话」轻通道**——工具面只有 `nav_reset`（重流程），「清掉会话」无处可落 | `mv3bo7pq-150cdc5f.json`：「There's no nav_new. nav_reset is the only one.」/「工具里没有 nav_new_session 之类」→ 拿重流程顶，5 只空会话的猫全部超时 |
+
+**改动：**
+
+| 面 | 落点 | 说明 |
+|:--|:--|:--|
+| 开启幂等 | `app/src/navigator/index.js` `open()` | 已开启 → 只刷新回消息群 + `touch()` + 活动流留痕，返回 `{ ok, alreadyOpen: true }`；**不**跑 health / 回执 / 开场巡检 / armAll |
+| 新会话 | `app/src/navigator/index.js` `newSession({ keys })` + `POST /api/nav/new-session` | 逐猫发布 `/new`（`cat.new-session <key>`）；key 支持数组或逗号 / 顿号 / 空格分隔；静默（只记指令流水 + 活动流） |
+| 业务面工具 | `tools/navigator/nav-tools.js` | 新增 `nav_new`（工具组 6→7 件）；`nav_open` / `nav_reset` 描述各补一句（幂等 / 界线） |
+| 教材 | `tools/apply-qqagent-config.mjs` `NAV_RULES` | 新增「清理会话（开新会话）」段（`nav_new` + 「别拿 nav_reset 顶这一档」）；「开关」段加「已经是领航员时不要再调 nav_open」 |
+| 自测 | `tools/verify-navigator.mjs` | 新增 4 条断言（首次开启 / 重复开启幂等且零发群 / 新会话通道可用 / 空目标报错退出） |
+
+**验证实锤：**
+
+| 项 | 结果 |
+|:--|:--|
+| 自测 | `node tools/verify-navigator.mjs` → **21/21 通过**（含「编排·重复开启幂等（不重发）— 发群次数 0」） |
+| 业务面落盘 | `node tools/patch-qqagent-navigator.mjs` → `src/nav-tools.js` **updated**（其余 5 点 skipped）；`nav_new` 已进 `_unpack/resources/app/src/nav-tools.js` |
+| 教材落盘 | `node tools/apply-qqagent-config.mjs --roletext-only` → `roleTextChars` 91896 → **92243**（apiKeyLen 0 = 密钥面未动）；`_unpack/data/config.json` 已含 `nav_new` 段 |
+
+**遗留：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 生效面 | 自研单体（`app/`）改动需**重启 QQBotB 应用**；教材（`config.json` 的 roleText）需**业务面开新会话**才进提示词——两者均由主理方发起，本轮不代起进程 |
+| 2 | `nav_new` 真链路 | 待验——需群里 @ 一次「清掉 X 的会话」；通道 `cat.new-session` 本身已在 §二十五 / §二十七 真链路验证过 |
+| 3 | `resetSession` 空会话白等 | 观察项——猫 `contextCount ≤ 1` 时仍会跑满 240 秒等待；本轮未改（新通道已让这一档不再走重流程），若再现则加「空会话直接拒绝」前置判据 |
+
+---
+
+## 三十二、记忆回溯点 + 领航场次沉淀（2026-10-11）
+
+> 来源：Rushiera 2026-10-11——「这个群里存档的记录，多拉一点直接拉到开启领航员开始，因为退出领航员是体面退出，R喵还是要知道自己在那段时间做过的事情了」→「ab 都要」。
+> 设计：`design-qqbotb-memory.md` §3.8 / §3.9 · `design-qqbotb-navigator.md` §十五。
+
+### A · 存量整理（群 1097492606）
+
+群记 `_group.json` 补 5 条领航员段落 + 修正 1 条过时条目（备份 `WorkSpace:CatTemp/QQBotB-群记备份-20261011/`）：
+
+| # | kind | 内容要点 |
+|:--:|:--|:--|
+| 1 | project | 领航员模式 2026-10-11 首次实跑（10:20 开启 → 12:12 退出，投递 5 条给 majordomo） |
+| 2 | rule | 投递类指令静默执行（旧口径「已投给 X 了」作废） |
+| 3 | project | 前文整理重启（nav_reset）已跑通 |
+| 4 | rule | 领航员出站由自研单体直发，我这边没有撤回通道 |
+| 5 | lore | 「领航员」= 我的工作模式（不是新人格）；退出是体面退出，经历要留记忆 |
+
+修正：原条目「2026-10-10 他把 qqagent 壳的前文去掉了」——复核后前文（CCBP L0/L1/L2）**已回到壳里**，工具面仍无 CCBP 通道；改写为现状描述。
+
+### B · 机制（回溯点 + 自动沉淀）
+
+| 面 | 落点 | 说明 |
+|:--|:--|:--|
+| 回溯点载体 | `_unpack/resources/app/src/session-state.js` | `getSessionState` 增 `memoryFloorTs`；新增 `setMemoryFloor(chatKey, at)`；`sessionWindowStart(chatKey, { reach })` 取 `min(会话起点, 回溯点)` |
+| 收工轮取材 | `orchestrator.js` | `isRollover` 先算 → `sessionWindowStart(chatKey, { reach: isRollover })`；`#completeRollover` 末尾 `setMemoryFloor(chatKey, 0)` |
+| 回溯点置位 | `nav-tools.js`（业务面 `nav_open`） | 开启成功后读 `/api/nav/status` 取 `activeChat` → `setMemoryFloor('group:<群号>', Date.now())`；读不到回消息群时回执明示「未置位」 |
+| 场次沉淀 | `app/src/navigator/index.js` | 新增 `loadBizPort()`（读业务面 `data/config.json` 的 `server.port`，从该值起探测 10 个端口）与 `sedimentVoyage(chat, text)`；`buildVoyageLog()` 增 `brief` 字段；`close()` 内两条关闭路径共用一次沉淀 |
+| 沉淀落点 | 业务面记忆 API | `POST http://127.0.0.1:<port>/api/memory-files/group_<群号>/group` `{kind:'project', content}` |
+
+**补丁点（幂等可重放）**：`patch-qqagent-session.mjs` 新增 5 点——`memory-reach-state` / `memory-reach` / `memory-reach-import` / `memory-reach-window` / `memory-reach-clear`；`nav-tools.js` 正文以 `tools/navigator/nav-tools.js` 为准（copyModule 按内容比对）。
+
+**实测口径（2026-10-11）**：
+
+| 项 | 结果 |
+|:--|:--|
+| `node --check` 四文件（session-state / orchestrator / nav-tools / navigator-index） | 全过（exit 0） |
+| `node tools/verify-qqagent-memory-reach.mjs` | **13/13 PASS**（置位 / 落盘 / 回溯三种边界 / 清零 / 群记截断与去重 / 两补丁 --dry 全 skipped） |
+| `patch-qqagent-session.mjs --dry` | 40 点全 skipped（0 applied）——含新增 5 点 |
+| `patch-qqagent-navigator.mjs --dry` | 6 点全 skipped（0 applied） |
+
+**遗留（当期未清）**：
+
+1. **群记去重对尾随空白失配**——`group-memory.js` 的 `appendGroupEntry` 用未 trim 的 `c` 做比较，而落盘侧 `normalizeEntry` 会再 trim 一次 → 内容带尾随空白时同一条会重复写。影响面小（写入面极少带尾随空白），记档待清。
+2. **真链路未验**——两条改动都要重启业务面（QQ Agent）才生效：`nav_open` 置位、关闭沉淀、收工轮回溯三处需在真群各跑一次。
+3. **空闲自关的场次沉淀**依赖业务面记忆 API 可达；业务面没在跑时只留痕（活动流 `[error]`），不阻断关闭。
+
+---
+
+## 三十三、未回复诊断（2026-10-11 · 未修，待 Rushiera 定夺）
+
+**现象**：群 1097492606 · 12:17:56 一轮（run `mv3bbk8b-2d1b6e75`）状态 `noreply`——模型**产出了回复正文**（「R喵。鲸鱼娘那挂正主。退领航员 ≠ 丢记忆…」56 tokens），但 `sent: []`，群里什么都没收到；Rushiera 因此连问两条（12:16 那两条）。
+
+**根因链**（两条独立）：
+
+1. **正文按设计不发**——该壳的普通文本输出**不发 QQ**，只有 `send_message` 工具调用才发（引导说明明写）。这一轮模型把要说的话写在了正文里、没调 `send_message`。
+2. **安全网没有实现方**——`src/reply-rescue.js` 正是为「写在正文里、没发出去」的成稿准备的，但它的四级判定全部走能力缝 `cap('reply.loose-send')` / `reply.salvage-lines` / `reply.salvage` / `reply.grounded-select`；全仓搜索只有**消费方**（`reply-rescue.js` 自身），**没有实现方**（插件 / skill 注册）→ `cap()` 恒返回空 → 函数在第二步直接 `return []`。这轮什么都没救回来。
+
+**建议修法（未实施）**：把 `reply.loose-send` 的正则级实现落到壳内（判据：正文非计划腔 + 含成句中文 + 与触发消息有语义关联 → 抽成一条 `send_message`），并让 `cap()` 缺失时**出声**（`logger.error`）而不是静默返回空——现在「能力缝没人装」在运行详情里完全看不出来。
+
+**为什么本轮未修**：改动落在发送链路（壳里**最可能造成事故**的一环——判错就是把内心戏发进群），且本轮 Rushiera 只点了 A / B 两件；按「两个以上合理方案列选项等拍板」处理，先诊断落档。

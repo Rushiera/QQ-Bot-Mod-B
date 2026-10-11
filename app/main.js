@@ -182,7 +182,7 @@ app.whenReady().then(async () => {
         width: 800,
         height: 900,
         show: false,
-        backgroundColor: '#0f1115',
+        backgroundColor: '#141414', // 与 CH4 会话页底同色（--ch-bg-page）
         webPreferences: { contextIsolation: true, nodeIntegration: false }
       });
       try {

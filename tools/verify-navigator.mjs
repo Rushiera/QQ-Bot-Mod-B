@@ -103,6 +103,27 @@ nav.start();
 nav.stop();
 check('守护·停止后无残留定时器', true);
 
+// ── 5 领航员编排：开启幂等 + 新会话通道（Rushiera 2026-10-11）────────────────
+// 判据：重复开启不得重发开工报告 / 开场巡检（判例：12:28 二次 nav_open 把 6 只猫的会话又发了一遍）。
+const sent = [];
+const navIdem = createNavigator({
+  log,
+  dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-idem-')),
+  config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
+  onebot: { call: async (action, params) => { sent.push({ action, params }); return {}; } }
+});
+
+const firstOpen = await navIdem.open({ by: 'app', chat: '689942975', receipt: false });
+check('编排·首次开启', firstOpen.ok === true && firstOpen.alreadyOpen !== true && navIdem.state.snapshot().enabled === true);
+
+const again = await navIdem.open({ by: 'qq', chat: '689942975', receipt: true });
+check('编排·重复开启幂等（不重发）', again.ok === true && again.alreadyOpen === true && sent.length === 0, `发群次数 ${sent.length}`);
+
+check('编排·新会话通道可用', typeof navIdem.newSession === 'function');
+const noTarget = await navIdem.newSession({ keys: ' , ' });
+check('编排·新会话·空目标报错退出', noTarget.ok === false && noTarget.total === 0, noTarget.error || '');
+navIdem.stop();
+
 const passed = results.filter((r) => r.ok).length;
 console.log(`\n结果：${passed}/${results.length} 通过`);
 process.exit(passed === results.length ? 0 : 1);

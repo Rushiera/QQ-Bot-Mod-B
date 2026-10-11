@@ -1,0 +1,291 @@
+/* CH4 外观层——设计令牌（两页共用值表）
+   定位：色彩字面量与字体族的唯一定义处（L1 界面基础 + L1 字体族 + L3 MD 内容）；页样式只引用不定义
+   规范：Project/CH4/design-ch4-frontend-theme.md §二（分层职责 + 铁律）
+   纪律：改色只改本文件；组件面零裸色值；L3 为独立色系——与 L1 同值不算重复
+   加载：两页 <link> 先于页样式（tokens.css → style.css / chat.css） */
+
+/* ============ 字体面——内容字体（A120） ============ */
+/* 内容字体 = Sarasa Mono SC（更纱等宽 CJK，中英 1:2 对齐）——随前端分发（html/fonts/SarasaMonoSC-Regular.ttf）
+   分层：内容面（文本/数据展示）走更纱；界面面（控件/标签/输入框/标题）走系统字体栈
+   font-display: swap——字体未就绪时先用回落后栈渲染，不阻塞首屏 */
+@font-face {
+    font-family: "Sarasa Mono SC";
+    src: url("../fonts/SarasaMonoSC-Regular.ttf") format("truetype");
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+}
+
+:root {
+    /* ============ L1 字体族 ============ */
+    --ch-font-ui: "Consolas", "Microsoft YaHei", monospace;                        /* 界面面——控件 / 标签 / 标题 */
+    --ch-font-content: "Sarasa Mono SC", "Consolas", "Microsoft YaHei", monospace;  /* 内容面——文本 / 数据展示 */
+
+    /* ============ L1 字号阶梯（五档 + 全局缩放） ============ */
+    /* 全局缩放——前端读配置 ui.font_scale 注入（100 = 基准；本地适配不同桌面缩放倍率）；
+       档位基准 px 与缩放系数解耦：调基准改档位，调系数改整站观感 */
+    --ch-fs-scale: 1;
+    --ch-fs-tag: calc(12px * var(--ch-fs-scale));       /* 标签角标——chip / badge / 工具卡 / 系统气泡 / 状态条 / 小控件 */
+    --ch-fs-sub: calc(13px * var(--ch-fs-scale));       /* 次要内容——次级信息行 / 辅助说明 */
+    --ch-fs-body: calc(14px * var(--ch-fs-scale));      /* 正文——气泡正文 / 日志 / 表格 */
+    --ch-fs-strong: calc(15px * var(--ch-fs-scale));    /* 强调正文——主面板行 / 管理标题 */
+    --ch-fs-title: calc(16px * var(--ch-fs-scale));     /* 标题——猫名 / 区块标题 */
+
+    /* ============ L1 界面基础 ============ */
+    /* 背景 */
+    --ch-bg-page: #141414;          /* 页面底 / Note 弹层底 */
+    --ch-bg-panel: #1a1a1a;         /* 卡片 / 侧栏 / 输入 / 助手气泡 / 折叠头 / 会话卡 */
+    --ch-bg-raised: #1f1f1f;        /* 次按钮底 / 表头 / 类型标签 */
+    --ch-bg-elevated: #2d2d2d;      /* 折叠分组头底（比卡面亮一档） */
+    --ch-bg-chip: #242424;          /* 可勾选标签（chip）底 */
+    --ch-bg-sunken: #101010;        /* 工具卡底 / 插话队列条 */
+    --ch-bg-faint: #181818;         /* 弱化系统气泡（重试 / 中止） */
+    --ch-bg-deep: rgba(0, 0, 0, 0.6);   /* 半透明深底（版本角标等浮于页面的小徽标） */
+    --ch-bg-hover: #242424;         /* 悬浮反馈（侧栏 / 次按钮 / 折叠头 / 图标按钮） */
+    --ch-bg-accent: #0e639c;        /* 主色块——用户气泡 / 主按钮 / 侧栏 active */
+    --ch-bg-danger: #a1260d;        /* 危险动作块——输入区「停止」按钮（实心红） */
+    --ch-bg-warn: #b8860b;          /* 警示动作块——输入区「继续」按钮（实心黄） */
+    /* 文字 */
+    --ch-fg: #c8c8c8;               /* 默认字 / 输入框 */
+    --ch-fg-strong: #d4d4d4;        /* 正文 / 强调数值 */
+    --ch-fg-muted: #9a9a9a;         /* 次级信息 */
+    --ch-fg-weak: #6a6a6a;          /* 弱信息（标签 / 时间 / 参数 / 提示） */
+    --ch-fg-faint: #4a4a4a;         /* 极弱 / 关闭与空态 */
+    --ch-fg-inverse: #fff;          /* 主色块上的字 */
+    /* 边框与分隔 */
+    --ch-line: #2a2a2a;             /* 常规边（卡片 / 输入 / 气泡 / 弹层 / 代码块 / 表格） */
+    --ch-line-soft: #242424;        /* 次级边（思考卡 / 工具卡 / Token chip） */
+    --ch-line-faint: #222;          /* 栏分隔 / 极弱分隔 */
+    --ch-line-strong: #3a3a3a;      /* 强调边 / 虚线边 / 强反馈 */
+    /* 语义色 */
+    --ch-title: #4ec9b0;            /* 面板标题 / 描述块 */
+    --ch-ok: #4ec9b0;               /* 成功 / 在线 / 统计数值 */
+    --ch-warn: #dcdcaa;             /* 警告 / 待处理 */
+    --ch-err: #f48771;              /* 错误 / 失败 / 危险 */
+    --ch-info: #569cd6;             /* 信息 / 命令 / 引用强调 */
+    --ch-identity: #c586c0;         /* 身份（猫名 / 会话 ID / 对象值） */
+    --ch-number: #4fc1ff;           /* 数值（盒子数字） */
+    --ch-structure: #ce9178;        /* 结构（OA 行 / 盒子组头） */
+    --ch-ok-weak: #6a9955;          /* 次要成功（键名 / 工具组名 / LLM 日志） */
+    --ch-desc-bg: #0f2a24;          /* 描述 / 说明块底 */
+    --ch-desc-line: #2a5a4e;        /* 描述 / 说明块边 */
+    /* 交互与浮层 */
+    --ch-focus: var(--ch-bg-accent);            /* 焦点边框 */
+    --ch-scroll-thumb: #3a3a3a;          /* 滚动条滑块 */
+    --ch-scroll-thumb-hover: #4d4d4d;
+    --ch-shadow-soft: rgba(0, 0, 0, 0.4);       /* 组件轻微阴影 */
+    --ch-shadow-strong: rgba(0, 0, 0, 0.6);     /* 弹层阴影 */
+    --ch-overlay: rgba(0, 0, 0, 0.55);          /* 模态遮罩 */
+    --ch-hover-overlay: rgba(128, 128, 128, 0.18);
+
+    /* ============ L3 MD 内容（独立色系——不引 L1，可自造值） ============ */
+    --ch-md-text: #FFFFF0;              /* 正文（象牙白 · 2026-10-06 莎定；MD 正文唯一色源） */
+    --ch-md-heading: #FFFFF0;           /* 标题 h1-h4（随正文——与正文同值关系保持） */
+    --ch-md-heading-weak: #a8a8a8;      /* 标题 h5 / h6 */
+    --ch-md-line: #2a2a2a;              /* 块边 / 表框 / 水平线 / 标题下框线 */
+    --ch-md-quote-bar: #569cd6;         /* 引用左条 */
+    --ch-md-quote-fg: #9a9a9a;          /* 引用正文 */
+    --ch-md-code-bg: #0d0d0d;           /* 代码块底 */
+    --ch-md-code-fg: #d4d4d4;           /* 代码块正文 */
+    --ch-md-inline-code-bg: #2a2a2a;    /* 行内代码底 */
+    --ch-md-inline-code-fg: #dcdcaa;    /* 行内代码字 */
+    --ch-md-table-bg: #0d0d0d;          /* 表格底——纯黑块（同代码块档） */
+    --ch-md-table-line: #3a3a3a;        /* 表格描边——纯黑底上可见档（独立于 --ch-md-line） */
+    --ch-md-table-head-bg: #0d0d0d;     /* 表头底——同单元格底（不另设亮底） */
+    --ch-md-table-head-fg: #e8e8e8;     /* 表头字——中性亮色（蓝色归 User 面） */
+    --ch-md-table-zebra: #080808;       /* 斑马行——比单元格底更暗一档 */
+    --ch-md-task-done: #6a8a6a;         /* 任务项已完成 */
+    /* 扩展位（未启用——语法高亮需要时启用，源 VSCode Dark+）
+       --ch-md-code-keyword: #569cd6;
+       --ch-md-code-string: #ce9178;
+       --ch-md-code-comment: #6a9955;
+       --ch-md-code-number: #b5cea8;
+       --ch-md-code-function: #dcdcaa;
+       --ch-md-code-type: #4ec9b0; */
+}
+
+/* ═══════════════════════════════════════════
+   QQBotB 领航员对话卡样式 —— 对齐 CH4 内置会话页（chat.html）
+   来源：CH4 前端 http://127.0.0.1:<猫端口>/css/tokens.css + /css/chat.css（v1.8.59 快照）
+   摘取：tokens.css 全文（上方）+ chat.css 的「L2 对话区令牌 · 滚动条 · 行与气泡 · roundsum · md-block」
+   同步：CH4 前端改样式后重新摘取覆盖本文件（DOM 结构保持与 CH4 一致：.chat-row / .chat-bubble / .md-block）
+   边界：只承载会话区——不含顶栏 / 输入区 / 桌宠 / Note / 定时等页面专属面
+   ═══════════════════════════════════════════ */
+
+/* ===== 2. 对话区令牌（chat.css :root L2 段——原样摘取）===== */
+:root {
+    /* A79 气泡宽度三段式（2026-09-22）——比例档 / 固定上限档 / 边缘下限档，三者取最小：
+       气泡宽 = min(80% 对话区宽, 1000px, 对话区宽 − 200px)；两侧边缘各留 ≥100px（后续另有用处） */
+    --ch-bubble-max-pct: 80%;
+    --ch-bubble-max-w: 1000px;
+    --ch-bubble-edge-min: 100px;
+    /* 内容列（2026-09-22）——气泡 / 输入框 / 滚动条共用同一列宽与左缘。
+       🔴 下方百分比基准 = 视口宽：只在「内容盒 = 视口宽」的容器上引用（#chatMsgs / #chatinput）；
+       已收窄的容器内引用会按该容器宽解析，得到错误列宽 */
+    --ch-col-w: min(var(--ch-bubble-max-pct), var(--ch-bubble-max-w), 100% - var(--ch-bubble-edge-min) * 2);
+    --ch-col-left: max(var(--ch-bubble-edge-min), calc((100% - var(--ch-col-w)) / 2));
+    --ch-radius-bubble: 8px;/* 气泡圆角——输入框 / 发送按钮共用同一值（2026-09-22） */
+    /* ===== L2 对话区令牌 ===== */
+    /* 运行态六态（状态条 + roundsum 同源） */
+    --ch-state-link: #8a8a8a;
+    --ch-state-wait: #7a8a7a;
+    --ch-state-think: #e6c255;
+    --ch-state-tool: #7a8b3f;
+    --ch-state-run: #8ab8d8;
+    --ch-state-reply: #f0e6d2;
+    --ch-state-all: #c0a8e0;
+    --ch-state-api: var(--ch-state-link);
+    /* 对话气泡 */
+    --ch-chat-user-bg: var(--ch-bg-accent);
+    --ch-chat-user-fg: var(--ch-fg-inverse);
+    --ch-chat-ai-bg: var(--ch-bg-panel);
+    --ch-chat-ai-fg: var(--ch-fg-strong);
+    --ch-chat-reason-fg: var(--ch-fg-muted);
+    --ch-chat-error-fg: var(--ch-err);
+    /* 块型气泡描边（2026-10-05 气泡化 · 莎定）——色相 = 语义，与状态条 / 滚动带刻度同源 */
+    --ch-chat-reason-line: var(--ch-state-think);
+    --ch-chat-tool-line: var(--ch-state-tool);
+    --ch-chat-retry-line: var(--ch-state-wait);
+    --ch-chat-sum-line: var(--ch-state-all);
+    --ch-round-gap: 200px;  /* 轮次分隔——本轮结算块行下留白（2026-09-24） */
+    --ch-roundsum-fg: #9aa8b8;
+    /* Token 统计段——仅 roundsum 轮末块消费 completion */
+    --ch-tok-completion: var(--ch-ok);
+}
+
+/* ===== 3. 会话区规则（chat.css 摘取）===== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+/* 内容面字体（A120）——对话正文走内容字体（更纱等宽） */
+.chat-bubble { font-family: var(--ch-font-content); }
+
+/* 滚动条——深色配色统一（表格 / 代码块横向条消费） */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background-color: var(--ch-scroll-thumb); background-clip: padding-box; border: 2px solid transparent; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--ch-scroll-thumb-hover); }
+::-webkit-scrollbar-corner { background: transparent; }
+.chat-bubble .md-block pre::-webkit-scrollbar,
+.chat-bubble .md-block table::-webkit-scrollbar { width: 10px; height: 10px; }
+.chat-bubble .md-block pre::-webkit-scrollbar-thumb,
+.chat-bubble .md-block table::-webkit-scrollbar-thumb { background-color: var(--ch-scroll-thumb); background-clip: padding-box; border: 2px solid transparent; border-radius: 5px; }
+.chat-bubble .md-block pre::-webkit-scrollbar-thumb:hover,
+.chat-bubble .md-block table::-webkit-scrollbar-thumb:hover { background-color: var(--ch-scroll-thumb-hover); }
+
+/* 内容列（2026-09-22）——宽度 = 列宽；左缘 = 气泡左缘 */
+#chatMsgs { width: var(--ch-col-w); margin-left: var(--ch-col-left); padding: 12px 0; display: flex; flex-direction: column; gap: 10px; }
+
+/* 行（A79 气泡宽度三段式——宽度收口在 #chatMsgs；短气泡由 flex 收缩到内容宽、贴各自一侧） */
+.chat-row { display: flex; animation: chat-in 0.18s ease-out; }
+@keyframes chat-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+.chat-row.user { justify-content: flex-end; }
+#chatMsgs .chat-row.user.sys { justify-content: flex-start; }
+.chat-row.assistant { justify-content: flex-start; }
+/* 朴素件（形态契约 · 2026-10-03 莎定）——非气泡块的公共基类：无底 / 无描边 / 无圆角 / 无内边距 */
+.chat-plain { font-size: var(--ch-fs-tag); line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+
+/* 块型气泡配色（2026-10-05 · 莎定——类别区分由描边色承担）
+   🔴 一律带 #chatMsgs 前缀：`.chat-row.assistant .chat-bubble`（0,3,0）会压过 2 类选择器 */
+#chatMsgs .chat-row[data-type="text"] .chat-bubble { --bubble-line: var(--ch-state-reply); }
+#chatMsgs .chat-row[data-type="reason"] .chat-bubble { background: var(--ch-bg-sunken); --bubble-line: var(--ch-chat-reason-line); }
+#chatMsgs .chat-row[data-type="toolcard"] .chat-bubble { --bubble-line: var(--ch-chat-tool-line); }
+#chatMsgs .chat-row[data-type="retry"] .chat-bubble { background: var(--ch-bg-faint); --bubble-line: var(--ch-chat-retry-line); }
+#chatMsgs .chat-row[data-type="error"] .chat-bubble { background: var(--ch-bg-faint); --bubble-line: var(--ch-err); }
+#chatMsgs .chat-row[data-type="roundsum"] .chat-bubble { --bubble-line: var(--ch-chat-sum-line); }
+
+/* 气泡描边（2026-09-17）——线色 --bubble-line 与半透明度 --bubble-alpha 均按块类型赋值（基础 = Reply 态色 · 20%） */
+.chat-bubble { --bubble-line: var(--ch-state-reply); --bubble-alpha: 20%; max-width: 100%; padding: 8px 12px; border-radius: var(--ch-radius-bubble); font-size: var(--ch-fs-body); line-height: 1.7; white-space: pre-wrap; word-break: break-all; border: 1px solid color-mix(in srgb, var(--bubble-line) var(--bubble-alpha), transparent); transition: border-color 0.3s ease-in-out; animation: bubble-appear 0.3s ease-in-out; }
+.chat-bubble:hover { border-color: var(--bubble-line); }
+@keyframes bubble-appear {
+    from { border-color: var(--bubble-line); }
+    to { border-color: color-mix(in srgb, var(--bubble-line) var(--bubble-alpha), transparent); }
+}
+.chat-row.user .chat-bubble { background: var(--ch-chat-user-bg); color: var(--ch-chat-user-fg); border: none; }
+.chat-row.assistant .chat-bubble { background: var(--ch-chat-ai-bg); color: var(--ch-chat-ai-fg); }
+#chatMsgs .chat-bubble.error { color: var(--ch-chat-error-fg); }
+
+/* roundsum 轮末统计（朴素件——底与描边全撤） */
+#chatMsgs .chat-bubble.roundsum { color: var(--ch-roundsum-fg); }
+.chat-row:has(.chat-bubble.roundsum) { margin-bottom: var(--ch-round-gap); }
+#chatMsgs .chat-bubble.roundsum .rs-head { color: var(--ch-ok-weak); font-weight: bold; margin-bottom: 3px; }
+#chatMsgs .chat-bubble.roundsum .rs-tok { color: var(--ch-tok-completion); word-break: break-all; white-space: pre-wrap; }
+#chatMsgs .chat-bubble.roundsum .rs-tok .rs-dim { color: var(--ch-fg-muted); }
+#chatMsgs .chat-bubble.roundsum .rs-tok .num-frac { color: var(--ch-fg-muted); }
+#chatMsgs .chat-bubble.roundsum .rs-tools { color: var(--ch-warn); margin-top: 2px; }
+#chatMsgs .chat-bubble.roundsum .rs-times { color: var(--ch-fg-muted); margin-top: 2px; }
+#chatMsgs .chat-bubble.roundsum .rs-tool { color: var(--ch-state-tool); }
+#chatMsgs .chat-bubble.roundsum .rs-api { color: var(--ch-state-api); }
+#chatMsgs .chat-bubble.roundsum .rs-all { color: var(--ch-state-all); }
+/* 数值分片（信息位 / 轮末结算共用机制） */
+.ci-rate { color: var(--ch-state-all); }
+.ci-hit { color: var(--ch-state-run); font-size: calc(1em + 1px); }
+.ci-miss { color: var(--ch-state-think); font-size: calc(1em + 1px); }
+.ci-down { color: var(--ch-err); font-size: calc(1em + 1px); }
+.num-frac { font-style: normal; color: var(--ch-fg-weak); font-size: calc(1em - 1px); }
+
+/* F3 MD 渲染——手写解析器输出（md.js）——表格 / 代码块 / 标题 / 列表样式 */
+/* 注意：.chat-bubble 有 white-space:pre-wrap + word-break:break-all，会干扰表格 / 代码块——在 MD 渲染容器内重置 */
+/* MD 正文色单一入口——正文色一律走令牌 --ch-md-text */
+.chat-bubble .md-block { white-space: normal; word-break: normal; color: var(--ch-md-text); }
+.chat-bubble .md-block > *:first-child { margin-top: 0; }
+.chat-bubble .md-block > *:last-child { margin-bottom: 0; }
+/* 标题 */
+.chat-bubble .md-block h1, .chat-bubble .md-block h2, .chat-bubble .md-block h3, .chat-bubble .md-block h4, .chat-bubble .md-block h5, .chat-bubble .md-block h6 {
+    margin: 8px 0 4px; line-height: 1.4; font-weight: bold; color: var(--ch-md-heading); white-space: normal; word-break: break-all;
+}
+.chat-bubble .md-block h1 { font-size: 1.4em; border-bottom: 1px solid var(--ch-md-line); padding-bottom: 2px; }
+.chat-bubble .md-block h2 { font-size: 1.25em; border-bottom: 1px solid var(--ch-md-line); padding-bottom: 2px; }
+.chat-bubble .md-block h3 { font-size: 1.1em; }
+.chat-bubble .md-block h4 { font-size: 1em; }
+.chat-bubble .md-block h5 { font-size: 0.95em; color: var(--ch-md-heading-weak); }
+.chat-bubble .md-block h6 { font-size: 0.9em; color: var(--ch-md-heading-weak); }
+/* 段落 */
+.chat-bubble .md-block p { margin: 4px 0; white-space: pre-wrap; word-break: break-all; }
+/* 行内代码 */
+.chat-bubble .md-block code { background: var(--ch-md-inline-code-bg); border-radius: 3px; padding: 1px 4px; font-family: var(--ch-font-content); font-size: 0.9em; color: var(--ch-md-inline-code-fg); }
+/* 代码块——pre 内部必须 white-space:pre 保留缩进换行；横向溢出滚动 */
+.chat-bubble .md-block pre {
+    background: var(--ch-md-code-bg); border: 1px solid var(--ch-md-line); border-radius: 4px; padding: 8px 10px; margin: 6px 0;
+    font-family: var(--ch-font-content); font-size: 0.9em; line-height: 1.5;
+    white-space: pre; word-break: normal; overflow-x: auto; max-width: 100%;
+}
+.chat-bubble .md-block pre code { background: none; padding: 0; font-size: 1em; color: var(--ch-md-code-fg); }
+/* 引用 */
+.chat-bubble .md-block blockquote {
+    margin: 6px 0; padding: 2px 10px; border-left: 3px solid var(--ch-md-quote-bar);
+    color: var(--ch-md-quote-fg); white-space: pre-wrap; word-break: break-all;
+}
+/* 列表 */
+.chat-bubble .md-block ul, .chat-bubble .md-block ol { margin: 4px 0; padding-left: 22px; white-space: normal; word-break: break-all; }
+.chat-bubble .md-block li { margin: 2px 0; line-height: 1.6; }
+.chat-bubble .md-block li.md-task { list-style: none; margin-left: -22px; padding-left: 2px; }
+.chat-bubble .md-block li.md-task.done { color: var(--ch-md-task-done); text-decoration: line-through; }
+/* 水平线 */
+.chat-bubble .md-block hr { border: none; border-top: 1px solid var(--ch-md-line); margin: 8px 0; }
+/* 表格——真 HTML 表格：边框 / 表头 / 单元格内换行正常化 */
+.chat-bubble .md-block table {
+    border-collapse: collapse; margin: 6px 0; max-width: 100%; display: block; overflow-x: auto;
+    white-space: normal; word-break: normal; font-size: 0.92em;
+}
+.chat-bubble .md-block th, .chat-bubble .md-block td {
+    border: 1px solid var(--ch-md-table-line); padding: 4px 8px; text-align: left; vertical-align: top;
+    white-space: normal; word-break: break-all; overflow-wrap: break-word;
+    background: var(--ch-md-table-bg);
+}
+.chat-bubble .md-block thead th, .chat-bubble .md-block thead td { background: var(--ch-md-table-head-bg); color: var(--ch-md-table-head-fg); font-weight: bold; }
+.chat-bubble .md-block tbody tr:nth-child(even) td { background: var(--ch-md-table-zebra); }
+/* A81 MD 块复制原文——包裹层 .md-copy（截图场景不显示按钮，包裹层保留以对齐 DOM 结构） */
+.chat-bubble .md-block .md-copy { position: relative; }
+.chat-bubble .md-block > .md-copy:first-child > pre, .chat-bubble .md-block > .md-copy:first-child > table { margin-top: 0; }
+.chat-bubble .md-block > .md-copy:last-child > pre, .chat-bubble .md-block > .md-copy:last-child > table { margin-bottom: 0; }
+
+/* ===== 4. 卡片外壳（QQBotB 专属——离屏截图容器；不改上方 CH4 摘取块）===== */
+/* 截图场景：内容自然撑高、无滚动容器（CH4 页为 100vh + 内部滚动——此处覆盖） */
+html, body { height: auto; overflow: visible; }
+body { display: block; font-family: var(--ch-font-ui); background: var(--ch-bg-page); color: var(--ch-fg); }
+#chatMsgs { flex: none; overflow: visible; }
+/* 卡头（对齐 CH4 #chatbar——猫名 + 时间；来源 chat.css 行 114–115） */
+#chatbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--ch-line-faint); font-size: var(--ch-fs-tag); color: var(--ch-fg-weak); }
+#chatbar .sid { color: var(--ch-identity); font-weight: bold; }
+#chatbar .meta { margin-left: auto; }
+/* 轮次分隔留白：卡片通常单轮——200px 底边距浪费版面，压到 10px（仅影响卡片） */
+:root { --ch-round-gap: 10px; }

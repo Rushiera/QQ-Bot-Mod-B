@@ -747,6 +747,80 @@ patch('rollover-visible', 'orchestrator.js',
     }`);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 补丁：记忆回溯点（memory reach）——收工轮取材可回溯到指定时点（Rushiera 2026-10-11）
+// 背景：收工轮取材只吃「本会话」（窗口起点 = sessionState.startedAt）。会话一旦轮转，
+//   跨越轮转的工作段（如领航员场次）只能靠上一份摘要传递，细节就丢了。
+// 修法：session-state 增 memoryFloorTs（记忆回溯点）；收工轮窗口起点取
+//   min(会话起点, 回溯点)；沉淀完成后归零。回溯点由领航员开启等节点置位
+//   （nav_open → nav-tools.js 的 [qqagent-navigator-patch:memory-reach-open]）。
+// ─────────────────────────────────────────────────────────────────────────────
+patch('memory-reach-state', 'session-state.js',
+`    rollovers: Math.max(0, Number(st?.rollovers) || 0),
+    updatedAt: Math.max(0, Number(st?.updatedAt) || 0)
+  };
+}`,
+`    rollovers: Math.max(0, Number(st?.rollovers) || 0),
+    // 记忆回溯点（0 = 关闭）——收工轮取材可早于本会话起点（如领航员开启那一刻）
+    // [qqagent-session-patch:memory-reach-state]
+    memoryFloorTs: Math.max(0, Number(st?.memoryFloorTs) || 0),
+    updatedAt: Math.max(0, Number(st?.updatedAt) || 0)
+  };
+}`);
+
+patch('memory-reach', 'session-state.js',
+`/** 会话窗口起点；null = 关闭会话窗口（回落 historyCount 老口径）。 */
+export function sessionWindowStart(chatKey) {
+  const cfg = getConfig().session || {};
+  if (cfg.enabled === false) return null;
+  return getSessionState(chatKey).startedAt;
+}`,
+`/**
+ * 会话窗口起点；null = 关闭会话窗口（回落 historyCount 老口径）。
+ * reach=true 时取「会话起点」与「记忆回溯点」中更早的那个 —— 收工轮取材用
+ * （回溯点由领航员开启等节点置位：取材要能拉到那个时点，不只吃本会话）。
+ * [qqagent-session-patch:memory-reach]
+ */
+export function sessionWindowStart(chatKey, { reach = false } = {}) {
+  const cfg = getConfig().session || {};
+  if (cfg.enabled === false) return null;
+  const st = getSessionState(chatKey);
+  if (!reach || !(st.memoryFloorTs > 0) || !(st.startedAt > 0)) return st.startedAt;
+  return Math.min(st.startedAt, st.memoryFloorTs);
+}
+
+/** 置记忆回溯点（0 = 关闭）。领航员开启时置位；收工轮沉淀完成后清零。 */
+export function setMemoryFloor(chatKey, at = Date.now()) {
+  return setSessionState(chatKey, { memoryFloorTs: Math.max(0, Number(at) || 0) });
+}`);
+
+patch('memory-reach-import', 'orchestrator.js',
+`} from './session-state.js';`,
+`} from './session-state.js';
+// 记忆回溯点（收工轮取材回溯到指定时点）—— [qqagent-session-patch:memory-reach-import]
+import { setMemoryFloor } from './session-state.js';`);
+
+patch('memory-reach-window', 'orchestrator.js',
+`    const sessionCfg = getConfig().session || {};
+    const sessionStart = sessionWindowStart(chatKey);
+    const pendingChars = triggerEntries.reduce((n, m) => n + String(m?.text ?? '').length, 0);
+    const isRollover = sessionCfg.enabled !== false && !proactive && !reuseSessionId && shouldRollover(chatKey, pendingChars);`,
+`    const sessionCfg = getConfig().session || {};
+    const pendingChars = triggerEntries.reduce((n, m) => n + String(m?.text ?? '').length, 0);
+    const isRollover = sessionCfg.enabled !== false && !proactive && !reuseSessionId && shouldRollover(chatKey, pendingChars);
+    // 窗口起点：收工轮带上「记忆回溯点」——取材可早于本会话起点（如领航员开启那一刻）。
+    // [qqagent-session-patch:memory-reach-window]
+    const sessionStart = sessionWindowStart(chatKey, { reach: isRollover });`);
+
+patch('memory-reach-clear', 'orchestrator.js',
+`      const res = this.store.archiveAndClear(chatKey, { keepUnread: true, reason: 'rollover' });
+      resetSession(chatKey);`,
+`      const res = this.store.archiveAndClear(chatKey, { keepUnread: true, reason: 'rollover' });
+      resetSession(chatKey);
+      // 沉淀完成 → 记忆回溯点归零（下一段会话重新按本会话起点取材）
+      // [qqagent-session-patch:memory-reach-clear]
+      setMemoryFloor(chatKey, 0);`);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 报告
 // ─────────────────────────────────────────────────────────────────────────────
 console.log(JSON.stringify({

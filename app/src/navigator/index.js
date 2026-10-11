@@ -106,6 +106,26 @@ function loadVision() {
 }
 
 /**
+ * 读业务面（QQ Agent）的 HTTP 端口——群记沉淀用的记忆 API 端口。
+ *
+ * 与 loadVision 同源同法：直接读它的 data/config.json（server.port）。
+ * 应用启动时端口从 basePort 起向上找空位（3210..3219），故返回的只是**起点**，
+ * 调用方仍逐个端口探测。读不到就给默认起点——探测会兜住。
+ *
+ * @returns {number} 端口起点
+ */
+function loadBizPort() {
+  try {
+    const file = path.join(PROJECT_DIR, '_unpack', 'data', 'config.json');
+    const cfg = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+    const port = Number(cfg?.server?.port);
+    return Number.isFinite(port) && port > 0 ? port : 3210;
+  } catch {
+    return 3210;
+  }
+}
+
+/**
  * 创建领航员。
  *
  * @param {object} options 选项
@@ -160,6 +180,47 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     activity.push({ at: Date.now(), kind, text: line });
     if (activity.length > 40) activity.splice(0, activity.length - 40);
     log.info('navigator', `[${kind}] ${line}`);
+  }
+
+  /**
+   * 把本次领航的场次小结沉淀进本群群记（Rushiera 2026-10-11：退出领航员是体面退出，
+   * 这段经历要留在 R喵 的记忆里）。
+   *
+   * 为什么走业务面的记忆 API 而不是直写它的文件：记忆面的唯一所有者是业务面
+   * （群记 = data/memory/<chat>/_group.json），跨进程直写会绕过它的规范化与更新事件。
+   * 方向是反的（自研单体 → 业务面），但用的仍是它的公开 API —— 过渡态；
+   * 终态记忆面随业务面并入自研单体后，本函数改为本地写入。
+   *
+   * 失败必须可见：写不进去只留痕，不阻断关闭。
+   *
+   * @param {string|number} chat 群号（可带 group: 前缀）
+   * @param {string} text 条目正文（业务面按 200 字符截断）
+   * @returns {Promise<boolean>} 是否写入成功
+   */
+  async function sedimentVoyage(chat, text) {
+    const id = String(chat ?? '').replace(/^group:/, '').trim();
+    if (!/^\d+$/.test(id)) {
+      record('error', `群记沉淀跳过：群号不可用（${chat ?? '空'}）`);
+      return false;
+    }
+    const base = loadBizPort();
+    for (let p = base; p < base + 10; p++) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${p}/api/memory-files/group_${id}/group`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'project', content: String(text ?? '').slice(0, 200) })
+        });
+        if (!response.ok) {
+          record('error', `群记沉淀失败（HTTP ${response.status}）：${(await response.text()).slice(0, 120)}`);
+          return false;
+        }
+        record('memory', `领航场次已沉淀进群记（group:${id}）`);
+        return true;
+      } catch { /* 端口不对——试下一个 */ }
+    }
+    record('error', `群记沉淀失败：业务面记忆 API 不可达（试过 ${base}-${base + 9}）`);
+    return false;
   }
 
   state.load();
@@ -845,11 +906,20 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
    * @param {string|number} [options.chat] 下指令的群
    * @param {boolean} [options.receipt] 是否发回执（默认 true）
    * @param {boolean} [options.requireVip] 是否要求近期有 VIP 群消息
-   * @returns {Promise<object>} { ok, state, health, receipt }
+   * @returns {Promise<object>} { ok, alreadyOpen?, state, health?, receipt? }——已开启时幂等返回，不重发
    */
   async function open({ by = 'app', chat = null, receipt = true, requireVip = false } = {}) {
     if (requireVip && !vipFresh()) {
       return { ok: false, error: `${vipUser || '指定 QQ'} 近期没有在本群 @ 我——领航员只接受该 QQ 触发` };
+    }
+    // 🔴 幂等（Rushiera 2026-10-11）：已经是领航员就不再开一次工——重复 @ 一次「开启」
+    // 不该把全部会话再推一遍。判例：12:27 下达清理指令后 R喵 又调了一次 nav_open，
+    // 开工报告 + 开场巡检整套重发（6 只猫的会话又发了一遍）。只刷新回消息群，其余不动。
+    if (state.snapshot().enabled) {
+      state.setActiveChat(resolveChat(chat));
+      state.touch();
+      record('open', '已是领航员——不重发开工报告与开场巡检');
+      return { ok: true, alreadyOpen: true, state: state.snapshot(), receipt: '' };
     }
     state.open({ by, chat: resolveChat(chat) });
     voyageStats.replies = 0;
@@ -1075,6 +1145,51 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
+   * 新会话（/new）——给一只或多只猫**直接开新会话**：清前文 + 重新注入知识文件。
+   *
+   * 与 `resetSession`（前文整理重启）的区别（Rushiera 2026-10-11）：那是「保住工作地重启」——
+   * 先收工出交接摘要、再开新会话、再把摘要注入让它接着干；本函数只开新会话，
+   * **不**收工、**不**抓轨迹、**不**注入、**不**让它继续。
+   *
+   * 群内语义：「清掉 X 的会话」「直接开新会话即可」走本路径；「清理一下 X 的前文，然后让工作继续」才走 reset。
+   *
+   * 通道：`cat.new-session <key>`（CH4 管理指令族）——设计文档口径为「会话状态卡弹层预设 `/new` 的
+   * 投递通道（等价该猫前端 `session.new`）」，与 QQ 侧 `/new` 同一执行体（`ChatBridge.HandleSessionNew`）。
+   *
+   * @param {object} options 选项
+   * @param {string|Array<string>} options.keys 目标猫（数组，或逗号 / 顿号 / 空格分隔的字符串）
+   * @param {string|number} [options.chat] 来源群（记账用）
+   * @returns {Promise<object>} { ok, count, total, results }
+   */
+  async function newSession({ keys = [], chat = null } = {}) {
+    const list = (Array.isArray(keys) ? keys : String(keys ?? '').split(/[,，、\s]+/))
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean);
+    if (list.length === 0) return { ok: false, error: '未指定目标猫', count: 0, total: 0, results: [] };
+    const chatResolved = resolveChat(chat);
+    const results = [];
+    for (const raw of list) {
+      const key = await ch4.resolveKey(raw);
+      try {
+        const reply = await ch4.command(`cat.new-session ${key}`, ch4.mainPort);
+        const accepted = reply?.ok === true;
+        results.push({ key, ok: accepted, reply });
+        record(accepted ? 'new' : 'error', accepted
+          ? `${raw}：新会话已请求（/new）`
+          : `${raw}：新会话请求未受理（${JSON.stringify(reply).slice(0, 80)}）`);
+        if (accepted) {
+          state.noteCommand({ chat: chatResolved, target: key, text: '（新会话 /new）', result: '已请求新会话' });
+        }
+      } catch (error) {
+        results.push({ key, ok: false, error: String(error?.message ?? error) });
+        record('error', `${raw}：新会话请求失败（${error?.message ?? error}）`);
+      }
+    }
+    const count = results.filter((row) => row.ok).length;
+    return { ok: count > 0, count, total: results.length, results };
+  }
+
+  /**
    * 领航记录——本次领航（开启 → 关闭）的终态小结。
    *
    * 超时自关与主动退出都要有（Rushiera 2026-10-11）；落盘归档总是做，发群只随群内开启的场次。
@@ -1102,6 +1217,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     const last = cmds[cmds.length - 1];
     if (last?.text) lines.push(`· 最近指令：${String(last.text).replace(/\s+/g, ' ').slice(0, 60)}`);
     const text = lines.join('\n');
+    // 群记条目（一行版小结）——进记忆面用；业务面按 200 字符截断
+    const brief = `领航场次 ${fmt(openedAt)} → ${fmt(closedAt)}（${dur}）：开启来源 ${snap.openedBy === 'qq' ? '群内 @' : '应用内'}，关闭原因 ${reason === 'idle' ? '空闲超时自关' : '手动退出'}；指令 ${cmds.length} 条 / 回复截图 ${voyageStats.replies} 张 / 进度播报 ${voyageStats.progress} 条 / 开场巡检 ${voyageStats.tours} 张${last?.text ? `；最近指令：${String(last.text).replace(/\s+/g, ' ').slice(0, 30)}` : ''}。`;
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const file = path.join(dataDir, `nav-log-${stamp}.md`);
     try {
@@ -1110,7 +1227,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     } catch (error) {
       record('error', `领航记录归档失败（${error?.message ?? error}）`);
     }
-    return { text, file };
+    return { text, file, brief };
   }
 
   /**
@@ -1131,6 +1248,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     if (before.openedBy === 'qq' && before.activeChat) {
       await say(before.activeChat, voyage.text);
     }
+    // 场次小结进群记——「退出领航员是体面退出」：R喵 要知道自己在这段时间做过什么。
+    // 手动退出与空闲自关都走这里（两条关闭路径共用一处沉淀）。
+    if (before.activeChat) await sedimentVoyage(before.activeChat, voyage.brief);
     return next;
   }
 
@@ -1141,13 +1261,13 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
    * @param {string} options.key 目标猫（id / 显示名 / majordomo）
    * @param {string} options.text 指令内容
    * @param {string|number} [options.chat] 来源群
-   * @param {boolean} [options.sourceTag] 是否加 QQ 来源头（默认 true）
+   * @param {boolean} [options.sourceTag] 是否加 QQ 来源头（默认 false——Rushiera 2026-10-11：转发不加 `[来自QQ]…` 头，渠道由投递通道自身承载，不污染会话前文）
    * @param {boolean} [options.watch] 是否登记观测（默认 true）
    * @returns {Promise<object>} { ok, key, text, reply, watch }
    */
-  async function send({ key, text, chat = null, sourceTag = true, watch = true }) {
+  async function send({ key, text, chat = null, sourceTag = false, watch = true }) {
     const content = sourceTag
-      ? `[来自QQ][群@|Rushiera(群主)·本人] ${String(text ?? '').trim()}`
+      ? `[来自QQ][群@|Rushiera·本人] ${String(text ?? '').trim()}`
       : String(text ?? '').trim();
     const chatResolved = resolveChat(chat);
     const result = await ch4.send(key, content);
@@ -1264,7 +1384,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
         key: body?.key || 'majordomo',
         text: body?.text || '',
         chat: body?.chat ?? null,
-        sourceTag: body?.sourceTag !== false,
+        sourceTag: body?.sourceTag === true,
         watch: body?.watch !== false
       })
     }),
@@ -1288,6 +1408,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       })()
     }),
     'GET /api/nav/detail': async ({ query }) => ({ body: await ch4.detail(query.get('key') || 'majordomo') }),
+    'POST /api/nav/new-session': async ({ body }) => ({
+      body: await newSession({ keys: body?.keys ?? body?.key ?? [], chat: body?.chat ?? null })
+    }),
     'POST /api/nav/reset': async ({ body }) => {
       const key = body?.key || 'majordomo';
       resetSession({ key, chat: body?.chat ?? null })
@@ -1299,7 +1422,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   return {
     state, ch4, watcher, shot,
     health, renderReceipt, open, close, send, status, say, sayAt, sayImage,
-    armCat, armAll, disarmAll, resetSession, waitForReply,
+    armCat, armAll, disarmAll, resetSession, newSession, waitForReply,
     scheduleAnalysis, runAnalysis, analyzeOnce,
     start, stop, api, idleCloseMs
   };

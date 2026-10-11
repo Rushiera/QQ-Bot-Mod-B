@@ -40,6 +40,7 @@
 | `app/data/` | 应用运行数据（日志 / 配置 / 截图） |
 | `node_modules/` · `bin/` · `obj/` | 依赖与编译产物 |
 | `QQ-Agent V0.4 Preview Bugfix Setup.exe` | 来源安装包（107 MB） |
+| `CatTemp/` | 会话中介文件（自测草稿 / 探针 dump）——按收工纪律应当清空；忽略以防漏清入库 |
 
 ### 不在此仓库（知识网络侧）
 

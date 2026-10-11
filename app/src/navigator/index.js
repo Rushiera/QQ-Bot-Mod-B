@@ -12,6 +12,7 @@ import { createNavigatorState, IDLE_CLOSE_MS } from './state.js';
 import { createCh4Client } from './ch4.js';
 import { createCatWatcher } from './watch.js';
 import { createShotService } from './shot.js';
+import { createComfyService } from './comfy.js';
 import { PROJECT_DIR } from '../config.js';
 
 /** 空闲巡检间隔（毫秒）。 */
@@ -153,6 +154,20 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     : Number(navConfig.analyzeDelayMs) || 0;
   const services = Array.isArray(navConfig.services) ? navConfig.services : [];
   const vipUser = String(navConfig.vipUser || '');
+  // 图像编辑（design-qqbotb-navigator.md §十八）——ComfyDock「[生成]」工作区
+  const comfyConf = navConfig.comfy ?? {};
+  const comfyEnabled = comfyConf.enabled !== false;
+  // 请求者闸（Rushiera 2026-10-11：先收成只有 569145850 能用，白名单以后做）
+  const comfyRequireVip = comfyConf.requireVip !== false;
+  const comfy = createComfyService({
+    log,
+    dataDir,
+    conf: comfyConf,
+    onebot,
+    sendImage: (chat, file, caption) => sayImage(chat, file, caption),
+    sendText: (chat, text) => say(chat, text),
+    record
+  });
   let watchTimer = null;
   let ticking = false;
 
@@ -1444,6 +1459,54 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
+   * 受理一次图像编辑——群里的图 → ComfyDock「[生成]」工作区 → 出图发回本群。
+   *
+   * 前置两条（Rushiera 2026-10-11 定）：**领航员已开启** + **ComfyDock 在线**——
+   * 缺哪条拒哪条；不受理必须出声，不静默吞（AGENTS §一-4）。
+   *
+   * 提交即返回（后台轮询到收口才发群）——云端出图实测 1~3 分钟，工具侧不能阻塞。
+   *
+   * @param {object} options 选项
+   * @param {string} [options.by] 触发来源（app=应用内 / 操作者通道；qq=群内 @——受请求者闸约束）
+   * @param {string|number} [options.chat] 来源群（空=按新鲜 VIP 群消息解析）
+   * @param {string} options.prompt 提示词
+   * @param {string} [options.image] 本地图片路径（图已在本机时用）
+   * @param {string} [options.file] OneBot 消息段的 file 名（群图走这条）
+   * @param {string} [options.url] 图片直链（协议端缓存取不到时的兜底）
+   * @returns {Promise<object>} { ok, taskId?, image?, error?, offMode?, vipOnly? }
+   */
+  async function editImage({ by = 'app', chat = null, prompt = '', image = '', file = '', url = '' } = {}) {
+    const text = String(prompt ?? '').trim();
+    if (!text) return { ok: false, error: '提示词是空的——改图要一句要求' };
+    const target = resolveChat(chat);
+    if (!target) return { ok: false, error: '没有回消息群——先在下指令的那个群里说一句' };
+    if (state.snapshot().enabled !== true) {
+      record('error', `图像编辑不受理（领航员未开启）：${text.slice(0, 40)}`);
+      return { ok: false, error: '领航员未开启——图像编辑只在领航员模式下受理', offMode: true };
+    }
+    if (!comfyEnabled) {
+      return { ok: false, error: '图像编辑未启用（配置 navigator.comfy.enabled=false）' };
+    }
+    // 请求者闸（Rushiera 2026-10-11：先收成只有 569145850 能用，白名单以后做）——
+    // 只对**群内触发**生效（与开关面同口径：应用内 / 操作者通道本就只有本人够得着）；
+    // 凭据 = 「最近一次 VIP 群 @ 我」（新鲜窗口 VIP_FRESH_MS），**且必须与目标群同一个群**
+    // （否则 B 群的人能蹭 A 群的近期 VIP 消息）。
+    if (by === 'qq' && comfyRequireVip && !(vipFresh() && String(vip.chat) === String(target))) {
+      record('error', `图像编辑不受理（非 ${vipUser || 'VIP'} 触发 / 非同群）：${text.slice(0, 40)}`);
+      return {
+        ok: false,
+        error: `图像编辑目前只对 ${vipUser || '指定 QQ'} 开放——需要本人近期在**本群** @ 我`,
+        vipOnly: true
+      };
+    }
+    const result = await comfy.edit({ chat: target, prompt: text, image, file, url });
+    if (result.ok) {
+      state.noteCommand({ chat: target, target: '', text: `（图像编辑）${text.slice(0, 60)}`, result: '已提交' });
+    }
+    return result;
+  }
+
+  /**
    * 状态汇总（界面与业务面工具共用）。
    *
    * @returns {Promise<object>} 状态
@@ -1508,14 +1571,15 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     }
   }
 
-  /** 停止守护（含订阅）。 */
+  /** 停止守护（含订阅与在途定时器）。 */
   function stop() {
     if (watchTimer) {
       clearInterval(watchTimer);
       watchTimer = null;
     }
-    watcher.stopAll();
-    sessions.clear();
+    // 撤订要撤干净——漏掉 pollTimer / analyzeTimers 会让进程退出时留着在途句柄
+    // （自测里表现为退出码失真：libuv 断言）。armAll 装上的，stop 全摘。
+    disarmAll();
   }
 
   // ── 本地 HTTP API（界面 + 业务面工具）────────────────────────────────────
@@ -1550,6 +1614,17 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       })
     }),
     'POST /api/nav/say': async ({ body }) => ({ body: await say(body?.chat, body?.text) }),
+    'POST /api/nav/comfy': async ({ body }) => ({
+      body: await editImage({
+        // by 只认 'qq'（业务面群内触发）——其余一律按操作者通道走（应用内 / 本地 API）
+        by: body?.by === 'qq' ? 'qq' : 'app',
+        chat: body?.chat ?? null,
+        prompt: body?.prompt ?? '',
+        image: body?.image ?? '',
+        file: body?.file ?? '',
+        url: body?.url ?? ''
+      })
+    }),
     'POST /api/nav/analyze': async ({ body }) => ({
       body: await analyzeOnce({
         key: body?.key || 'majordomo',
@@ -1585,6 +1660,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     health, renderReceipt, open, close, send, status, say, sayAt, sayImage,
     armCat, armAll, disarmAll, resetSession, newSession, waitForReply,
     scheduleAnalysis, runAnalysis, analyzeOnce, collectThink, thinkText,
+    editImage, comfy,
     start, stop, api, idleCloseMs
   };
 }

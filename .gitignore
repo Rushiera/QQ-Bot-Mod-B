@@ -22,3 +22,6 @@ QQ-Agent V0.4 Preview Bugfix Setup.exe
 # 编译产物
 bin/
 obj/
+
+# 会话中介文件（自测草稿 / 探针 dump）——按收工纪律应当清空；忽略以防漏清入库
+CatTemp/

@@ -9,6 +9,7 @@
 //   POST /api/nav/close              关闭
 //   POST /api/nav/send               投递（body { key, text }）
 //   POST /api/nav/new-session        新会话（body { keys: 'a,b,c' }——发布 /new，不清前文交接）
+//   POST /api/nav/comfy              图像编辑（body { chat, prompt, file, url }——送上 ComfyDock 生成工作区，出图自动回群）
 //
 // 「指令 / 闲聊」的语义判断归模型——本模块不做判定，也不替猫编造进度。
 // 依赖：QQBot mod B 自研单体（Electron 应用）在 127.0.0.1:3280 在跑。
@@ -376,6 +377,62 @@ export function registerNavTools() {
         return ok(`已开始整理重启：${key}。流程 = 收工整理 → 新会话 → 注入交接摘要 → 自动继续；耗时几分钟，进度会同步到群。`);
       } catch (error) {
         return err(`整理重启失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── comfy_edit ──────────────────────────────────────────────────────────
+  registerTool({
+    id: 'comfy_edit',
+    name: '图像编辑',
+    description: `把群里的一张图送上云端工作流做图像编辑（改姿势 / 换风格 / 出三视图 / 换画风…），出图后自动发回本群。
+用途：群里 @ 我 说「进行图像编辑」「把这张图做成三视图」「给这张图换个姿势」这类**改图**请求时调本工具。
+- prompt：给云端工作流的提示词——用户怎么说的就怎么填，别改写、别加戏。
+- messageId：带图那条消息的 #号（可选）——不传就取本群最近一条带图的消息。
+🔴 前置两条：**领航员已开启** + **ComfyDock 在线**——缺哪条回执就说明缺哪条，别硬试、别自己想办法绕。
+🔴 **只有 QQ 569145850 本人能用**——其他群友 @ 你要改图，**不要调本工具**，直接说这项暂时只对 TA 开放。
+🔴 受理即静默：提交后不用回话；出图（约 1~3 分钟）或失败由系统自动发回本群。
+🔴 一次只跑一张：回执说「已有一张图在跑」就等它出图，别连点。`,
+    category: 'system',
+    icon: '🎨',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: '给云端工作流的提示词（照抄用户的要求）' },
+        messageId: { type: ['integer', 'string'], description: '带图那条消息的 #号（可选；不传取本群最近一条带图的消息）' }
+      },
+      required: ['prompt']
+    },
+    async execute(ctx, args) {
+      const prompt = String(args?.prompt || '').trim();
+      if (!prompt) return err('prompt 不能为空——把用户要改图的那句话填进来。');
+      let media = null;
+      try {
+        const mid = args?.messageId;
+        let entry = (mid === undefined || mid === null || mid === '') ? null : ctx.store.findByMid(ctx.chatKey, mid);
+        if (!entry) {
+          const rows = ctx.store.recent(ctx.chatKey, { limit: 30 });
+          entry = [...rows].reverse()
+            .find((row) => (row.media || []).some((m) => m.kind === 'image' && (m.url || m.file))) ?? null;
+        }
+        if (!entry) return err('本群最近没有带图的消息——让用户先发一张图，再 @ 我说要改什么。');
+        media = (entry.media || []).find((m) => m.kind === 'image' && (m.url || m.file)) ?? null;
+      } catch (error) {
+        return err(`取图失败：${error?.message ?? error}`);
+      }
+      if (!media) return err('那条消息里没有可用的图片。');
+      const chat = String(ctx.chatKey || '').replace(/^group:/, '');
+      if (!/^\d+$/.test(chat)) return err('图像编辑只在群里用——当前会话没有可用的群号。');
+      try {
+        const data = await call('/api/nav/comfy', {
+          method: 'POST',
+          // by:'qq'——本工具只从群内被调用；请求者闸（VIP 限定）据此生效
+          body: { by: 'qq', chat, prompt, file: media.file || '', url: media.url || '' }
+        });
+        if (data?.ok !== true) return err(`图像编辑未受理：${data?.error ?? JSON.stringify(data).slice(0, 200)}`);
+        return ok(`已提交图像编辑（任务 ${data.taskId ?? '?'}）——出图后系统自动发回本群，你不用回话。`);
+      } catch (error) {
+        return err(`图像编辑失败（自研单体没在跑？）：${error?.message ?? error}`);
       }
     }
   });

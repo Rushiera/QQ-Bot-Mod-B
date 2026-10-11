@@ -59,7 +59,18 @@ const DEFAULTS = {
     services: [
       { key: 'ApiSiteAnalyzer', name: 'ApiSiteAnalyzer', kind: 'apisite', url: 'http://127.0.0.1:8766/api/sites' },
       { key: 'ComfyDock', name: 'ComfyDock', kind: 'comfydock', url: 'http://127.0.0.1:8971/api/summary' }
-    ]
+    ],
+    // 图像编辑（design-qqbotb-navigator.md §十八）——把群里的图送上 ComfyDock 的
+    // 「[生成]」工作区改图，出图自动回群。前置：领航员已开启 + ComfyDock 在线。
+    comfy: {
+      enabled: true,
+      endpoint: 'http://127.0.0.1:8971',
+      workspaceId: 'gen',
+      pollMs: 5000,
+      timeoutMs: 15 * 60 * 1000,
+      // 请求者闸——先收成只有 VIP 本人能用（Rushiera 2026-10-11）；白名单以后做
+      requireVip: true
+    }
   }
 };
 

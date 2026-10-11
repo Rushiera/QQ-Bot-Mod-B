@@ -1332,3 +1332,68 @@ R喵喵：交接摘要已注入，等待确认
 **落盘**：`node tools/apply-qqagent-config.mjs --roletext-only` → `roleTextChars` 93974 → **94124**（+150）；读回复核 `_unpack/data/config.json` 命中「照下面这份骨架写」。
 
 **生效**：教材改动——**业务面开新会话**才读得到（主理方发起）。
+
+---
+
+## 四十三、图像编辑接入（ComfyDock「[生成]」工作区 · 2026-10-11）
+
+> 触发：Rushiera 2026-10-11（CH4 对话页）——「我们的 comfydock 现在已经跑通了 [生成] Qwen-AIO 的线上识别，现在我希望把这个功能做进整合，要想直接用 bot 调用必须先处于领航员模式，并且 comfydock 得在线，然后就可以发指令 @领航员 进行图像编辑了」+「你先拿 `D:\Mau\WorkSpace\ComfyDock\out\gen\41.png` 这张图片试试，提示词用 把这张图片做成三视图」。
+> 设计：`design-qqbotb-navigator.md` §十八。
+
+**链路**：群里 @ 它 + 改图要求 → 业务面 `comfy_edit`（从 `ctx.store` 取那条消息的图）→ 单体 `POST /api/nav/comfy` → `app/src/navigator/comfy.js`（取图 → `POST /api/rh/submit` → `POST /api/rh/poll` 轮询 → 出图 `sayImage` 发群）。
+
+**前置三条**：领航员已开启（状态机）+ ComfyDock 在线（`GET /api/summary`）+ **请求者闸**（群内触发时：近期有 `569145850` 在**本群** @ 我）——缺哪条拒哪条并出声。**一次只跑一张**（单体侧 `busy` 闸）。
+
+**请求者闸（Rushiera 2026-10-11：「先收成只有我能用，后面做白名单」）**：只对**群内触发**（`by='qq'`，业务面工具走这条）生效——应用内 / 本地 API 是操作者通道，不受此闸约束；凭据 = 最近一次 VIP 群 @（新鲜窗口 120 秒，同 `nav_open` 机制）+ **必须同群**（防蹭别群的近期 VIP 消息）；配置开关 `navigator.comfy.requireVip`。白名单落地后本闸降级为白名单里的一项。
+
+**落点：**
+
+| 面 | 文件 |
+|:--|:--|
+| 编排 | `app/src/navigator/comfy.js`（新）· `app/src/navigator/index.js`（`editImage` + `POST /api/nav/comfy` + 导出） |
+| 配置 | `app/src/config.js` `navigator.comfy`（endpoint / workspaceId / pollMs / timeoutMs / enabled） |
+| 业务面工具 | `tools/navigator/nav-tools.js` `comfy_edit`（补丁重跑 → `_unpack/resources/app/src/nav-tools.js`） |
+| 教材 | `tools/apply-qqagent-config.mjs` `NAV_RULES`「图像编辑（改图）」段 |
+
+**自测：**
+
+- 守门 `node tools/verify-comfy.mjs` → **10/10**：接口面 / 未开启不受理（offMode）/ 空提示词报错退出 / 请求者闸三例（群内非 VIP 拒 · 操作者通道放行 · VIP 消息非同群拒 · 同群 VIP @ 后放行）/ ComfyDock 离线不受理 / 在线探测（真机）/ 本地路径不在即报错。
+- 业务面 `node tools/verify-qqagent-navtools.mjs` → **8/8**：补丁标记 + 模块在位 + 领航员工具组 **10 件**经真实入口（`buildToolDefs`）注册 + `comfy_edit` 参数面 / 描述 / 执行面（空提示词、本群无带图消息均报错退出，不触网）。
+- 真链路（自测 harness）`node tools/verify-comfy.mjs --live --prompt-file <提示词文件>` → **8/8**：群图路径（mock `get_image` → `41.png`）→ 提交 → 轮询 → 出图发群（mock 出站）。任务 `2109258765894377473`，出图 `out/gen/6379.png`，用时 **66.0 秒**。
+- **真链路（领航员实调 · 重启后）**：`启动QQBotB.bat` 一键重启 → 应用加载新代码 → `POST /api/nav/comfy`（操作者通道）`41.png` + 「把他变成金毛妹」→ 任务 `2109270410188259330`，出图 `out/gen/7138.png`（金发版，画面稳定），**86.2 秒**，活动流落 `[comfy] 图像编辑出图已发群（7138.png）`（群 `689942975`）。
+- 基线（不经本功能，直连 ComfyDock）：`41.png` + 「把这张图片做成三视图」→ 任务 `2109252239880318978`，出图 `out/gen/5996.png`，**82.7 秒**。
+- 回归：`node tools/verify-navigator.mjs` **29/29**。
+
+**顺带修（同轮发现）**：`stop()` 撤订不彻底——只清 `watchTimer` + `watcher.stopAll()` + `sessions.clear()`，漏了每猫的 `pollTimer`（`setInterval`）与 `analyzeTimers`；自测里表现为进程退出报 libuv 断言（`src\win\async.c`）→ 退出码失真。改法：`stop()` = 清 `watchTimer` + `disarmAll()`。
+
+**教材落盘**：`node tools/apply-qqagent-config.mjs --roletext-only` → `roleTextChars` 94124 → **94447**（+323）。
+
+**生效**：① 改的是自研单体源码（`app/src/`）——需**重启 QQBotB 应用**（`启动QQBotB.bat/.vbs`）；**2026-10-11 21:0x 已重启**（一键全流程：停旧实例 → 清锁 → 开会话 → 起新；重启后领航员状态沿用，`vipRecentChat` 归零、持久观测重建）；② 教材与业务面工具——重启已带起业务面新会话。
+
+**遗留：**
+
+1. **群图取图真链路未验**——自测里 `get_image` 是 mock 的；真群实测时确认协议端缓存路径取得到（取不到会自动走直链兜底）。
+2. 输入图不做体积 / 格式预检（GIF / 超大图未处理）——真链路遇到再补。
+3. ~~未限制请求者~~ → **已收（请求者闸 · 2026-10-11 同轮追加）**：先收成只有 `569145850` 能用，白名单以后做。
+
+---
+
+## 四十四、领航员收工报告改一句话（撞发言频率墙 · 2026-10-11）
+
+> 触发：Rushiera 2026-10-11（CH4 对话页 · 收工途中追加）——「领航员模式退出的收工报告会分多段发送然后撞发言频率墙，改成一句话」。
+
+**问题**：v0.53 把「场次收尾」段改成**可照抄的多段骨架**（标题 / 时间 / 做了什么 / 本轮修掉的问题 / 验证 / 落盘）——模型照着分段，逐段各调一次 `send_message`；业务面的发言闸（`engage` 配额 120s·5 条）在第 6 条上把后面的挡掉，群里只看到半份报告。
+
+**改法**（`tools/apply-qqagent-config.mjs` `NAV_RULES`「场次收尾」段）：多段骨架换成**一句话模板**——
+
+```
+【领航员模式 · 收工报告】<日期> <起 HH:MM>→<止 HH:MM>，做了 <N> 件事（<要点一> / <要点二> / …），<遗留：还有什么没做完 / 无遗留>。
+```
+
+并明写「**只发一条消息、只写一句话**——分成多条发会撞发言频率墙，后面几条发不出去」「一句到底：不分行、不分段、不摆条目、不带小标题」。素材纪律（只取本场次真实读到过的，不许编）原样保留。
+
+**为什么不是改代码**：根因在**话术**——模型按教材分段发送；改教材即改行为，业务面发言闸是既有契约，不动它。
+
+**教材落盘**：`node tools/apply-qqagent-config.mjs --roletext-only` → `roleTextChars` 94523 → **94367**（-156，骨架比一句话长）。
+
+**生效**：教材改动——**业务面开新会话**才读得到（主理方发起）。

@@ -58,7 +58,7 @@ const DEFAULTS = {
     analyzeDelayMs: 60 * 1000,
     services: [
       { key: 'ApiSiteAnalyzer', name: 'ApiSiteAnalyzer', kind: 'apisite', url: 'http://127.0.0.1:8766/api/sites' },
-      { key: 'ComfyDock', name: 'ComfyDock', url: 'http://127.0.0.1:8971/' }
+      { key: 'ComfyDock', name: 'ComfyDock', kind: 'comfydock', url: 'http://127.0.0.1:8971/api/summary' }
     ]
   }
 };

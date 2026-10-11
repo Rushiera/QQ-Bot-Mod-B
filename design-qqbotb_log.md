@@ -789,7 +789,7 @@
 | # | 项 | 状态 |
 |:--:|:--|:--|
 | 1 | 真链路验收（群内 @ 开启 → 下指令 → 截图回群） | **已验收 2026-10-11**——群内 @ 开启成功（`openedBy: qq` · `activeChat: 1097492606`）· 指令投递成功（`commandLog` 记「链路通了」→ majordomo）· 观测已登记（`watching: [majordomo]`） |
-| 2 | ComfyDock 健康检查显示「离线」——面板端口 8971 当前无监听 | 观察项（服务没跑，非缺陷） |
+| 2 | ~~ComfyDock 健康检查显示「离线」~~ **已修（v0.51）**——根因不是「服务没跑」，是**探针判据错**：URL 指面板首页（`text/html` 62592 B），`fetchJson` 要求 JSON 响应，`JSON.parse` 必失败 → 恒判离线，与 ComfyDock 是否在跑无关 | 修法：URL 改 `http://127.0.0.1:8971/api/summary`（ComfyDock **v0.24** 新增）+ `kind='comfydock'` 回执文案「在线（合计剩余 700 · 重置时刻已过）」；实测 `/api/nav/health` → `ComfyDock online=true`；群 689942975 已发状态一条（日志 6251 行） |
 | 3 | 业务面 VIP 通道是过渡态——终态由自研单体出站承载（本就无闸） | 已记入 design §十二 |
 | 4 | 领航员出站图片为 `file:///` 绝对路径（OneBot image 段） | 真链路待验 |
 

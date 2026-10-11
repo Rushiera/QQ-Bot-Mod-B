@@ -377,6 +377,13 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     const data = await fetchJson(svc.url);
     if (!data) return { key: svc.key, name: svc.name ?? svc.key, online: false, detail: '离线' };
     let detail = '在线';
+    if (svc.kind === 'comfydock') {
+      // 额度概览——合计推测剩余 + 最早重置（ComfyDock GET /api/summary）
+      const remain = Number(data.remain ?? 0);
+      const minutes = Number(data.resetInMinutes ?? 0);
+      const when = minutes > 0 ? `重置在 ${minutes} 分钟后` : '重置时刻已过';
+      detail = `在线（合计剩余 ${group(remain)} · ${when}）`;
+    }
     if (svc.kind === 'apisite') {
       // 取最近采集的站点（lastFetchAt 最新）——多站时"当前在用"的那一个
       const list = Array.isArray(data.sites) ? [...data.sites] : [];

@@ -810,7 +810,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       '【领航员·前文整理】你现在做一次**完整收工**，按顺序：',
       '① 落盘——把该写的写进文件（进度 / 变更 / 设计文档 / todo / CHANGELOG，按你所在项目的收工清单）。',
       '② **推 git**——把当前工作提交并推送（能推的都推掉，别留着）。',
-      '③ 然后输出一份**交接摘要**——要足量、详尽，宁多勿漏；接手方是你的下一个会话，它只有这份摘要，猜不到你没写的：',
+      '③ **收工报告**——按你的收工纪律输出终态断言：完成项 / 落盘位置 / 遗留项去向，零疑问句。',
+      '④ 然后输出一份**交接摘要**——要足量、详尽，宁多勿漏；接手方是你的下一个会话，它只有这份摘要，猜不到你没写的：',
       '   · 任务全貌与背景（在做什么、为什么做）',
       '   · 已完成的步骤与做法（关键路径 / 命令 / 文件 / 接口）',
       '   · 未完成事项与下一步',
@@ -819,7 +820,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       '   · 不确定或待确认的点（明确标注，别让接手方当成事实）',
       '   · 用户提过的原始要求（照抄关键句，别改写）',
       '',
-      '①②做完再输出摘要；摘要只输出正文（纯文本，小标题 + 列表），篇幅不设上限。'
+      '①②③做完再输出摘要；报告与摘要都只输出正文（纯文本，小标题 + 列表），篇幅不设上限。'
     ].join('\n'));
     const summary = await waitForReply(resolved, { since: askAt - 2000 });
     if (!summary) {
@@ -870,7 +871,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     // ③ 注入交接摘要 + ④ 自动继续（同一条消息即"继续"）
     const injectAt = Date.now();
     const parts = [
-      '【交接摘要·来自上一段会话】',
+      '【上一段会话的收工报告与交接摘要】',
       summary
     ];
     if (trace) {

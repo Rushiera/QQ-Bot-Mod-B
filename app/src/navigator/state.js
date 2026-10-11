@@ -22,6 +22,7 @@ function initialState() {
     enabled: false,
     activeChat: null,
     lastCommandAt: 0,
+    lastActivityAt: 0,
     lastTarget: null,
     openedAt: 0,
     openedBy: '',
@@ -81,6 +82,7 @@ export function createNavigatorState({ file, log }) {
   function open({ by = 'app', chat = null } = {}) {
     state.enabled = true;
     state.openedAt = Date.now();
+    state.lastActivityAt = state.openedAt;
     state.openedBy = by;
     state.closedAt = 0;
     state.closedReason = '';
@@ -145,6 +147,7 @@ export function createNavigatorState({ file, log }) {
       state.commandLog.splice(0, state.commandLog.length - COMMAND_LOG_LIMIT);
     }
     state.lastCommandAt = entry.at;
+    state.lastActivityAt = entry.at;
     if (entry.target) state.lastTarget = entry.target;
     if (entry.chat) state.activeChat = entry.chat;
     save();
@@ -160,5 +163,19 @@ export function createNavigatorState({ file, log }) {
     return { ...state, commandLog: state.commandLog.map((item) => ({ ...item })) };
   }
 
-  return { load, save, open, close, setActiveChat, noteCommand, snapshot, file };
+  /**
+   * 刷新活动时刻——猫有动静（轮结束 / 收到回复）时调用。
+   *
+   * 空闲暂关的计时基准是**最近一次活动**，不是「最后一条指令」（Rushiera 2026-10-11：
+   * 「有回复的话这个时间应该自动归 0，除非是完全没有回复的空闲」）。
+   *
+   * @param {number} [at] 时刻（默认当前）
+   * @returns {void}
+   */
+  function touch(at = Date.now()) {
+    state.lastActivityAt = Number(at) || Date.now();
+    save();
+  }
+
+  return { load, save, open, close, setActiveChat, noteCommand, touch, snapshot, file };
 }

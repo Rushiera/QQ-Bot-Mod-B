@@ -145,6 +145,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   /** 出站记录（猫 key → { at, kind, replyAt }）——出站决策去重与限流用。 */
   const sentLog = new Map();
 
+  /** 本次领航统计（开启时归零）——关闭时进领航记录。 */
+  const voyageStats = { replies: 0, progress: 0, tours: 0 };
+
   /**
    * 记一条活动（界面显示与事后排查共用）。
    *
@@ -488,7 +491,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
         return { ok: false, sent: 'none', error: 'empty' };
       }
       const sent = await sayImage(target, png, `${catName} 的回复${label}`);
-      if (sent.ok) sentLog.set(key, { at: Date.now(), kind: 'reply', replyAt });
+      if (sent.ok) {
+        sentLog.set(key, { at: Date.now(), kind: 'reply', replyAt });
+        voyageStats.replies += 1;
+      }
       record(sent.ok ? 'send' : 'error', sent.ok
         ? `回复截图已发群 ${target}（${catName}）`
         : `回复截图发送失败：${sent.error}`);
@@ -529,7 +535,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     const head = `⏳ ${catName} 还在跑${label}，尚未回复`;
     const body = [head, progressFacts(rows), insight].filter((line) => String(line ?? '').trim()).join('\n');
     const sent = await sayAt(target, body, vipUser);
-    if (sent.ok) sentLog.set(key, { at: Date.now(), kind: 'progress', replyAt: prev.replyAt });
+    if (sent.ok) {
+      sentLog.set(key, { at: Date.now(), kind: 'progress', replyAt: prev.replyAt });
+      voyageStats.progress += 1;
+    }
     record(sent.ok ? 'send' : 'error', sent.ok
       ? `进度播报已发群 ${target}（${catName}·@触发者）`
       : `进度播报发送失败：${sent.error}`);
@@ -821,6 +830,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       record('error', `拉 ${session.name} 会话关键信息失败：${error?.message ?? error}`);
     }
     const chat = resolveChat(session.chat) ?? state.snapshot().activeChat;
+    // 猫有动静即算活动——空闲暂关的计时归零（有回复就不算空闲）
+    state.touch();
     await emitOutbound({ key: session.key, chat, trigger: 'roundEnd', items });
   }
 
@@ -841,14 +852,19 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       return { ok: false, error: `${vipUser || '指定 QQ'} 近期没有在本群 @ 我——领航员只接受该 QQ 触发` };
     }
     state.open({ by, chat: resolveChat(chat) });
+    voyageStats.replies = 0;
+    voyageStats.progress = 0;
+    voyageStats.tours = 0;
     const report = await health();
     const text = renderReceipt(report);
-    if (receipt && state.snapshot().activeChat) {
+    // 开工报告只发给「群内 @ 开启」的场次——软件内开启不打扰群（Rushiera 2026-10-11）
+    const announce = receipt && by === 'qq';
+    if (announce && state.snapshot().activeChat) {
       await say(state.snapshot().activeChat, text);
     }
     // 开场巡检：对「有会话」的猫把最后一段会话截成卡片发群（Rushiera 2026-10-11 要求——
-    // 有会话正文内容的猫不算待命，也要能看到它最后说了什么）
-    if (receipt) {
+    // 有会话正文内容的猫不算待命，也要能看到它最后说了什么）——同样只随群内开启
+    if (announce) {
       runOpeningTour(report).catch((error) => log.error('navigator', `开场巡检失败：${error?.message ?? error}`));
     }
     // 持久观测：对全部运行中的猫建立订阅——任何一轮回复都截图发群（无例外）
@@ -885,6 +901,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
         const insight = await shot.analyze(png);
         const caption = insight ? `${row.name} 手头这段会话：\n${insight}` : `${row.name} 手头这段会话：`;
         const sent = await sayImage(chat, png, caption);
+        if (sent.ok) voyageStats.tours += 1;
         record(sent.ok ? 'send' : 'error', sent.ok ? `开场巡检已发图（${row.name}）` : `开场巡检发图失败：${sent.error}`);
       } catch (error) {
         record('error', `开场巡检（${row.name}）失败：${error?.message ?? error}`);
@@ -1058,22 +1075,61 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
+   * 领航记录——本次领航（开启 → 关闭）的终态小结。
+   *
+   * 超时自关与主动退出都要有（Rushiera 2026-10-11）；落盘归档总是做，发群只随群内开启的场次。
+   *
+   * @param {object} snap 关闭前的状态快照
+   * @param {string} reason 关闭原因
+   * @returns {object} { text, file }
+   */
+  function buildVoyageLog(snap, reason) {
+    const openedAt = Number(snap.openedAt) || 0;
+    const closedAt = Date.now();
+    const ms = openedAt > 0 ? closedAt - openedAt : 0;
+    const dur = ms > 0 ? `${Math.floor(ms / 60000)} 分 ${Math.round((ms % 60000) / 1000)} 秒` : '未知';
+    const fmt = (at) => (at ? new Date(at).toLocaleString('zh-CN', { hour12: false }) : '未知');
+    const cmds = (snap.commandLog ?? []).filter((item) => Number(item.at) >= openedAt);
+    const lines = [
+      `【领航记录】${fmt(openedAt)} → ${fmt(closedAt)}（共 ${dur}）`,
+      `· 开启来源：${snap.openedBy === 'qq' ? '群内 @' : '应用内'}`,
+      `· 关闭原因：${reason === 'idle' ? '空闲暂关（超时）' : '手动退出'}`,
+      `· 指令：${cmds.length} 条`,
+      `· 回复截图：${voyageStats.replies} 张`,
+      `· 进度播报：${voyageStats.progress} 条`,
+      `· 开场巡检：${voyageStats.tours} 张`
+    ];
+    const last = cmds[cmds.length - 1];
+    if (last?.text) lines.push(`· 最近指令：${String(last.text).replace(/\s+/g, ' ').slice(0, 60)}`);
+    const text = lines.join('\n');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const file = path.join(dataDir, `nav-log-${stamp}.md`);
+    try {
+      fs.writeFileSync(file, `${text}\n`, 'utf8');
+      record('log', `领航记录已归档 ${path.basename(file)}`);
+    } catch (error) {
+      record('error', `领航记录归档失败（${error?.message ?? error}）`);
+    }
+    return { text, file };
+  }
+
+  /**
    * 关闭领航员。
    *
    * @param {object} options 选项
    * @param {string} [options.reason] 原因（manual / idle）
-   * @param {boolean} [options.notify] 是否在回消息群告知
+   * @param {boolean} [options.notify] 保留参数（现行语义：发不发群由开启来源决定，不看它）
    * @returns {Promise<object>} 状态快照
    */
   async function close({ reason = 'manual', notify = false } = {}) {
     const before = state.snapshot();
     const next = state.close(reason);
     disarmAll();
-    if (notify && before.activeChat) {
-      const text = reason === 'idle'
-        ? '领航员已暂关——全体猫停工且 30 分钟没有新指令。需要时在应用内打开，或 @我 说「打开领航员」。'
-        : '领航员已关闭。需要时在应用内打开，或 @我 说「打开领航员」。';
-      await say(before.activeChat, text);
+    // 领航记录：超时自关与主动退出都要有（Rushiera 2026-10-11）
+    // 落盘归档总是做；发群只随「群内 @ 开启」的场次（软件内开启不打扰群）
+    const voyage = buildVoyageLog(before, reason);
+    if (before.openedBy === 'qq' && before.activeChat) {
+      await say(before.activeChat, voyage.text);
     }
     return next;
   }
@@ -1147,7 +1203,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     if (ticking) return;
     const snap = state.snapshot();
     if (!snap.enabled) return;
-    const since = snap.lastCommandAt || snap.openedAt;
+    // 计时基准 = 最近一次活动（指令 / 猫的回复）——不是「最后一条指令」（否则刚开工就被判空闲）
+    const since = Math.max(
+      Number(snap.lastActivityAt) || 0,
+      Number(snap.lastCommandAt) || 0,
+      Number(snap.openedAt) || 0
+    );
     if (!since || Date.now() - since < idleCloseMs) return;
     ticking = true;
     try {

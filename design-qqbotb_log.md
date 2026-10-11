@@ -1055,6 +1055,8 @@ R喵喵：交接摘要已注入，等待确认
 
 **同步约定**：CH4 前端改样式或渲染器后，重新摘取上面三件覆盖（`chat-card.css` 整块替换 · `md.js` 除末尾导出行外原样覆盖）。
 
+**补（同日）· 图中图渲染**：气泡里的 `[image-open]` 包裹原先按纯文本落进卡片（回复里的图变成一串路径文本）。`renderCard` 现按 L1/Discipline §九 解析包裹（条目行 `图片N-k：路径`，全角冒号、路径取到行尾），渲染为 CH4 同款 `.chat-imgs > figure.chat-img > a > img` + `figcaption`；路径经 `pathToFileURL` 转绝对 `file://` URL（http(s) / file 原样；相对路径与受控根寻址落 `.chat-img.missing` 占位）。样式块同步摘入 `chat-card.css`（§5 图片附件 · 源 chat.css 行 411–421）。真链路实测：`app/data/nav-shot-2026-10-11T05-21-01-238Z.png` ✅
+
 
 ---
 

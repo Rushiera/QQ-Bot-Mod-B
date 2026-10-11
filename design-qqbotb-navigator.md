@@ -380,3 +380,47 @@ Mau 链接状态 --OK
 | 教材 | `tools/apply-qqagent-config.mjs` `NAV_RULES` | 新增「回执 / 看运行情况（只读——不派活）」段 |
 
 **判据：** 投递只发生在**真派活**（点名猫 / 任务动词）；看状态一律走只读通道。
+
+---
+
+## 十七、前文装配与整理（入口 · 2026-10-11）
+
+> 定位：**业务面前文的唯一入口说明**——要改前文、要整理前文，先看本节，再按它指向的生成源动手。
+> 触发：Rushiera 2026-10-11——「你记得顺便整理下 qqbotB 的前文 包括系统提示和本次输入零对话历史的那个」「那些前文不要全去掉了 改口径并精简即可……领航员设立的初衷就是希望他成为 mau 的另一个入口」「这部分你在 qqbotB 内记一下 以避免后续忘记要整理前文的话应该看哪个了」。
+
+**一、前文有三面**
+
+| 面 | 内容 | 生成源 | 现状 |
+|:--|:--|:--|--:|
+| `systemPrompt` | 群友人设（「你是 R喵，混在群里的普通群友…」lean 精简档） | 业务面配置 `_unpack/data/config.json` 的 `persona.systemPrompt`（行为准则段开关 `patch-qqagent-nosys.mjs`） | 1069 字符 |
+| `roleText`（前文主体） | CCBP 注入集 + 遇阻处置 6 条 + 领航员教材 | **`tools/apply-qqagent-config.mjs`**（`INJECT` / `BLOCKED_RULES` / `NAV_RULES`） | **93628 字符** |
+| 本次输入 | 触发消息 + 本群 JSON 存档（**零对话历史，每次全量重发**） | 业务面运行时自组装 | ~111k 字符/次 |
+
+**二、改法与刷法**
+
+1. 改 `tools/apply-qqagent-config.mjs` → `node --check`；
+2. 刷：`node tools/apply-qqagent-config.mjs --roletext-only`（只刷 `roleText`，不动 api / snowluma / allow）——回执给 `roleTextChars`；
+3. 读回复核：`text-grep` `_unpack/data/config.json` 查改动关键字。
+   **生效面**：教材 / 前文改动要**业务面开新会话**才读得到。
+
+**三、整理口径（Rushiera 2026-10-11 定）**
+
+- **不全去，改口径 + 精简**。领航员**必须知道 CCBP 是什么**：它自己没有 CCBP 通道，但要清楚**谁能干什么**——特权工具（`config-*` / `majordomo-*` / `cs-*` / `mau-*` / `text-*`）它自己调不了，**majordomo 能调**。
+- **思路：领航员 = MAU 的另一个入口**——前文教的是「**认出这是哪一类活、该派给谁**」，不是「工具怎么用」的完整手册。
+- 🔴 **人格不动**（Rushiera 2026-10-11）——整理只动「认知与工具面」那几段：`systemPrompt` 的群友人设与 `L2/Worker/Chat` 四件**原样保留**；新增的 `CCBP_PRIMER` / `TOOLS_MAP` 用**陈述句**写（是什么 / 谁能干），**不写制度腔**（不写「🔴 不许…」「必须…」）。教材里的约束只覆盖**领航员工作模式**，不许渗进闲聊人格。
+- **现状（工具面教学盘点）**：它**自己的**工具用法**教了**——`nav_*` 在领航员教材（`NAV_RULES`）、`browser-*` / `image-analyze` / `web-fetch` / `send_*` 在遇阻处置 6 条。**CH4 侧的**工具只有 `L1/TOOL-REF.md`（速查索引 + 决策树 + 铁律）在注入集里，`L1/query/TOOL-MANUAL.md`（详解）与 `CSharp` / `Mau` Job 的领域细则**都没注入**——现状是「知道名字、不知道用法、而且调不了」。整理后一律收进 `TOOLS_MAP`：**能干什么 + 归谁**，不抄用法。
+
+| 现面 | 现规模 | 整理后 | 落法 |
+|:--|--:|:--|:--|
+| `SOUL` / `AGENTS` / `USER` | 3.4k | 原样保留 | — |
+| `L1/Discipline` · `GLOSSARY` · `Tree` · `Wisdom` | 18.9k | 压成一段**「CCBP 速览」**（知识网络是什么 / L0–L3 / Worker+Job / 猫 / 受控根 / Project） | 新常量 `CCBP_PRIMER`；四件从 `INJECT` 摘除 |
+| `L1/TOOL-REF` | 5.7k | 改成**「工具面总览 + 谁能调」两栏**：① 领航员自己有（`nav_*` / `browser-*` / `image-*` / `web-*` / `send_*`）② CH4 侧有（`text-*` / `cs-*` / `mau-*` / `file-*` / `config-*` / `majordomo-*` / `pack` / `Note`…）——**只报能干什么，不抄用法** | 新常量 `TOOLS_MAP`；原文件从 `INJECT` 摘除 |
+| `L2/Worker/Majordomo` 四件 | 11.9k | 压成**「管家是谁 / 能干什么 / 怎么打交道」**（几百字） | 从 `INJECT` 摘除 |
+| `L2/Job/CatHome` 三件 | 21.4k | 压成**「宿主可改面有哪些 / 这类操作归 majordomo」**（几百字，不留命令契约） | 从 `INJECT` 摘除 |
+| `L2/Worker/Chat` 四件 | 11.6k | 原样保留（群聊是它的本行） | — |
+| `L2/Job/Browser` 三件 | 7.9k | 原样保留（它有真 `browser-*` 工具） | — |
+| 遇阻处置 6 条 · 领航员教材 | ~4.5k | 保留（教材随功能同步） | — |
+
+**预期：93628 → 约 25–30k（砍 65–70%），CCBP 认知与派活能力不丢。**
+
+**四、待办指针** → `todo.md` §六 B16。

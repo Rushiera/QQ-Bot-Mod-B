@@ -1319,13 +1319,28 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
    * @param {string|number} [options.chat] 来源群
    * @param {boolean} [options.sourceTag] 是否加 QQ 来源头（默认 false——Rushiera 2026-10-11：转发不加 `[来自QQ]…` 头，渠道由投递通道自身承载，不污染会话前文）
    * @param {boolean} [options.watch] 是否登记观测（默认 true）
+   * @param {boolean} [options.dryRun] 干跑——只返回组装结果，不投递（默认 false；自测投递口径用）
    * @returns {Promise<object>} { ok, key, text, reply, watch }
    */
-  async function send({ key, text, chat = null, sourceTag = false, watch = true }) {
+  async function send({ key, text, chat = null, sourceTag = false, watch = true, dryRun = false }) {
     const content = sourceTag
       ? `[来自QQ][群@|Rushiera·本人] ${String(text ?? '').trim()}`
       : String(text ?? '').trim();
     const chatResolved = resolveChat(chat);
+    // 干跑：只做组装与校验，不投递 / 不记账 / 不排分析——自测「投递口径」（加不加来源头、
+    // 触发标记有没有被带上）走这条路，不必真投到猫的会话里。
+    // 判例：2026-10-11 13:08 R喵喵喵 自测「去来源头」直接 POST 真投递，一条自测消息落进
+    // majordomo 的会话前文（还是乱码——手拼 HTTP 体没走工具面）。
+    if (dryRun) {
+      record('send', `干跑（不投递）→ ${key}：${content.slice(0, 60)}`);
+      return { ok: true, dryRun: true, delivered: false, key: String(key || ''), text: content, chat: chatResolved };
+    }
+    // 未开启时不受理投递：领航员不在场就没有「指令」语境，投递只会污染猫的前文。
+    // 不受理必须出声——静默受理 = 越界不可见（AGENTS §一-4）。
+    if (state.snapshot().enabled !== true) {
+      record('error', `领航员未开启——投递不受理（${key}）：${content.slice(0, 40)}`);
+      return { ok: false, error: '领航员未开启——投递不受理', offMode: true, key: String(key || ''), text: content };
+    }
     const result = await ch4.send(key, content);
     state.noteCommand({
       chat: chatResolved,
@@ -1441,7 +1456,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
         text: body?.text || '',
         chat: body?.chat ?? null,
         sourceTag: body?.sourceTag === true,
-        watch: body?.watch !== false
+        watch: body?.watch !== false,
+        dryRun: body?.dryRun === true
       })
     }),
     'POST /api/nav/say': async ({ body }) => ({ body: await say(body?.chat, body?.text) }),

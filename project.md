@@ -1,6 +1,6 @@
 ﻿# QQBot mod B — 项目档案
 
-> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v0.46 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
+> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v0.49 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
 > Git：GitHub `Rushiera/QQ-Bot-Mod-B`（单远程 · 收工推送）
 > 创建：2026-09-26
 > 缘起：模式 A（QQ 官方 Bot 开放平台通道）受「每条用户消息最多 4 次被动回复」约束，无法支撑「猫的会话内容随时推送到 QQ」。模式 B 改为专用 QQ 号 + OneBot 11 协议端，自主收发、无被动预算。
@@ -58,7 +58,7 @@ NapCat.Shell（独立协议端 + 自带 NTQQ）── OneBot 11 HTTP/WS ──�
 | `design-qqbotb-session.md` | 设计（模块） | 会话生命周期 + 记忆面——全量窗口 / 收工轮 / 归档轮转 / 429 长轮询（判据见其 §四） |
 | `design-qqbotb-engage.md` | 设计（模块） | 群内自主参与——取消本地门 / 聚批 / 发言配额 / 发言热度自适应 / 收工轮自产话题词 / bot 指定限频 / 发言硬限制 / 发言纪律（判据见其 §十一） |
 | `design-qqbotb-memory.md` | 设计（模块） | 记忆分类——两轴三分（人 / 群 / 轮）+ 群记 `kind` 枚举 / 注入顺序 / 工具面 / 迁移（判据见其 §四） |
-| `design-qqbotb-navigator.md` | 设计（模块） | 领航员模式——QQ 群指挥 CH4 猫群：开关面 / 会话态 / 指令面（`cat.chat` · `Chat ` 双通道）/ 观测面（SSE → 截图 → 解读 → 发群）/ 共存面（指令 vs 闲聊）/ 教学面 / 健康检查 / 迁移路径（判据见其 §十一） |
+| `design-qqbotb-navigator.md` | 设计（模块） | 领航员模式——QQ 群指挥 CH4 猫群：开关面 / 会话态 / 指令面（`cat.chat` · `Chat ` 双通道）/ 观测面（SSE → 截图 → 解读 → 发群）/ 共存面（指令 vs 闲聊）/ 教学面 / 健康检查 / 迁移路径（判据见其 §十一）· **前文装配与整理入口见其 §十七** |
 | `ref-qqagent.md` | 外部参考 | qq-agent v0.4.0 拆解——模块地图 + 关键机制 + 对接点 |
 | `ref-browser-sop.md` | 外部参考 | 浏览器工具组速查卡（群 689942975 · 2026-10-10 莎制卡）——指令集 / 流程 / 铁律 + 四张演示图内容 + 取图与看图链路 |
 | `ref-qqagent-features.md` | 外部参考 | qq-agent **功能清单与实现落点**（编号索引 → 源码文件:行号；配取舍建议） |

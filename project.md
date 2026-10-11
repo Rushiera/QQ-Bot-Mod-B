@@ -61,6 +61,7 @@ NapCat.Shell（独立协议端 + 自带 NTQQ）── OneBot 11 HTTP/WS ──�
 | `ref-qqagent.md` | 外部参考 | qq-agent v0.4.0 拆解——模块地图 + 关键机制 + 对接点 |
 | `ref-browser-sop.md` | 外部参考 | 浏览器工具组速查卡（群 689942975 · 2026-10-10 莎制卡）——指令集 / 流程 / 铁律 + 四张演示图内容 + 取图与看图链路 |
 | `ref-qqagent-features.md` | 外部参考 | qq-agent **功能清单与实现落点**（编号索引 → 源码文件:行号；配取舍建议） |
+| `git-profile.md` | Git 档案 | 本项目 Git 实例——仓库 / 上传模式 / 同步范围 / 上次同步（收工更新） |
 
 ## 目录结构
 

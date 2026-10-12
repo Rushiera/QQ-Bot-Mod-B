@@ -1,14 +1,14 @@
 // app.js —— 应用装配
 //
-// 职责：把配置、日志、协议端宿主、OneBot 客户端、HTTP 服务组装成一个应用。
+// 职责：把配置、日志、协议端宿主、协议端 WebUI 客户端、OneBot 客户端、HTTP 服务组装成一个应用。
 // 边界：本文件只做装配与对外接口，具体能力在各子模块。
 
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { loadConfig, saveConfig, APP_DIR, DATA_DIR, CONFIG_PATH } from './config.js';
 import { createLogger } from './log.js';
 import { createShellLayout, readWebui, readOnebot } from './napcat/shell.js';
 import { createNapcatHost } from './napcat/host.js';
+import { createWebuiClient } from './napcat/webui.js';
 import { createLogTail } from './napcat/logtail.js';
 import { createOnebotClient } from './onebot/client.js';
 import { createWebServer } from './web/server.js';
@@ -27,6 +27,8 @@ export async function createApp() {
   const layout = createShellLayout(config.napcat.shellDir, config.napcat.uin);
   const napcat = createNapcatHost({ layout, log });
   const logTail = createLogTail({ dir: layout.logsDir, log });
+  // 协议端 WebUI 客户端——本应用访问协议端控制台的唯一出口（凭据 + QQ 登录面接口）
+  const webuiApi = createWebuiClient({ layout, log });
 
   const onebotConfig = readOnebot(layout);
   const onebot = createOnebotClient({
@@ -67,6 +69,19 @@ export async function createApp() {
       'POST /api/config': async ({ body }) => ({ body: { ok: true, config: saveConfig(body ?? {}) } }),
       'POST /api/napcat/start': async () => ({ body: await napcat.start() }),
       'POST /api/napcat/stop': async () => ({ body: await napcat.stop() }),
+      // QQ 登录面——账号掉登录后的恢复入口（状态 / 已存账号 / 快速登录）
+      'GET /api/qq/login': async () => {
+        const state = await webuiApi.loginStatus();
+        const quick = state.code === 0 ? await webuiApi.quickLoginList() : { uins: [] };
+        return { body: { ok: state.code === 0, status: state, quick: quick.uins } };
+      },
+      'POST /api/qq/login/quick': async ({ body }) => {
+        const uin = String(body?.uin ?? config.napcat.uin ?? '').trim();
+        if (!uin) return { body: { ok: false, error: '缺少账号' } };
+        const result = await webuiApi.quickLogin(uin);
+        log.info('webui', `快速登录请求（${uin}）：${result.code === 0 ? '已受理' : (result.message || '失败')}`);
+        return { body: { ok: result.code === 0, result } };
+      },
       'POST /api/onebot/connect': async () => {
         onebot.connect();
         return { body: { ok: true } };
@@ -109,41 +124,16 @@ export async function createApp() {
   /**
    * 取协议端 WebUI 的登录凭据（界面自动登录用）。
    *
-   * 凭据算法来自协议端自身实现：hash = sha256(token + ".napcat")，
-   * 登录成功后返回 base64 编码的凭据，前端把它写进 localStorage 的 token 键即视为已登录。
-   *
-   * 协议端由本应用拉起时，界面帧会先于 WebUI 就绪——就绪前 fetch 必然失败，
-   * 故按轮次重试（每轮落日志，失败可见）；全部轮次用尽才回落空串。
+   * 凭据算法与接口形态归 WebUI 客户端（src/napcat/webui.js）——本函数只保留
+   * 「启动期按轮次重试」这一档：协议端由本应用拉起时界面帧会先于 WebUI 就绪，
+   * 就绪前 fetch 必然失败，故重试（每轮落日志，失败可见）；轮次用尽才回落空串。
    *
    * @param {number} [retries] 最大尝试次数
    * @param {number} [delayMs] 每轮间隔毫秒
    * @returns {Promise<string>} 凭据（失败返回空串）
    */
   async function webuiCredential(retries = 40, delayMs = 1000) {
-    const webui = readWebui(layout);
-    if (!webui.token) {
-      log.warn('webui', '协议端未配置 WebUI 访问密钥，无法自动登录');
-      return '';
-    }
-    const hash = crypto.createHash('sha256').update(`${webui.token}.napcat`).digest('hex');
-    for (let attempt = 1; attempt <= retries; attempt += 1) {
-      try {
-        const response = await fetch(`http://127.0.0.1:${webui.port}/api/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ hash, totpCode: '' })
-        });
-        const data = await response.json();
-        const credential = data?.data?.Credential ?? '';
-        if (credential) return credential;
-        log.warn('webui', `自动登录未取得凭据（第 ${attempt}/${retries} 次）：${data?.message ?? '未知原因'}`);
-      } catch (error) {
-        log.warn('webui', `自动登录异常（第 ${attempt}/${retries} 次）：${error?.message ?? error}`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-    log.warn('webui', `自动登录在 ${retries} 次尝试内未成功`);
-    return '';
+    return webuiApi.login({ attempts: retries, delayMs });
   }
 
   /**

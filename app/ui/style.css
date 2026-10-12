@@ -136,6 +136,14 @@ main { flex: 1; overflow: hidden; display: flex; }
 }
 .form label.check { flex-direction: row; align-items: center; gap: 8px; }
 .form-actions { display: flex; align-items: center; gap: 12px; }
+.form-actions select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
 .hint { color: var(--muted); font-size: 12px; }
 
 /* 领航员页签（design-qqbotb-navigator.md）——操作条 + 状态卡片 */

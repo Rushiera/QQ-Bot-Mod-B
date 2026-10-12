@@ -1,6 +1,6 @@
 ﻿# QQBot mod B — 项目档案
 
-> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v0.56 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
+> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v0.57 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
 > Git：GitHub `Rushiera/QQ-Bot-Mod-B`（单远程 · 收工推送）
 > 创建：2026-09-26
 > 缘起：模式 A（QQ 官方 Bot 开放平台通道）受「每条用户消息最多 4 次被动回复」约束，无法支撑「猫的会话内容随时推送到 QQ」。模式 B 改为专用 QQ 号 + OneBot 11 协议端，自主收发、无被动预算。
@@ -70,17 +70,18 @@ NapCat.Shell（独立协议端 + 自带 NTQQ）── OneBot 11 HTTP/WS ──�
 QQBotB/
 ├── .gitignore                 仓库忽略规则（运行区 / 拆包产物 / 依赖 / 安装包不入库）
 ├── 启动QQBotB.bat / .vbs      🔴 入口（一键全流程重启——起自研单体）· 由 `tools/apply-entry.mjs` 生成
-├── 启动QQAgent.bat / .vbs     旧入口（只起业务面——回落路径）
+├── 启动QQAgent.bat / .vbs     旧入口名——单体入口的别名（旧快捷方式指向它）· 同上生成
+├── 启动QQAgent-仅业务面.bat / .vbs  回落路径（只起业务面——单体起不来时用）· 同上生成
 ├── project.md / todo.md / CHANGELOG.md / glossary.md
 ├── design-qqbotb*.md          设计（总纲 + 模块：session / engage / memory）· design-status.md
 ├── design-qqbotb_log.md       兑现明细（唯一证据承载处）
 ├── ref-qqagent.md             外部参考拆解（qq-agent v0.4.0）
 ├── ref-qqagent-features.md    功能清单与实现落点（编号 → 源码行号）
-├── app/                       自研单体（Electron）——协议端宿主 / OneBot 连接 / 界面
+├── app/                       自研单体（Electron）——协议端宿主 / 协议端登录面 / OneBot 连接 / 界面
 ├── src/QQBotB.Collector/      卫星程序——OneBot WS 事件收集器（M1 落地）
 ├── runtime/                   运行区
 │   ├── NapCat/NapCat.52230.Shell/  协议端（自带 NTQQ 9.9.33）
 │   └── events/                事件落盘（JSONL · 按天分文件）
 ├── _unpack/                   拆包产物（386MB · 可弃）
-└── tools/                     拆包工具（7zip-bin）+ QQ Agent 配置 / 补丁 / 自测 / 迁移脚本
+└── tools/                     拆包工具（7zip-bin）+ 入口生成器（`entry.cmd` = 单体启动体）+ QQ Agent 配置 / 补丁 / 自测 / 迁移脚本
 ```

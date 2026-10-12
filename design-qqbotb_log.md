@@ -1467,3 +1467,64 @@ R喵喵：交接摘要已注入，等待确认
 | 1 | **生效需重启业务面**（改的是 `_unpack/resources/app/` 与 `_unpack/data/`） | 待执行——重启后群里搜一次即验 |
 | 2 | 补丁链复核清单未登记本补丁（§十九 / §二十 的「补丁链复核」表） | 下次复核时并入（本补丁排链尾，依赖 cattools 先跑） |
 | 3 | 摘要抽取为启发式（块内最长文本） | 有意为之——百度结构多变，精确选择器更脆 |
+
+## 四十六、协议端登录面（自研单体）+ 入口归位（v0.57 · 2026-10-12）
+
+> 触发：Rushiera——「我重启电脑后 qq 好像掉登录了，我没看到登录方式，修一下，放我们自研单体里面」「我看我点 bat 打开还是开 napcat 没看到自己的单体打开，顺便修一下」。
+
+**现象与根因（观测实锤）：**
+
+| 面 | 证据 | 结论 |
+|:--|:--|:--|
+| 账号掉线 | `runtime/NapCat/NapCat.52230.Shell/logs/2026-10-12_08-22-19.084.log` 末两行：`10-12 10:04:20 [info] 账号状态变更为离线` → `10-12 10:05:20 [warn] [Core] [Login] 账号已离线，正在重启 Worker 以重新创建 QQ 登录服务` | 10:04 掉线；NapCat 重建登录服务后**无人可见**（协议端无窗口 + `consoleLog=false`） |
+| 登录方式不可见 | 协议端 WebUI（`:6099`）有完整登录页 `/webui/#/qq_login`（三档：快速登录 / 密码登录 / 扫码登录），但**自研单体没起来**——登录面缺的是「入口」，不是「实现」 | 单体没起 = 登录面整个消失 |
+| 单体从未启动 | `app/data/boot.log` 末条 `2026-10-11T14:41:35Z`（本地 10-11 22:41）；`wmic os get lastbootuptime` = **2026-10-12 08:21:25**；`wmic process`：QQ Agent 四进程创建于 `08:22:11–08:22:20`、`NapCatWinBootMain` `08:22:17` | 08:22 开机后**只起了业务面**（业务面先起、再由它经 snowluma 通道拉协议端）——与旧入口路径一致，故表现为「点 bat 只开 NapCat」 |
+| 单体本身可用 | `node app/tools/smoke.mjs` → 端口 3280 起、OneBot 连上（`self = Shieraru/2405997337`） | 单体无故障——问题在入口指向 |
+
+**改法（1）自研单体加「账号登录」面：**
+
+新增 `app/src/napcat/webui.js`（协议端 WebUI 客户端——凭据 + 登录接口的唯一出口；`app.js` 原 `webuiCredential` 收编为其 `login()` 的重试档）+ `app/src/app.js` 两条路由 + `app/ui/` 概览卡片。
+
+| 协议端接口（实测原文） | 用途 |
+|:--|:--|
+| `POST /api/auth/login`（body `{hash: sha256(token + ".napcat"), totpCode:""}`）→ `{data:{Credential}}` | 取 WebUI 凭据（缓存 10 分钟；401 丢弃重取一次） |
+| `POST /api/QQLogin/CheckLoginStatus`（头 `Authorization: Bearer <凭据>`）→ `{code:0,data:{isLogin,isOffline,loginPhase,qrLoginAccepted,coreReady,qrcodeurl,loginError},message}` | 账号登录态 |
+| `GET /api/QQLogin/GetQuickLoginList` → `{code:0,data:["2405997337","569145850","879531138"],message}` | 已存快速登录账号 |
+| `POST /api/QQLogin/SetQuickLogin` `{uin}` → `code:0` | 发起快速登录 |
+
+单体侧新增：`GET /api/qq/login`（登录态 + 已存账号）· `POST /api/qq/login/quick`（快速登录）。界面：概览页新增「账号登录」卡片（状态 / 阶段 / 提示 + 已存账号下拉 + 快速登录 + 扫码登录）；「协议端控制台」页签加「登录页」按钮（iframe 直达 `/webui/#/qq_login`）。
+
+**改法（2）入口归位：** `tools/apply-entry.mjs` 重构——单体启动体收敛为 `tools/entry.cmd`（各入口共用的唯一实现），入口文件改薄壳：
+
+| 文件 | 语义 |
+|:--|:--|
+| `启动QQBotB.bat` / `.vbs` | 自研单体入口（日常用） |
+| `启动QQAgent.bat` / `.vbs` | **旧入口名保留为单体入口的别名**——旧快捷方式指向它，点它必须开单体 |
+| `启动QQAgent-仅业务面.bat` / `.vbs` | 回落路径——只起业务面 QQ Agent（单体起不来时用） |
+| `tools/entry.cmd` | 单体启动体（单一真相源） |
+
+**验证实锤：**
+
+| 面 | 证据 |
+|:--|:--|
+| 语法 | `node --check` × 3（`app/src/app.js` · `app/src/napcat/webui.js` · `app/ui/app.js`）退出 0 |
+| 模块图 + 真链路 | `node app/tools/smoke.mjs` → 应用起（3280）+ OneBot 连上（`self=Shieraru/2405997337`）+ 协议端 `running` + 业务面「已在运行——跳过拉起」 |
+| 登录面真链路 | `node app/tools/verify-login.mjs` → **5/5**（经 HTTP 走界面同一出口：登录面可达 / 状态含 `isLogin` / 已存账号为数组 / 已存账号非空 / 空账号被拒） |
+| 入口生成器 | `node tools/apply-entry.mjs --dry` 7 文件 → 实跑落盘 7 文件（脚本内置 ASCII + CRLF 双断言；首跑即拦下 3 处中文注释引用）；`git ls-files --eol` 复核 `启动QQBotB.bat` / `启动QQAgent.bat` = `w/crlf` |
+| 账号恢复 | 侦察期经协议端登录面发起一次快速登录（`uin=2405997337`）→ `CheckLoginStatus` 转 `isLogin:true`；`logs/2026-10-12_10-05-24.933.log` 自 `20:27:06` 起 OneBot 服务重启并恢复收群消息 |
+
+**判例与边界：**
+
+1. **掉登录的可见性根因**：协议端无窗口 + `consoleLog=false` → NapCat 印在控制台的登录二维码无处可见；WebUI 里虽有三档登录页，但入口在自研单体里——单体没起 = 登录面整个消失。
+2. **二维码不自己渲染**：不引第三方 QR 库（勿增实体）——扫码登录走协议端自己的登录页（iframe 直达 `#/qq_login`）。
+3. **入口收敛为单一实现**：单体启动体只留 `tools/entry.cmd` 一份，四个入口薄壳——避免「同一语义两处实现」漂移。
+4. **`.bat` / `.cmd` 写入只走生成器**：ASCII + CRLF 双断言，禁 IO 工具直写（判例 2026-10-10）。
+
+**遗留：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | **生效需重启自研单体**（改的是 `app/`）——重启后概览页可见「账号登录」卡片 | 待执行（Rushiera 主持——点 `启动QQBotB.bat`） |
+| 2 | 协议端 `autoLoginAccount` 是否配成机器人号（重启后自动恢复登录，`webui.json` 现为空） | 未做——属产品决定，等 Rushiera 拍板 |
+| 3 | 界面像素级核对（卡片渲染） | 未做——需应用内核驻留才能截图；本次只做 ID 交叉核对 + 语法检查 |
+| 4 | 新文件未入库（`tools/entry.cmd` · `启动QQAgent-仅业务面.*` · `app/src/napcat/webui.js` · `app/tools/verify-login.mjs`） | 收工随 git 提交 |

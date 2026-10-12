@@ -51,12 +51,14 @@ function switchView(name) {
 /**
  * 加载协议端控制台页面（懒加载：首次切到该标签才请求）。
  *
+ * @param {string} [route] 控制台内的路由（如 `qq_login` 登录页）
  * @returns {void}
  */
-function loadWebui() {
+function loadWebui(route = '') {
   const frame = $('#webui-frame');
   if (!frame) return;
-  frame.src = `http://127.0.0.1:${currentWebuiPort}/webui/`;
+  webuiLoaded = true;
+  frame.src = `http://127.0.0.1:${currentWebuiPort}/webui/${route ? `#/${route}` : ''}`;
 }
 
 /**
@@ -104,6 +106,52 @@ async function refreshStatus() {
   $('#webui-hint').textContent = napcatRunning
     ? '协议端控制台（登录 / 配置 / 状态）'
     : '协议端未运行——启动后此处可用';
+}
+
+/** 已存账号下拉的当前选项签名（避免每次刷新重建选项）。 */
+let quickOptions = '';
+
+/**
+ * 刷新账号登录面（协议端账号状态 + 已存账号）。
+ *
+ * 掉登录后的恢复入口：状态与阶段直读协议端；快速登录按钮按已存账号发起。
+ *
+ * @returns {Promise<void>} 完成
+ */
+async function refreshLogin() {
+  let data = null;
+  try {
+    data = await api('/api/qq/login');
+  } catch {
+    return;
+  }
+
+  const reachable = data?.ok === true;
+  const state = data?.status?.state ?? null;
+  $('#ov-qq-state').textContent = reachable
+    ? (state?.isLogin ? '已登录' : '未登录')
+    : '协议端不可达';
+  $('#ov-qq-phase').textContent = state?.loginPhase || '-';
+  $('#ov-qq-error').textContent = state?.loginError || data?.status?.message || '-';
+
+  const uins = Array.isArray(data?.quick) ? data.quick : [];
+  const signature = uins.join(',');
+  if (signature !== quickOptions) {
+    quickOptions = signature;
+    const select = $('#qq-uin');
+    const previous = select.value;
+    select.textContent = '';
+    for (const uin of uins) {
+      const option = document.createElement('option');
+      option.value = uin;
+      option.textContent = uin;
+      select.appendChild(option);
+    }
+    if (uins.includes(previous)) select.value = previous;
+  }
+
+  $('#btn-qq-quick').disabled = !reachable || uins.length === 0;
+  $('#btn-qq-scan').disabled = !reachable;
 }
 
 /**
@@ -257,8 +305,28 @@ function bindEvents() {
   });
 
   $('#btn-webui-reload').addEventListener('click', () => loadWebui());
+  $('#btn-webui-login').addEventListener('click', () => loadWebui('qq_login'));
   $('#btn-webui-open').addEventListener('click', () => {
     window.open(`http://127.0.0.1:${currentWebuiPort}/webui/`, '_blank');
+  });
+
+  $('#btn-qq-quick').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const uin = $('#qq-uin').value;
+    if (!uin) return;
+    button.disabled = true;
+    button.textContent = '登录中…';
+    try {
+      await api('/api/qq/login/quick', { method: 'POST', body: { uin } });
+    } catch { /* 结果由刷新反映 */ }
+    button.textContent = '快速登录';
+    setTimeout(refreshLogin, 2000);
+  });
+
+  // 扫码登录：切到控制台页并直达协议端登录页（二维码由协议端自己渲染）
+  $('#btn-qq-scan').addEventListener('click', () => {
+    switchView('webui');
+    loadWebui('qq_login');
   });
 
   $('#btn-log-clear').addEventListener('click', () => {
@@ -289,10 +357,11 @@ refreshStatus();
 refreshNav();
 loadLogs();
 loadConfig();
-webuiLoaded = true;
+refreshLogin();
 loadWebui();
 subscribeEvents();
 setInterval(refreshStatus, 3000);
+setInterval(refreshLogin, 15000);
 setInterval(() => {
   const view = document.getElementById('view-nav');
   if (view && view.classList.contains('active')) refreshNav();

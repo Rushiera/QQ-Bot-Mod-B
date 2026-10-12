@@ -28,7 +28,7 @@
 | `app/`（除 `app/data/`） | 自研单体（Electron）源码 / 界面 / 工具 | 代码真相源 |
 | `src/QQBotB.Collector/` | 卫星收集器（C#） | 代码真相源 |
 | `tools/` | 补丁链 / 生成器 / 自测脚本 | 可复现面 |
-| `启动QQBotB.bat` / `.vbs` · `启动QQAgent.bat` / `.vbs` | 入口启动器（含生成器产物） | 入口可复现 |
+| `启动QQBotB.bat` / `.vbs` · `启动QQAgent.bat` / `.vbs` · `启动QQAgent-仅业务面.bat` / `.vbs` · `tools/entry.cmd` | 入口启动器（含生成器产物与单体启动体） | 入口可复现 |
 | `project.md` / `todo.md` / `CHANGELOG.md` / `glossary.md` / `design-*.md` / `design-*_log.md` / `ref-*.md` / `git-profile.md` | 项目档案面 | workspace 独立立项——档案随仓库走 |
 
 ### 排除（`.gitignore`）

@@ -37,6 +37,17 @@
           <p>WebUI：<span id="ov-webui">-</span></p>
         </div>
         <div class="card">
+          <h3>账号登录</h3>
+          <p>状态：<b id="ov-qq-state">检测中</b></p>
+          <p>阶段：<span id="ov-qq-phase">-</span></p>
+          <p>提示：<span id="ov-qq-error">-</span></p>
+          <div class="form-actions">
+            <select id="qq-uin" title="已存账号"></select>
+            <button id="btn-qq-quick" class="btn small">快速登录</button>
+            <button id="btn-qq-scan" class="btn small">扫码登录</button>
+          </div>
+        </div>
+        <div class="card">
           <h3>OneBot</h3>
           <p>状态：<b id="ov-onebot">未连接</b></p>
           <p>地址：<span id="ov-onebot-url">-</span></p>
@@ -55,6 +66,7 @@
     <section id="view-webui" class="view">
       <div class="webui-bar">
         <span id="webui-hint">协议端启动后可在此操作（登录、配置、查看状态）</span>
+        <button id="btn-webui-login" class="btn small">登录页</button>
         <button id="btn-webui-open" class="btn small">在浏览器中打开</button>
         <button id="btn-webui-reload" class="btn small">刷新</button>
       </div>

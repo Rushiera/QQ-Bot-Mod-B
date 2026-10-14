@@ -1,6 +1,6 @@
 // navigator/shot.js —— 回复卡渲染 · 截图 · 图片解读
 //
-// 职责：把猫的一轮视图块渲染成一张对话卡（HTML）→ 交壳层截图 → 交视觉模型解读。
+// 职责：把猫的一轮视图块渲染成一张对话卡（HTML）→ 交壳层截图 → 交视觉模型解读 → 交文本模型做 think 摘要。
 // 边界：不拉数据（块由 index.js 从 SSE 收集）、不发群（出站在 index.js）。
 // 设计：design-qqbotb-navigator.md §六。
 //
@@ -31,6 +31,12 @@ const MAX_BLOCKS = 40;
 
 /** 视觉调用超时（毫秒）。 */
 const VISION_TIMEOUT_MS = 90000;
+
+/** 摘要调用超时（毫秒）——默认值，可被 navigator.summary.timeoutMs 覆盖。 */
+const SUMMARY_TIMEOUT_MS = 20000;
+
+/** think 摘要提示词——输出只有总结本身（不加前缀、不复述原文）。 */
+const SUMMARY_PROMPT = '下面是一段 AI 猫的思考过程。用两三句中文总结它现在在想什么、进展到哪、有没有卡点，总长控制在 120 字以内。只输出总结本身，不要复述原文，不要加任何前缀。';
 
 /** 图片包裹（L1/Discipline §九——`[image-open]` / `[image-end]` 三行齐备才算数）。 */
 const IMAGE_BLOCK = /\[image-open\]([\s\S]*?)\[image-end\]/g;
@@ -110,9 +116,10 @@ function esc(text) {
  * @param {string} options.dataDir 应用数据目录
  * @param {object} options.hooks 壳层能力（shot）
  * @param {object} [options.vision] 视觉端点（baseUrl / apiKey / model）
+ * @param {object} [options.summary] 摘要配置（model / timeoutMs / maxTokens / maxChars）
  * @returns {object} 截图服务
  */
-export function createShotService({ log, dataDir, hooks, vision = null }) {
+export function createShotService({ log, dataDir, hooks, vision = null, summary = null }) {
   /**
    * 渲染一轮对话卡 HTML（CH4 会话区同款结构与样式）。
    *
@@ -221,5 +228,51 @@ ${CARD_CSS}
     }
   }
 
-  return { renderCard, shoot, analyze };
+  /**
+   * 用文本模型把猫的思考流压成两三句中文摘要（会话分析「读全」的 think 段）。
+   *
+   * 端点与 `vision` 同源（业务面 api 池）；模型取 `summary.model`——**必须选快模型**：
+   * 主模型对纯文本请求会先产数千 token 推理（2026-10-14 实测 hy4-preview-f 耗时 65 秒、
+   * 推理吃光 max_tokens 时 content 恒空），不适合播报这种高频短调用；flash 档实测 2 秒出稿。
+   *
+   * @param {string} text 思考原文
+   * @param {object} [options] 覆盖项（model / timeoutMs / maxTokens / maxChars）
+   * @returns {Promise<string>} 摘要（失败返回空串——调用方回落原文截断）
+   */
+  async function summarize(text, options = {}) {
+    const source = String(text ?? '').trim();
+    if (!source) return '';
+    if (!vision?.baseUrl || !vision?.apiKey) {
+      log.warn('navigator', '端点未配置，跳过 think 摘要');
+      return '';
+    }
+    const model = String(options.model ?? summary?.model ?? '').trim() || vision.model;
+    const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : SUMMARY_TIMEOUT_MS;
+    const maxTokens = Number(options.maxTokens) > 0 ? Number(options.maxTokens) : 400;
+    const maxChars = Number(options.maxChars) > 0 ? Number(options.maxChars) : 4000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${vision.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${vision.apiKey}` },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          messages: [{ role: 'user', content: `${SUMMARY_PROMPT}\n\n${source.slice(0, maxChars)}` }]
+        }),
+        signal: controller.signal
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error?.message || `HTTP ${response.status}`);
+      return String(data?.choices?.[0]?.message?.content ?? '').trim();
+    } catch (error) {
+      log.warn('navigator', `think 摘要失败：${error?.message ?? error}`);
+      return '';
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return { renderCard, shoot, analyze, summarize };
 }

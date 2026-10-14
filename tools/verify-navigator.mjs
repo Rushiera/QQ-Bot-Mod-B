@@ -106,11 +106,14 @@ check('守护·停止后无残留定时器', true);
 // ── 5 领航员编排：开启幂等 + 新会话通道（Rushiera 2026-10-11）────────────────
 // 判据：重复开启不得重发开工报告 / 开场巡检（判例：12:28 二次 nav_open 把 6 只猫的会话又发了一遍）。
 const sent = [];
+/** think 摘要替身（自测不真调 LLM）——按需切换返回值，验「有摘要」与「回落原文」两条路。 */
+let summaryStub = async () => '__selftest__ 摘要';
 const navIdem = createNavigator({
   log,
   dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-idem-')),
   config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
-  onebot: { call: async (action, params) => { sent.push({ action, params }); return {}; } }
+  onebot: { call: async (action, params) => { sent.push({ action, params }); return {}; } },
+  summarize: (text) => summaryStub(text)
 });
 
 const firstOpen = await navIdem.open({ by: 'app', chat: '689942975', receipt: false });
@@ -194,10 +197,21 @@ if (armed) {
     { type: 'reason', ts: 6, payload: { text: '__selftest__ 组装甲' } },
     { type: 'toolcard', ts: 7, payload: { name: 'powershell', arguments: '{"command":"__selftest__ node x"}', result: 'ERR|__selftest__ 失败', toolIndex: 1, toolTotal: 1 } }
   ], { type: 'toolrun', context: '[{"name":"text-grep","arguments":"{\\"keyword\\":\\"__selftest__\\"}"}]' });
-  const composed = navIdem.composeActivity(digest);
-  check('会话分析·读全组装（think + 工具 + 进行中）',
-    composed.includes('__selftest__ 组装甲') && composed.includes('powershell') && composed.includes('✗') && composed.includes('text-grep'),
+  const composed = await navIdem.composeActivity(digest);
+  check('会话分析·读全组装（think 摘要 + 工具 + 进行中）',
+    composed.includes('__selftest__ 摘要') && composed.includes('powershell') && composed.includes('✗') && composed.includes('text-grep'),
     composed.replace(/\n/g, ' | ').slice(0, 90));
+  check('会话分析·think 不倾倒原文', !composed.includes('__selftest__ 组装甲'),
+    composed.replace(/\n/g, ' | ').slice(0, 90));
+  summaryStub = async () => '';
+  const digestFallback = navIdem.digestFromView([
+    { type: 'reason', ts: 8, payload: { text: '__selftest__ 回落甲' } }
+  ]);
+  const fallback = await navIdem.composeActivity(digestFallback);
+  check('会话分析·摘要不可用回落原文截断',
+    fallback.includes('__selftest__ 回落甲'),
+    fallback.replace(/\n/g, ' | ').slice(0, 90));
+  summaryStub = async () => '__selftest__ 摘要';
   navIdem.disarmAll();
 }
 

@@ -1763,3 +1763,55 @@ R喵喵：交接摘要已注入，等待确认
 | 1 | 上述三步修法均未执行——待 Rushiera 点名 | 待发起 |
 | 2 | 阈值精确值未定（仅观测到 306,121 正常 / 307,082 异常的区间） | 待确认 |
 | 3 | 端点为何以 200 + 空 usage 返回（而非 4xx）——未取证 | 待确认 |
+
+---
+
+## 五十三、会话分析 think 改摘要（2026-10-14）
+
+> 触发：Rushiera「领航员的自动分析功能的 think 数据是直接照搬内容，能不能改成总结内容啊」→ 拍板走**方案 A**（LLM 总结）。
+
+**一、现状（改前）**
+
+播报正文的 think 段由 `app/src/navigator/index.js` 的 `composeActivity()` 组装，两处**直接贴思考原文**（`clipText` 截断）：
+
+| 源 | 原行为 |
+|:--|:--|
+| 直播态（`liveThink`） | `· 它现在在想：` + 原文截 900 字符 |
+| 已完成块（`digest.thinks` 末条） | `· 它最近在想：` + 原文截 1200 字符 |
+
+实况（2026-10-14 16:05 群 940257985）：推理流原文（英文为主）整段贴群。
+
+**二、卡点实测（探针 `tools/probe-text-summary.mjs`）**
+
+| 模型 | max_tokens | 耗时 | content | 结论 |
+|:--|--:|--:|:--|:--|
+| `hy4-preview-f`（业务面主模型） | 500 | — | **空**（`finish_reason=length`，reasoning 1876 字） | 推理吃光预算 |
+| `hy4-preview-f` | 4000 | **64.7 秒** | 有（质量尚可） | 太慢，播报不可用 |
+| `deepseek-v4.1-flash` | 4000 | **2.0 秒** | 有（无推理，52 token） | ✅ 选它 |
+
+→ `design-qqbotb-navigator.md` §十四 旧结论「该模型对长中文纯文本只产 `reasoning_content`、`content` 恒空」的**根因 = max_tokens 被推理吃光**，不是模型不产 content。`thinking:{type:'disabled'}` 被端点忽略（reasoning_tokens 仍 3511）。
+
+**三、落地**
+
+| 项 | 内容 |
+|:--|:--|
+| 摘要封装 | `app/src/navigator/shot.js` 新增 `summarize(text, options)`——端点与 `vision` 同源（业务面 api 池），提示词限「两三句中文 / 120 字以内 / 不复述原文」 |
+| 播报接线 | `index.js` `composeActivity` 改 **async**；think 段走 `summarizeThink()`（缓存 → 摘要 → 失败回落原文截 600 字符）；调用点 `emitOutbound` 加 `await` |
+| 缓存 | `thinkSummaryCache`（原文 → 摘要，上限 100 条）——同一段思考不重复请求 |
+| 摘要出口可注入 | `createNavigator({ summarize })`——自测传替身，不真调 LLM |
+| 配置 | `navigator.summary`：`enabled` / `model`（默认 `deepseek-v4.1-flash`）/ `timeoutMs`（20000）/ `maxTokens`（400）/ `maxChars`（4000） |
+
+**四、验证**
+
+| 面 | 结果 |
+|:--|:--|
+| 自测 | `tools/verify-navigator.mjs` **43/43**（新增「think 不倾倒原文」「摘要不可用回落原文截断」两断言） |
+| 消费点实锤 | `node tools/probe-text-summary.mjs --via=shot --model=deepseek-v4.1-flash` → **3.4 秒**出 97 字摘要（走 `shot.summarize` 真实封装） |
+
+**遗留 / 待确认：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 真链路播报验收——等一次自然触发的「还在跑」播报（投递后 60 秒 / 手动 `POST /api/nav/analyze`） | 待触发 |
+| 2 | 生效需**重启应用**（改的是单体源码 `app/src/`，非业务面补丁） | 待 Rushiera 主持 |
+| 3 | 工具调用行（最近 6 次）与旁白（120 字）未动——本就是结构化短行，非原文倾倒 | 按需再议 |

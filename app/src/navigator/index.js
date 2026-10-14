@@ -56,6 +56,20 @@ const PROGRESS_COOLDOWN_MS = 3 * 60 * 1000;
 /** 计入卡片的视图块类型。 */
 const BLOCK_TYPES = ['user', 'stream', 'text', 'reason', 'toolcard'];
 
+/** think 摘要默认配置（可被 `navigator.summary` 覆盖）——模型必须选快档，见 `shot.summarize` 注释。 */
+const SUMMARY_DEFAULTS = {
+  enabled: true, model: 'deepseek-v4.1-flash', timeoutMs: 20000, maxTokens: 400, maxChars: 4000
+};
+
+/** think 摘要输出上限（字符）——超出再截（提示词已限 120 字，此处为保底）。 */
+const THINK_SUMMARY_MAX = 200;
+
+/** think 摘要不可用时贴原文的截断长度（字符）——回落保底，不整段倾倒。 */
+const THINK_FALLBACK_MAX = 600;
+
+/** think 摘要缓存条数上限——同一段思考不重复请求。 */
+const THINK_SUMMARY_CACHE_MAX = 100;
+
 /** 每猫留存的思考块条数上限（环形）——会话分析「直接读 think」的数据源。 */
 const THINK_KEEP = 200;
 
@@ -158,12 +172,16 @@ function loadBizPort() {
  * @param {object} [options.hooks] 壳层能力（shot——Electron 截图）
  * @returns {object} 领航员接口
  */
-export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
+export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summarize: summarizeOverride }) {
   const navConfig = config?.navigator ?? {};
   const state = createNavigatorState({ file: path.join(dataDir, 'navigator.json'), log });
   const ch4 = createCh4Client({ log, mainPort: Number(navConfig.mainPort) || 8080 });
   const watcher = createCatWatcher({ log });
-  const shot = createShotService({ log, dataDir, hooks, vision: loadVision() });
+  // think 摘要配置（会话分析「读全」的 think 段——方案 A：交 LLM 总结，不整段倾倒）
+  const summaryConf = { ...SUMMARY_DEFAULTS, ...(navConfig.summary ?? {}) };
+  const shot = createShotService({ log, dataDir, hooks, vision: loadVision(), summary: summaryConf });
+  /** 摘要出口——默认走 `shot.summarize`；自测可注入替身（不真调 LLM）。 */
+  const summarize = typeof summarizeOverride === 'function' ? summarizeOverride : shot.summarize;
   const idleCloseMs = Number(navConfig.idleCloseMs) || IDLE_CLOSE_MS;
   const traceLimitRaw = Number(navConfig.resetTraceLimit);
   const traceLimit = Number.isFinite(traceLimitRaw) && traceLimitRaw >= 0 ? traceLimitRaw : RESET_TRACE_LIMIT;
@@ -203,6 +221,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
 
   /** 出站记录（猫 key → { at, kind, replyAt }）——出站决策去重与限流用。 */
   const sentLog = new Map();
+
+  /** think 摘要缓存（思考原文 → 摘要）——同一段思考不重复请求。 */
+  const thinkSummaryCache = new Map();
 
   /** 等「本轮回复」的等待器（猫 key → Set<resolve>）——前文整理重启用：挂持久观测的轮结束信号，不设时限。 */
   const roundWaiters = new Map();
@@ -658,7 +679,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
         source = 'ring';
       }
     }
-    const activity = composeActivity(digest);
+    const activity = await composeActivity(digest);
     if (activity) {
       record('watch', `${catName}：播报素材 = ${source === 'pull' ? '现场拉取' : '常驻环'}（think ${digest?.thinks?.length ?? 0} / 工具 ${digest?.tools?.length ?? 0} / 旁白 ${digest?.gaps?.length ?? 0}${digest?.liveThink ? ' / 直播思考' : ''}${digest?.liveTool ? ' / 进行中工具' : ''}）`);
     }
@@ -1250,24 +1271,63 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
+   * 思考原文 → 播报用的中文摘要（同一段思考走缓存；摘要不可用时回落原文截断）。
+   *
+   * @param {string} text 思考原文
+   * @returns {Promise<string>} 摘要文本
+   */
+  async function summarizeThink(text) {
+    const source = String(text ?? '').trim();
+    if (!source) return '';
+    if (summaryConf.enabled === false) return clipText(source, THINK_FALLBACK_MAX);
+    const cached = thinkSummaryCache.get(source);
+    if (cached) return cached;
+    let brief = '';
+    try {
+      brief = await summarize(source, {
+        model: summaryConf.model,
+        timeoutMs: Number(summaryConf.timeoutMs) || undefined,
+        maxTokens: Number(summaryConf.maxTokens) || undefined,
+        maxChars: Number(summaryConf.maxChars) || undefined
+      });
+    } catch (error) {
+      record('error', `think 摘要异常：${error?.message ?? error}——回落原文截断`);
+    }
+    if (!brief) {
+      record('watch', 'think 摘要为空——回落原文截断');
+      return clipText(source, THINK_FALLBACK_MAX);
+    }
+    const clipped = clipText(String(brief).replace(/\s+/g, ' ').trim(), THINK_SUMMARY_MAX);
+    thinkSummaryCache.set(source, clipped);
+    if (thinkSummaryCache.size > THINK_SUMMARY_CACHE_MAX) {
+      const oldest = thinkSummaryCache.keys().next().value;
+      if (oldest !== undefined) thinkSummaryCache.delete(oldest);
+    }
+    return clipped;
+  }
+
+  /**
    * 活动摘要 → 播报文本（会话分析正文）。
    *
    * 组成（Rushiera 2026-10-14「让他读全一点」）：它现在在想（直播态 → 最近思考）·
    * 最近工具调用（含进行中）· 最近旁白 · 正在写回复。全空返回空串（调用方走截图兜底）。
    *
+   * 🔴 think 段走**摘要**（Rushiera 2026-10-14 定）：思考原文是模型的推理流（常夹英文、
+   *    多转折、上千字），整段贴群不可读——交 LLM 压成两三句中文；摘要不可用时回落原文截断。
+   *
    * @param {object} digest 活动摘要
-   * @returns {string} 文本（无内容时为空串）
+   * @returns {Promise<string>} 文本（无内容时为空串）
    */
-  function composeActivity(digest) {
+  async function composeActivity(digest) {
     if (!digest) return '';
     const lines = [];
     const fresh = (at) => at && Date.now() - at <= LIVE_FRESH_MS;
     // ① 思考——直播态新鲜优先；否则最近一条完成的思考块（取最新一条：块很长，取多条会把最新那条挤出视野）
-    if (digest.liveThink && fresh(digest.liveThink.at)) {
-      lines.push(`· 它现在在想：\n${clipText(digest.liveThink.text, 900)}`);
-    } else if (digest.thinks.length > 0) {
-      const last = String(digest.thinks[digest.thinks.length - 1].text).trim();
-      lines.push(`· 它最近在想：\n${clipText(last, 1200)}`);
+    const liveThink = digest.liveThink && fresh(digest.liveThink.at) ? String(digest.liveThink.text ?? '').trim() : '';
+    const lastThink = digest.thinks.length > 0 ? String(digest.thinks[digest.thinks.length - 1].text ?? '').trim() : '';
+    const thinkSource = liveThink || lastThink;
+    if (thinkSource) {
+      lines.push(`· ${liveThink ? '它现在在想' : '它最近在想'}：\n${await summarizeThink(thinkSource)}`);
     }
     // ② 工具调用——最近 6 次 + 进行中（直播态 toolrun）
     const recent = digest.tools.slice(-6);

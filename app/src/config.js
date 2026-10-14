@@ -56,6 +56,16 @@ const DEFAULTS = {
     resetTraceLimit: 100,
     // 投递指令后自动做一次「猫会话分析」的延迟毫秒（0 = 关闭）——静默执行的反馈替代
     analyzeDelayMs: 60 * 1000,
+    // think 摘要（会话分析「读全」的 think 段——交 LLM 总结，不整段倾倒原文）。
+    // model 必须选快档：主模型对纯文本请求会先产数千 token 推理（2026-10-14 实测 65 秒、
+    // 推理吃光 max_tokens 时 content 恒空）；enabled:false = 回落原文截断。
+    summary: {
+      enabled: true,
+      model: 'deepseek-v4.1-flash',
+      timeoutMs: 20000,
+      maxTokens: 400,
+      maxChars: 4000
+    },
     services: [
       { key: 'ApiSiteAnalyzer', name: 'ApiSiteAnalyzer', kind: 'apisite', url: 'http://127.0.0.1:8766/api/sites' },
       { key: 'ComfyDock', name: 'ComfyDock', kind: 'comfydock', url: 'http://127.0.0.1:8971/api/summary' }

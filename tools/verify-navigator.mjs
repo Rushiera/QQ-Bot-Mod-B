@@ -156,29 +156,104 @@ await navIdle.close({ reason: 'idle' });
 check('编排·无群内指令的超时静默', sentIdle.length === 0, `发群次数 ${sentIdle.length}`);
 navIdle.stop();
 
-// ── 6 会话分析：直接读 think（Rushiera 2026-10-11）──────────────────────────
-// 判据：view 事件的 reason 块（persist.items）被收集 → thinkText 直接读回——
-//       会话分析据此报「它现在在干什么」，不再走截图 + 视觉判读。
+// ── 6 会话分析：读全（think + 工具调用 + 直播态）（2026-10-11 / 2026-10-14）─────
+// 判据：view 事件的 reason / toolcard / gap_text 块（persist.items · payload 形态）被收集；
+//       live 临时区（thinksse / toolrun）入直播态；thinkText 直接读回；组装含工具调用行。
+//       注：条目正文在生产形态里位于 item.payload（v0.45 首版误读 item.text——本版修正）。
 const rfRow = cats.find((row) => row.running === true && Number(row.port) > 0)
   || cats.find((row) => Number(row.port) > 0)
   || cats[0];
 const armed = await navIdem.armCat(rfRow);
 check('会话分析·观测建立', !!armed && armed.key === String(rfRow.id), String(rfRow.id));
 if (armed) {
-  navIdem.collectThink(armed, { persist: { items: [
-    { type: 'user', text: '干活' },
-    { type: 'reason', ts: 1, text: '先读索引。' },
-    { type: 'reason', ts: 2, text: '落点定了。' },
-    { type: 'reason', ts: 2, text: '落点定了。' }
+  navIdem.collectThink(armed, { persist: { mode: 'full', items: [
+    { type: 'user', ts: 1, payload: { text: '干活' } },
+    { type: 'reason', ts: 2, payload: { text: '__selftest__ 先读索引。' } },
+    { type: 'reason', ts: 3, payload: { text: '__selftest__ 落点定了。' } },
+    { type: 'reason', ts: 3, payload: { text: '__selftest__ 落点定了。' } },
+    { type: 'toolcard', ts: 4, payload: { name: 'text-read', arguments: '{"path":"__selftest__/a.md"}', result: '{"ok":true}', toolIndex: 1, toolTotal: 1 } },
+    { type: 'gap_text', ts: 5, payload: { text: '__selftest__ 读完了。' } }
   ] } });
-  check('会话分析·think 收集（去重）', armed.thinks.length === 2, `条数 ${armed.thinks.length}`);
+  check('会话分析·think 收集（payload 形态 + 去重）',
+    armed.thinks.filter((row) => row.text === '__selftest__ 落点定了。').length === 1,
+    `条数 ${armed.thinks.length}`);
+  check('会话分析·工具卡收集',
+    armed.tools.some((row) => row.name === 'text-read' && row.args.includes('__selftest__')),
+    `条数 ${armed.tools.length}`);
+  check('会话分析·旁白收集',
+    armed.gaps.some((row) => row.text === '__selftest__ 读完了。'),
+    `条数 ${armed.gaps.length}`);
+  navIdem.collectThink(armed, { live: { type: 'thinksse', context: '__selftest__ 正在想……' } });
+  check('会话分析·直播态（thinksse）', String(armed.liveThink?.text ?? '').includes('__selftest__'), '');
   const got = navIdem.thinkText(armed.key);
-  check('会话分析·直接读 think', got.includes('先读索引') && got.includes('落点定了'), got.replace(/\n/g, ' ').slice(0, 40));
+  check('会话分析·直接读 think',
+    got.includes('__selftest__ 先读索引') && got.includes('__selftest__ 落点定了'),
+    got.replace(/\n/g, ' ').slice(0, 60));
   check('会话分析·非 reason 不入', !got.includes('干活'));
+  const digest = navIdem.digestFromView([
+    { type: 'reason', ts: 6, payload: { text: '__selftest__ 组装甲' } },
+    { type: 'toolcard', ts: 7, payload: { name: 'powershell', arguments: '{"command":"__selftest__ node x"}', result: 'ERR|__selftest__ 失败', toolIndex: 1, toolTotal: 1 } }
+  ], { type: 'toolrun', context: '[{"name":"text-grep","arguments":"{\\"keyword\\":\\"__selftest__\\"}"}]' });
+  const composed = navIdem.composeActivity(digest);
+  check('会话分析·读全组装（think + 工具 + 进行中）',
+    composed.includes('__selftest__ 组装甲') && composed.includes('powershell') && composed.includes('✗') && composed.includes('text-grep'),
+    composed.replace(/\n/g, ' | ').slice(0, 90));
   navIdem.disarmAll();
 }
 
 navIdem.stop();
+
+// ── 7 轻通道：未开启模式的投递闸门（Rushiera 2026-10-14）────────────────────
+// 判据：未开启 + 无新鲜 VIP → 不受理（offMode）；未开启 + 本人新鲜 VIP @ → 放行（闸门过，
+//       交付面失败不算闸门失败）；非 qq 通道一律不受理。
+let vipHandler = null;
+const navLight = createNavigator({
+  log,
+  dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-light-')),
+  config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
+  onebot: {
+    call: async () => ({}),
+    onEvent: (fn) => { vipHandler = fn; },
+    status: () => ({ self: { userId: 2405997337 } })
+  }
+});
+const rej1 = await navLight.send({ key: 'majordomo', text: '自测', by: 'qq' });
+check('轻通道·未开启且无 VIP → 不受理', rej1.ok === false && rej1.offMode === true, String(rej1.error ?? ''));
+if (typeof vipHandler === 'function') {
+  vipHandler({
+    post_type: 'message', message_type: 'group', user_id: '569145850', group_id: '940257985',
+    message: [{ type: 'at', data: { qq: '2405997337' } }], raw_message: '@Shieraru 自测'
+  });
+}
+const pass = await navLight.send({ key: 'no-such-cat-selftest', text: '自测', by: 'qq' });
+check('轻通道·未开启 + 新鲜 VIP → 放行（非 offMode）', pass.offMode !== true, JSON.stringify(pass).slice(0, 90));
+const rej2 = await navLight.send({ key: 'majordomo', text: '自测' });
+check('轻通道·非 qq 通道不受理', rej2.ok === false && rej2.offMode === true, String(rej2.error ?? ''));
+navLight.stop();
+
+// ── 8 轻通道：回复观测的登记与撤除（Rushiera 2026-10-14）────────────────────
+const navWatch = createNavigator({
+  log,
+  dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-watch-')),
+  config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
+  onebot: { call: async () => ({}), status: () => ({ self: { userId: 2405997337 } }) }
+});
+navWatch.armLightWatch('majordomo', 'selftest');
+check('轻通道·回复观测登记', navWatch.lightWatches.has('majordomo'), '');
+navWatch.cancelLightWatch('majordomo');
+check('轻通道·回复观测撤除', !navWatch.lightWatches.has('majordomo'), '');
+navWatch.stop();
+
+// ── 9 现场拉取：一次 SSE 取整幅视图（Rushiera 2026-10-14）──────────────────
+const navPull = createNavigator({
+  log,
+  dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-pull-')),
+  config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
+  onebot: { call: async () => ({}), status: () => ({ self: { userId: 2405997337 } }) }
+});
+const pull = await navPull.pullCatView('majordomo');
+check('现场拉取·取到整幅视图', !!pull && Array.isArray(pull.items), pull ? `items=${pull.items.length} live=${pull.live?.type ?? 'null'}` : 'null');
+navPull.stop();
 
 const passed = results.filter((r) => r.ok).length;
 console.log(`\n结果：${passed}/${results.length} 通过`);

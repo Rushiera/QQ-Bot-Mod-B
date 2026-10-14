@@ -1590,3 +1590,50 @@ R喵喵：交接摘要已注入，等待确认
 | 消费点 | `GET http://127.0.0.1:3280/api/nav/status` → `idleCloseMs: 10800000`（= 180 分钟）· `enabled: true`（重启后状态恢复）· 持久观测重建（10 只猫订阅就绪） |
 
 **生效：** 已重启生效（改的是 `app/` 源码——启动时读取，重启吃下）。
+
+---
+
+## 四十九、轻通道 + 会话分析读全（v0.60 · 2026-10-14）
+
+> 触发：Rushiera 2026-10-14（群 940257985，经领航员投递到主干）——
+> ①「让majordomo上工qqbotb，要求是在即使没有开领航员模式，我直接在群里对bot下指定猫的指令的时候依然能完成会话转发，然后群里下的指令完成后按领航员的方式往群里推送回复，但不带投送后的分析」；
+> ②「跟R喵说，上工qqbotb，领航员消息投递后的60秒回复的消息有点问题，疑似没有读会话的think和工具调用等内容，只读了回复和用户输入，让他读全一点」。
+
+**一、轻通道（未开启模式的投递 · 需求 ①）**
+
+| 面 | 文件 | 改动 |
+|:--|:--|:--|
+| 投递闸门 | `app/src/navigator/index.js` `send()` | 未开启时不再一律拒——`by:'qq'` + `vipFresh()`（本人 120 秒内 @ 过）放行（轻通道）；其余维持 `offMode` 拒绝 |
+| 回复观测 | 同上（新 `armLightWatch` / `lightTick` / `cancelLightWatch` / `clearLightWatches`） | 轻通道投递成功 → 每 5 秒轮询 `keyinfo`，检出「投递之后的回复 + 轮结算」→ 截图 → 发回消息群 → 撤除；**不排分析**（不带投送后分析）；超时 120 分钟撤除；领航员开启 / 应用停止时清空 |
+| 状态面 | 同上 `status()` | 新增 `lightWatches` 字段 |
+| 业务面工具 | `tools/navigator/nav-tools.js` | `nav_send` 传 `by:'qq'`；描述补「未开启时也能投——限本人点名指令」 |
+| 教材 | `tools/apply-qqagent-config.mjs` `NAV_RULES` | 「VIP 通道」段改「未开启时点名指令照样投递（投递 + 回复推送，不带分析）」；「指令 / 闲聊」段改「未开启时没点名猫的不要投」 |
+
+**二、会话分析读全（需求 ②）**
+
+| 面 | 文件 | 改动 |
+|:--|:--|:--|
+| 根因①：think 收集形态错 | `app/src/navigator/index.js` `collectThink` | v0.45 首版读 `item.text`——生产形态条目正文在 `item.payload`（`{type, ts, msgIndex, round, payload}`）；自测喂旧形态故「25/25 过」而生产从未收集到。本版改读 `payload.text`（兼容旧形态） |
+| 根因②：只收 think | 同上 | 补收工具卡（`toolcard` → `tools` 环：name / args / result / durMs）+ 旁白（`gap_text`）+ 直播态（`live`：thinksse / toolrun / replysse / empty） |
+| 读全主路：现场拉取 | 同上（新 `pullCatView` / `digestFromView` / `digestFromSession` / `composeActivity`） | 分析时**一次性 SSE 取整幅视图**（不依赖常驻订阅健康——订阅断了也读得到）→ 归一化为活动摘要 → 组装：它现在/最近在想 · 最近工具调用（近 6 次 + 进行中）· 最近旁白 · 正在写回复；现场拉取失败回落常驻环；两路全空才走截图 + 视觉判读 |
+| 根因③：订阅断线不自愈 | 同上（`armCat` 重连 + 新 `ensureWatching`） | 订阅中断后不再等到下次开启——空闲守护每 60 秒补订；投递成功时对目标猫即时补一次。判例：当日 13:01–13:14 十只猫订阅先后 terminated（此后未再补订）；叠加 payload 形态误读——分析素材两路皆空，播报连续回落截图 + 视觉判读（15:24 / 15:27 两条即此形态） |
+
+**验证实锤：**
+
+| 面 | 证据 |
+|:--|:--|
+| 语法 | `node --check` × 3（`app/src/navigator/index.js` · `tools/navigator/nav-tools.js` · `tools/apply-qqagent-config.mjs`）退出 0 |
+| 自测 | `node tools/verify-navigator.mjs` → **39/39**（29 → 39：payload 形态收集 / 工具卡 / 旁白 / 直播态 / 读全组装 / 轻通道闸门三例 / 轻观测登记撤除 / 现场拉取） |
+| 自测 | `node tools/verify-qqagent-navtools.mjs` → **8/8**（工具组 10 件在位） |
+| 落盘 | `node tools/patch-qqagent-navigator.mjs` → `src/nav-tools.js` **updated**（其余 5 点 skipped）；`node tools/apply-qqagent-config.mjs --roletext-only` → `roleTextChars` 94367 → **94483** |
+| 重启 | `启动QQBotB.bat`（`tools/entry.cmd`）一键全流程 ×2（16:03 / 16:09）——持久观测重建（10 只猫订阅就绪；重启前 `watching` 为空——十只全部失联） |
+| 消费点·读全 | 手动 `POST /api/nav/analyze {key:'majordomo', delayMs:0}` → 播报发群 940257985：日志 `播报素材 = 现场拉取（think 121 / 工具 158 / 旁白 10 / 进行中工具）`；消息含「它最近在想：…」+「最近工具调用（近 6 次）：[时] 名 ✓ · 参数 …」+「▶ …（进行中）」 |
+| 消费点·轻通道闸门 | `POST /api/nav/send {by:'qq'}` 未开启 + 无 VIP → `offMode` 拒绝（出声）；轻观测登记 / 撤除 / 开启清空在自测与状态面（`lightWatches`）实锤 |
+
+**遗留：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 轻通道群内 E2E（退出领航员 → 群里点名指令 → 回复截图回群） | 待验——主理方发起（本人 @ + 点名猫） |
+| 2 | 读全的下一次自然触发（投递后 60 秒） | 待验——同上；手动触发路径已实锤 |
+| 3 | 领航员开启时轻观测的「并入」路径（先轻通道投递、随后开启领航员） | 代码就位（`open()` 清空 + 持久观测接管）；自然场景罕见，未单独实测 |

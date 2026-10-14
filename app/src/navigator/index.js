@@ -59,6 +59,24 @@ const BLOCK_TYPES = ['user', 'stream', 'text', 'reason', 'toolcard'];
 /** 每猫留存的思考块条数上限（环形）——会话分析「直接读 think」的数据源。 */
 const THINK_KEEP = 200;
 
+/** 每猫留存的工具卡条数上限（环形）——会话分析「工具调用」的数据源。 */
+const TOOL_KEEP = 50;
+
+/** 每猫留存的旁白（gap_text）条数上限（环形）——会话分析「最近旁白」的数据源。 */
+const GAP_KEEP = 20;
+
+/** 直播态（live 临时区）视为新鲜的时间窗（毫秒）——超窗即回落已完成块。 */
+const LIVE_FRESH_MS = 150 * 1000;
+
+/** 现场拉取视图（一次性 SSE）的首帧等待上限（毫秒）。 */
+const PULL_TIMEOUT_MS = 5000;
+
+/** 轻通道巡检间隔（毫秒）——未开启模式下等回复。 */
+const LIGHT_POLL_MS = 5000;
+
+/** 轻通道观测最长等待（毫秒）——超时撤除（留痕）。 */
+const LIGHT_WATCH_MAX_MS = 120 * 60 * 1000;
+
 /**
  * 带超时的 JSON 请求（探测外部服务用——失败即视为离线，不抛出）。
  *
@@ -179,6 +197,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
 
   /** 投递后「猫会话分析」定时器（猫 key → 定时器）——每猫同一时刻只留一个。 */
   const analyzeTimers = new Map();
+
+  /** 轻通道观测（猫 key → { key, chat, since, timer, done }）——未开启模式的「等回复」一次性观测。 */
+  const lightWatches = new Map();
 
   /** 出站记录（猫 key → { at, kind, replyAt }）——出站决策去重与限流用。 */
   const sentLog = new Map();
@@ -595,11 +616,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       record('watch', `${catName}：无新回复，静默`);
       return { ok: true, sent: 'none' };
     }
+    let resolvedKey = String(key);
     let running = false;
     try {
-      const id = await ch4.resolveKey(key);
+      resolvedKey = await ch4.resolveKey(key);
       const cats = await ch4.cats();
-      const row = cats.find((item) => String(item?.id) === String(id));
+      const row = cats.find((item) => String(item?.id) === String(resolvedKey));
       const runState = String(row?.runState ?? 'idle');
       running = runState.toLowerCase() !== 'idle';
     } catch (error) {
@@ -614,11 +636,35 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       record('watch', `${catName}：播报静默（距上次发群 ${Math.round(gap / 1000)} 秒，冷却 ${Math.round(PROGRESS_COOLDOWN_MS / 1000)} 秒）`);
       return { ok: true, sent: 'none', reason: 'cooldown' };
     }
-    // 🔴 直接读 think（Rushiera 2026-10-11）：猫还在跑时，思考块（reason）就是「它现在在干什么」的
-    //    一手信息——直接读出来发群，不再走截图 + 视觉判读（慢、贵、二手）。取不到 think 才回落判读。
-    const think = thinkText(key);
+    // 🔴 读全（Rushiera 2026-10-14）：先**现场拉取**该猫的整幅视图（think + 工具调用 + 旁白 + 直播态）——
+    //    不依赖常驻订阅健康（订阅断了也读得到）；拉取失败回落常驻环；两路全空才走截图 + 视觉判读。
+    let digest = null;
+    let source = '';
+    try {
+      const pulled = await pullCatView(resolvedKey);
+      if (pulled) {
+        digest = digestFromView(pulled.items, pulled.live);
+        source = 'pull';
+      }
+    } catch (error) {
+      record('error', `播报（${key}）：现场拉取异常（${error?.message ?? error}）`);
+    }
+    const emptyDigest = (d) => !d || (d.thinks.length === 0 && d.tools.length === 0 && d.gaps.length === 0
+      && !d.liveThink && !d.liveTool && !d.liveReply);
+    if (emptyDigest(digest)) {
+      const ring = digestFromSession(resolvedKey);
+      if (!emptyDigest(ring)) {
+        digest = ring;
+        source = 'ring';
+      }
+    }
+    const activity = composeActivity(digest);
+    if (activity) {
+      record('watch', `${catName}：播报素材 = ${source === 'pull' ? '现场拉取' : '常驻环'}（think ${digest?.thinks?.length ?? 0} / 工具 ${digest?.tools?.length ?? 0} / 旁白 ${digest?.gaps?.length ?? 0}${digest?.liveThink ? ' / 直播思考' : ''}${digest?.liveTool ? ' / 进行中工具' : ''}）`);
+    }
     let insight = '';
-    if (!think) {
+    if (!activity) {
+      // 兜底：截图 + 视觉判读（读不到 think / 工具时才走——慢、贵、二手）
       try {
         const png = await shot.shoot({ catName, blocks: replyBlocksOf(rows), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
         if (png) insight = await shot.analyze(png, PROGRESS_QUESTION);
@@ -627,7 +673,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       }
     }
     const head = `⏳ ${catName} 还在跑${label}，尚未回复`;
-    const body = [head, progressFacts(rows), think ? `· 它现在在想：\n${think}` : insight]
+    const body = [head, progressFacts(rows), activity || insight]
       .filter((line) => String(line ?? '').trim()).join('\n');
     const sent = await sayAt(target, body, vipUser);
     if (sent.ok) {
@@ -686,29 +732,57 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
-   * 为一只猫建立持久观测（领航员开启期间常驻——任何一轮回复都截图发群，无例外）。
+   * 为一只猫建立（或修复）持久观测——领航员开启期间常驻（任何一轮回复都截图发群，无例外）。
+   *
+   * 断线自愈（2026-10-14）：已有会话但订阅已断（watcher 无该 key）→ 就地重连——
+   * 不重建会话对象（think / 工具环保留，重连后的全量帧经去重补齐）。
    *
    * @param {object} row 猫状态（cat 清单条目）
    * @returns {Promise<object|null>} 观测会话
    */
   async function armCat(row) {
     const key = String(row?.id ?? '');
-    if (!key || sessions.has(key)) return sessions.get(key) ?? null;
+    if (!key) return null;
+    const existing = sessions.get(key);
+    if (existing && watcher.list().includes(key)) return existing;
     const port = Number(row?.port) || await ch4.portOf(key);
     if (!port) {
       record('error', `未取到 ${key} 的对话端口，跳过观测`);
       return null;
     }
+    if (existing) {
+      // 断线重连——保留已收集的环，只换连接与轮询
+      if (existing.pollTimer) clearInterval(existing.pollTimer);
+      existing.port = port;
+      existing.done = false;
+      existing.startedAt = Date.now();
+      existing.sawRun = false;
+      existing.blocks = [];
+      await watcher.subscribe({
+        key,
+        port,
+        onEvent: (frame) => onCatEvent(existing, frame),
+        onClose: () => { /* 持久观测：断线不自动重连（ensureWatching 巡检会补） */ }
+      });
+      existing.pollTimer = setInterval(() => {
+        pollRoundEnd(existing).catch(() => { /* 内部已留痕 */ });
+      }, POLL_INTERVAL_MS);
+      record('watch', `重连 ${existing.name}（端口 ${port}）`);
+      return existing;
+    }
     const session = {
       key, name: String(row?.name || key), port, chat: null,
-      blocks: [], thinks: [], thinkSeen: new Set(), startedAt: Date.now(), sawRun: false, pollTimer: null, done: false
+      blocks: [], thinks: [], thinkSeen: new Set(),
+      tools: [], toolSeen: new Set(), gaps: [], gapSeen: new Set(),
+      liveThink: null, liveTool: null, liveReply: null,
+      startedAt: Date.now(), sawRun: false, pollTimer: null, done: false
     };
     sessions.set(key, session);
     await watcher.subscribe({
       key,
       port,
       onEvent: (frame) => onCatEvent(session, frame),
-      onClose: () => { /* 持久观测：断线不自动重连（下一轮 armAll 会补） */ }
+      onClose: () => { /* 持久观测：断线不自动重连（ensureWatching 巡检会补） */ }
     });
     session.pollTimer = setInterval(() => {
       pollRoundEnd(session).catch(() => { /* 内部已留痕 */ });
@@ -742,6 +816,35 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       }
     }
     record('watch', `持久观测就绪（${sessions.size} 只猫）——任何一轮回复都会截图发群`);
+    return sessions.size;
+  }
+
+  /**
+   * 补订阅巡检——对所有运行中的猫确保观测在线（断线重连 / 漏订补建）。
+   *
+   * 触发：空闲守护每 60 秒一次；投递成功时对目标猫即时补一次。
+   * 判据：`watcher.list()` 是订阅存活唯一真相——不在列表里的（含断线后被清出）即补。
+   *
+   * @returns {Promise<number>} 观测会话数
+   */
+  async function ensureWatching() {
+    let cats = [];
+    try {
+      cats = await ch4.cats();
+    } catch (error) {
+      record('error', `补订阅巡检失败：CH4 不可达（${error?.message ?? error}）`);
+      return sessions.size;
+    }
+    for (const row of cats) {
+      if (!row?.running) continue;
+      const key = String(row?.id ?? '');
+      if (!key || watcher.list().includes(key)) continue;
+      try {
+        await armCat(row);
+      } catch (error) {
+        record('error', `补订阅 ${key} 失败：${error?.message ?? error}`);
+      }
+    }
     return sessions.size;
   }
 
@@ -863,10 +966,13 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   }
 
   /**
-   * 从 view 事件载荷里收集「思考块」（reason）——会话分析「直接读 think」的数据源。
+   * 从 view 事件载荷里收集活动素材——思考（reason）/ 工具卡（toolcard）/ 旁白（gap_text）/
+   * 直播态（live）——会话分析的数据源（常驻环）。
    *
-   * 载荷两态都认：`persist.items[]`（视图状态）/ 顶层 `renderType`（单块推送）。
-   * 只做留存与去重，**不做判读**——取用归 `thinkText` / `emitOutbound`。
+   * 载荷两态都认：`persist.items[]`（视图状态 · full / append 两种 mode）/ 顶层 `renderType`（单块推送）。
+   * 🔴 条目正文在生产形态里位于 `item.payload`（`{type, ts, msgIndex, round, payload:{text | name,arguments,result}}`）——
+   *    v0.45 首版误读 `item.text`，生产从未收集到（自测喂的是旧形态）；本版修正（2026-10-14）。
+   * 只做留存与去重，**不做判读**——取用归 `thinkText` / `digestFromSession` / `composeActivity`。
    *
    * @param {object} session 观测会话
    * @param {object} data view 事件载荷
@@ -877,14 +983,56 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     const items = Array.isArray(data?.persist?.items) ? data.persist.items : [data];
     for (const item of items) {
       const type = String(item?.type ?? item?.renderType ?? '');
-      if (type !== 'reason') continue;
-      const text = String(item?.text ?? '').trim();
-      if (!text || session.thinkSeen.has(text)) continue;
-      session.thinkSeen.add(text);
-      session.thinks.push({ ts: Number(item?.ts ?? item?.CreatedAt) || Date.now(), text });
-      while (session.thinks.length > THINK_KEEP) {
-        const dropped = session.thinks.shift();
-        if (dropped) session.thinkSeen.delete(dropped.text);
+      const payload = item?.payload ?? {};
+      const ts = Number(item?.ts ?? 0) || Date.now();
+      if (type === 'reason') {
+        const text = String(payload.text ?? item?.text ?? '').trim(); // payload 生产形态；item.text 兼容旧自测
+        if (!text || session.thinkSeen.has(text)) continue;
+        session.thinkSeen.add(text);
+        session.thinks.push({ ts, text });
+        while (session.thinks.length > THINK_KEEP) {
+          const dropped = session.thinks.shift();
+          if (dropped) session.thinkSeen.delete(dropped.text);
+        }
+      } else if (type === 'toolcard') {
+        const name = String(payload.name ?? '').trim();
+        if (!name) continue;
+        const dedupe = `${ts}:${name}:${payload.toolIndex ?? 0}`;
+        if (session.toolSeen.has(dedupe)) continue;
+        session.toolSeen.add(dedupe);
+        session.tools.push({
+          ts, name,
+          args: String(payload.arguments ?? ''),
+          result: String(payload.result ?? ''),
+          durMs: Number(payload.durMs ?? -1),
+          dedupe
+        });
+        while (session.tools.length > TOOL_KEEP) {
+          const dropped = session.tools.shift();
+          if (dropped) session.toolSeen.delete(dropped.dedupe);
+        }
+      } else if (type === 'gap_text') {
+        const text = String(payload.text ?? '').trim();
+        if (!text || session.gapSeen.has(text)) continue;
+        session.gapSeen.add(text);
+        session.gaps.push({ ts, text });
+        while (session.gaps.length > GAP_KEEP) {
+          const dropped = session.gaps.shift();
+          if (dropped) session.gapSeen.delete(dropped.text);
+        }
+      }
+    }
+    // 直播态（临时区 · 整段覆盖）——thinksse / toolrun / replysse / empty（A196 白名单）
+    const live = data?.live;
+    if (live && typeof live === 'object' && typeof live.type === 'string') {
+      const context = String(live.context ?? '');
+      if (live.type === 'thinksse') session.liveThink = { at: Date.now(), text: context };
+      else if (live.type === 'toolrun') session.liveTool = { at: Date.now(), raw: context };
+      else if (live.type === 'replysse') session.liveReply = { at: Date.now(), text: context };
+      else if (live.type === 'empty') {
+        session.liveThink = null;
+        session.liveTool = null;
+        session.liveReply = null;
       }
     }
   }
@@ -905,6 +1053,249 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     if (picked.length === 0) return '';
     const text = picked.join('\n…\n');
     return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+  }
+
+  /**
+   * 文本截断（超出加省略号）。
+   *
+   * @param {string} text 原文
+   * @param {number} n 上限字符数
+   * @returns {string} 截断结果
+   */
+  function clipText(text, n) {
+    const s = String(text ?? '').trim();
+    return s.length > n ? `${s.slice(0, n)}…` : s;
+  }
+
+  /**
+   * 工具参数摘要——从 arguments JSON 里挑一个最能说明「在干什么」的字段。
+   *
+   * @param {string} argsJson 参数 JSON 原文
+   * @returns {string} 摘要（≤80 字符）
+   */
+  function toolArgBrief(argsJson) {
+    const raw = String(argsJson ?? '').trim();
+    if (!raw) return '';
+    try {
+      const obj = JSON.parse(raw);
+      if (obj && typeof obj === 'object') {
+        const order = ['command', 'path', 'file', 'pattern', 'keyword', 'key', 'proj', 'class', 'member', 'text', 'url', 'query', 'expression', 'name'];
+        for (const k of order) {
+          const v = obj[k];
+          if (v !== undefined && v !== null && String(v).trim()) return clipText(String(v).replace(/\s+/g, ' '), 80);
+        }
+        for (const v of Object.values(obj)) {
+          if (typeof v === 'string' && v.trim()) return clipText(v.replace(/\s+/g, ' '), 80);
+        }
+      }
+    } catch { /* 非 JSON——原样截断 */ }
+    return clipText(raw.replace(/\s+/g, ' '), 80);
+  }
+
+  /**
+   * 解析直播态 toolrun 的 context（未完成工具卡数组 JSON）。
+   *
+   * @param {string} raw context 原文
+   * @returns {Array<{name: string, brief: string}>} 进行中的工具
+   */
+  function parseToolRun(raw) {
+    try {
+      const arr = JSON.parse(String(raw ?? ''));
+      if (!Array.isArray(arr)) return [];
+      return arr.map((row) => ({
+        name: String(row?.name ?? '?'),
+        brief: toolArgBrief(String(row?.arguments ?? ''))
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 现场拉取某猫的视图截面——一次性连它的 SSE，取首帧（全量：persist.items + live）即断。
+   *
+   * 为什么不用常驻环独担（Rushiera 2026-10-14「让他读全一点」）：常驻订阅会断线（CH4 重启 /
+   * 端口变更），断线期间环停更——会话分析就只剩「回复 + 用户输入」。现场拉取不依赖订阅健康：
+   * 任何时候都拿到「此刻的整幅视图」（think / 工具卡 / 旁白 / 直播态）。
+   *
+   * @param {string} key 猫 key
+   * @param {object} [options] 选项
+   * @param {number} [options.timeoutMs] 首帧等待上限（毫秒）
+   * @returns {Promise<object|null>} { items, live }（取不到为 null）
+   */
+  async function pullCatView(key, { timeoutMs = PULL_TIMEOUT_MS } = {}) {
+    let port = 0;
+    try {
+      port = await ch4.portOf(key);
+    } catch (error) {
+      record('error', `现场拉取（${key}）：端口解析失败（${error?.message ?? error}）`);
+      return null;
+    }
+    if (!port) {
+      record('error', `现场拉取（${key}）：端口为空，跳过`);
+      return null;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/v1/stream`, { signal: controller.signal });
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const match = /\r?\n\r?\n/.exec(buffer);
+        if (!match) continue;
+        const raw = buffer.slice(0, match.index);
+        buffer = buffer.slice(match.index + match[0].length);
+        let event = 'message';
+        const dataLines = [];
+        for (const line of raw.split('\n')) {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+        }
+        if (event !== 'view' || dataLines.length === 0) continue; // 首帧可能是 snapshot——继续等 view
+        let data = null;
+        try { data = JSON.parse(dataLines.join('\n')); } catch { continue; }
+        if (!data || !data.persist) continue; // 要的是带 persist 的全量帧
+        try { await reader.cancel(); } catch { /* 流已关 */ }
+        return { items: Array.isArray(data.persist.items) ? data.persist.items : [], live: data.live ?? null };
+      }
+      return null;
+    } catch (error) {
+      record('error', `现场拉取（${key}）失败：${error?.message ?? error}`);
+      return null;
+    } finally {
+      clearTimeout(timer);
+      try { controller.abort(); } catch { /* 已关 */ }
+    }
+  }
+
+  /**
+   * 视图条目 → 活动摘要（会话分析的数据源归一化——现场拉取与常驻环共用同一形状）。
+   *
+   * @param {Array<object>} items 视图条目（{type, ts, payload}）
+   * @param {object|null} [live] 临时区（{type, context}）
+   * @returns {object} { thinks, tools, gaps, liveThink, liveTool, liveReply }
+   */
+  function digestFromView(items, live = null) {
+    const rows = Array.isArray(items) ? items : [];
+    const thinks = [];
+    const tools = [];
+    const gaps = [];
+    const seenThink = new Set();
+    const seenTool = new Set();
+    const seenGap = new Set();
+    for (const item of rows) {
+      const type = String(item?.type ?? item?.renderType ?? '');
+      const payload = item?.payload ?? {};
+      const ts = Number(item?.ts ?? 0) || 0;
+      if (type === 'reason') {
+        const text = String(payload.text ?? item?.text ?? '').trim();
+        if (text && !seenThink.has(text)) {
+          seenThink.add(text);
+          thinks.push({ ts, text });
+        }
+      } else if (type === 'toolcard') {
+        const name = String(payload.name ?? '').trim();
+        if (!name) continue;
+        const dedupe = `${ts}:${name}:${payload.toolIndex ?? 0}`;
+        if (seenTool.has(dedupe)) continue;
+        seenTool.add(dedupe);
+        tools.push({
+          ts, name,
+          args: String(payload.arguments ?? ''),
+          result: String(payload.result ?? ''),
+          durMs: Number(payload.durMs ?? -1)
+        });
+      } else if (type === 'gap_text') {
+        const text = String(payload.text ?? '').trim();
+        if (text && !seenGap.has(text)) {
+          seenGap.add(text);
+          gaps.push({ ts, text });
+        }
+      }
+    }
+    const digest = { thinks, tools, gaps, liveThink: null, liveTool: null, liveReply: null };
+    if (live && typeof live === 'object') {
+      const at = Date.now();
+      const context = String(live.context ?? '');
+      if (live.type === 'thinksse' && context.trim()) digest.liveThink = { at, text: context };
+      else if (live.type === 'toolrun' && context.trim()) digest.liveTool = { at, raw: context };
+      else if (live.type === 'replysse' && context.trim()) digest.liveReply = { at, text: context };
+    }
+    return digest;
+  }
+
+  /**
+   * 常驻环 → 活动摘要（现场拉取失败时的回落数据源）。
+   *
+   * @param {string} key 猫 key（已解析 id）
+   * @returns {object|null} 活动摘要（无会话时 null）
+   */
+  function digestFromSession(key) {
+    const session = sessions.get(String(key));
+    if (!session) return null;
+    return {
+      thinks: session.thinks.slice(-12),
+      tools: session.tools.slice(-12),
+      gaps: session.gaps.slice(-4),
+      liveThink: session.liveThink,
+      liveTool: session.liveTool,
+      liveReply: session.liveReply
+    };
+  }
+
+  /**
+   * 活动摘要 → 播报文本（会话分析正文）。
+   *
+   * 组成（Rushiera 2026-10-14「让他读全一点」）：它现在在想（直播态 → 最近思考）·
+   * 最近工具调用（含进行中）· 最近旁白 · 正在写回复。全空返回空串（调用方走截图兜底）。
+   *
+   * @param {object} digest 活动摘要
+   * @returns {string} 文本（无内容时为空串）
+   */
+  function composeActivity(digest) {
+    if (!digest) return '';
+    const lines = [];
+    const fresh = (at) => at && Date.now() - at <= LIVE_FRESH_MS;
+    // ① 思考——直播态新鲜优先；否则最近一条完成的思考块（取最新一条：块很长，取多条会把最新那条挤出视野）
+    if (digest.liveThink && fresh(digest.liveThink.at)) {
+      lines.push(`· 它现在在想：\n${clipText(digest.liveThink.text, 900)}`);
+    } else if (digest.thinks.length > 0) {
+      const last = String(digest.thinks[digest.thinks.length - 1].text).trim();
+      lines.push(`· 它最近在想：\n${clipText(last, 1200)}`);
+    }
+    // ② 工具调用——最近 6 次 + 进行中（直播态 toolrun）
+    const recent = digest.tools.slice(-6);
+    const running = digest.liveTool && fresh(digest.liveTool.at) ? parseToolRun(digest.liveTool.raw) : [];
+    if (recent.length > 0 || running.length > 0) {
+      const toolLines = recent.map((row) => {
+        const time = row.ts ? new Date(row.ts).toLocaleTimeString('zh-CN', { hour12: false }) : '--:--:--';
+        const result = String(row.result ?? '').trim();
+        const failed = result.startsWith('ERR|');
+        const brief = toolArgBrief(row.args);
+        const err = failed ? ` · ${clipText(result.replace(/\s+/g, ' '), 60)}` : '';
+        return `  [${time}] ${row.name} ${failed ? '✗' : '✓'}${brief ? ` · ${brief}` : ''}${err}`;
+      });
+      for (const row of running) {
+        toolLines.push(`  ▶ ${row.name}（进行中）${row.brief ? ` · ${row.brief}` : ''}`);
+      }
+      lines.push(`· 最近工具调用${recent.length > 0 ? `（近 ${recent.length} 次）` : '（进行中）'}：\n${toolLines.join('\n')}`);
+    }
+    // ③ 旁白——最近一条（近 10 分钟内）
+    const gap = digest.gaps[digest.gaps.length - 1];
+    if (gap && (!gap.ts || Date.now() - gap.ts <= 10 * 60 * 1000)) {
+      lines.push(`· 最近旁白：${clipText(String(gap.text).replace(/\s+/g, ' '), 120)}`);
+    }
+    // ④ 正在写回复（直播态 replysse）
+    if (digest.liveReply && fresh(digest.liveReply.at)) {
+      lines.push(`· 正在写回复（约 ${String(digest.liveReply.text).length} 字，尚未发出）`);
+    }
+    return lines.join('\n');
   }
 
   /**
@@ -1005,6 +1396,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       return { ok: true, alreadyOpen: true, state: state.snapshot(), receipt: '' };
     }
     state.open({ by, chat: resolveChat(chat) });
+    // 轻通道观测并入持久观测（Rushiera 2026-10-14）——开启后所有回复由持久观测接管，撤除一次性观测防重发
+    clearLightWatches('领航员开启——并入持久观测');
     voyageStats.replies = 0;
     voyageStats.progress = 0;
     voyageStats.tours = 0;
@@ -1412,6 +1805,11 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   /**
    * 投递一条指令给猫（同时记账：回消息群跟随、指令流水；并登记观测）。
    *
+   * 两种模式（Rushiera 2026-10-14）：
+   *   · 领航员开启——原语义：记账 + 持久观测挂群 + 排「投递后 N 秒」会话分析；
+   *   · 领航员未开启——**轻通道**：本人（VIP）在群里直接下的指定猫指令照样投递；
+   *     只做「投递 + 回复截图」（一次性观测），**不记账、不排分析**（不带投送后分析）。
+   *
    * @param {object} options 选项
    * @param {string} options.key 目标猫（id / 显示名 / majordomo）
    * @param {string} options.text 指令内容
@@ -1419,9 +1817,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
    * @param {boolean} [options.sourceTag] 是否加 QQ 来源头（默认 false——Rushiera 2026-10-11：转发不加 `[来自QQ]…` 头，渠道由投递通道自身承载，不污染会话前文）
    * @param {boolean} [options.watch] 是否登记观测（默认 true）
    * @param {boolean} [options.dryRun] 干跑——只返回组装结果，不投递（默认 false；自测投递口径用）
+   * @param {string} [options.by] 触发通道（qq=业务面群内调用 / app=应用内与本地操作者通道）
    * @returns {Promise<object>} { ok, key, text, reply, watch }
    */
-  async function send({ key, text, chat = null, sourceTag = false, watch = true, dryRun = false }) {
+  async function send({ key, text, chat = null, sourceTag = false, watch = true, dryRun = false, by = 'app' }) {
     const content = sourceTag
       ? `[来自QQ][群@|Rushiera·本人] ${String(text ?? '').trim()}`
       : String(text ?? '').trim();
@@ -1434,13 +1833,32 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       record('send', `干跑（不投递）→ ${key}：${content.slice(0, 60)}`);
       return { ok: true, dryRun: true, delivered: false, key: String(key || ''), text: content, chat: chatResolved };
     }
-    // 未开启时不受理投递：领航员不在场就没有「指令」语境，投递只会污染猫的前文。
-    // 不受理必须出声——静默受理 = 越界不可见（AGENTS §一-4）。
-    if (state.snapshot().enabled !== true) {
+    const enabled = state.snapshot().enabled === true;
+    // 未开启：轻通道（Rushiera 2026-10-14）——本人（VIP）在群里直接下的指令照样投递，
+    // 投递 + 回复截图照常，不做投送后分析；其余（非本人 / 非 QQ 通道）一律不受理——
+    // 不在场就没有「指令」语境，投递只会污染猫的前文。不受理必须出声（AGENTS §一-4）。
+    if (!enabled && !(by === 'qq' && vipFresh())) {
       record('error', `领航员未开启——投递不受理（${key}）：${content.slice(0, 40)}`);
-      return { ok: false, error: '领航员未开启——投递不受理', offMode: true, key: String(key || ''), text: content };
+      return {
+        ok: false,
+        error: `领航员未开启——未开启时只受理本人（${vipUser || 'VIP'}）近期的指定猫指令`,
+        offMode: true,
+        key: String(key || ''),
+        text: content
+      };
     }
     const result = await ch4.send(key, content);
+    if (!enabled) {
+      // 轻通道：不记账（不动领航员状态）、不排分析；登记一次性回复观测（轮结束 → 回复截图发群）
+      if (result.ok) {
+        result.light = true;
+        armLightWatch(result.key, chatResolved);
+        record('send', `轻通道投递 → ${result.key}（未开启模式）：${content.slice(0, 60)}`);
+      } else {
+        record('error', `轻通道投递未受理（${key}）：${JSON.stringify(result.reply ?? {}).slice(0, 80)}`);
+      }
+      return result;
+    }
     state.noteCommand({
       chat: chatResolved,
       target: result.key,
@@ -1452,10 +1870,103 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       const session = sessions.get(result.key);
       if (session) session.chat = chatResolved;
       result.watch = session ? { ok: true, persistent: true } : { ok: false, error: '该猫未在观测中' };
+      // 订阅不在线（断线 / 漏订）→ 即时补一次（2026-10-14：不等下一轮巡检）
+      if (!watcher.list().includes(result.key)) {
+        ensureWatching().catch((error) => record('error', `投递后补订阅失败：${error?.message ?? error}`));
+      }
       // 静默执行的反馈替代：过一会儿主动给一次「猫会话分析」（不再回「已投递」）
       scheduleAnalysis(result.key, chatResolved, { reason: `投递后 ${Math.round(analyzeDelayMs / 1000)} 秒` });
     }
     return result;
+  }
+
+  // ── 轻通道（未开启模式的投递观测）──────────────────────────────────────────
+
+  /**
+   * 登记一次性回复观测——轻通道投递成功后调用（未开启模式）。
+   *
+   * 语义（Rushiera 2026-10-14）：群里下的指令完成后，按领航员的方式把回复截图发群；
+   * **不带投送后分析**。轮询 keyinfo（不建持久订阅——与领航员的观测互不干扰），
+   * 检出「投递之后的回复 + 轮结算」即截图发群并撤除；超时放弃（留痕）。
+   *
+   * @param {string} key 猫 key
+   * @param {string|number|null} chat 回报群
+   * @returns {void}
+   */
+  function armLightWatch(key, chat) {
+    const target = resolveChat(chat);
+    if (!target) {
+      record('error', `轻通道（${key}）：没有回消息群，跳过回复观测`);
+      return;
+    }
+    cancelLightWatch(key);
+    const watch = { key: String(key), chat: String(target), since: Date.now() - 2000, timer: null, done: false };
+    watch.timer = setInterval(() => {
+      lightTick(watch).catch((error) => record('error', `轻通道（${watch.key}）巡检失败：${error?.message ?? error}`));
+    }, LIGHT_POLL_MS);
+    lightWatches.set(watch.key, watch);
+    record('watch', `轻通道：等 ${watch.key} 的回复（群 ${watch.chat}）`);
+  }
+
+  /**
+   * 撤除一只猫的轻通道观测（含定时器）。
+   *
+   * @param {string} key 猫 key
+   * @returns {void}
+   */
+  function cancelLightWatch(key) {
+    const watch = lightWatches.get(String(key));
+    if (!watch) return;
+    watch.done = true;
+    if (watch.timer) clearInterval(watch.timer);
+    lightWatches.delete(String(key));
+  }
+
+  /**
+   * 撤除全部轻通道观测（领航员开启并入持久观测 / 应用停止）。
+   *
+   * @param {string} [reason] 撤除原因（进活动流）
+   * @returns {void}
+   */
+  function clearLightWatches(reason = '') {
+    if (lightWatches.size === 0) return;
+    const keys = [...lightWatches.keys()];
+    for (const key of keys) cancelLightWatch(key);
+    if (reason) record('watch', `轻通道观测撤除（${keys.join('，')}）：${reason}`);
+  }
+
+  /**
+   * 轻通道巡检——检出「投递之后的回复」即截图发群（只截回复内容，不带分析）。
+   *
+   * @param {object} watch 观测条目
+   * @returns {Promise<void>} 完成
+   */
+  async function lightTick(watch) {
+    if (watch.done) return;
+    if (Date.now() - watch.since > LIGHT_WATCH_MAX_MS) {
+      cancelLightWatch(watch.key);
+      record('error', `轻通道（${watch.key}）：等回复超时（${Math.round(LIGHT_WATCH_MAX_MS / 60000)} 分钟），撤除`);
+      return;
+    }
+    const reply = await readReply(watch.key, watch.since);
+    if (!reply) return;
+    cancelLightWatch(watch.key);
+    const catName = await catNameOf(watch.key);
+    try {
+      const info = await ch4.keyinfo(watch.key, 12);
+      const rows = Array.isArray(info?.items) ? info.items : [];
+      const png = await shot.shoot({ catName, blocks: replyBlocksOf(rows), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
+      if (!png) {
+        record('error', `轻通道（${watch.key}）：截图为空，跳过`);
+        return;
+      }
+      const sent = await sayImage(watch.chat, png, `${catName} 的回复`);
+      record(sent.ok ? 'send' : 'error', sent.ok
+        ? `轻通道：回复截图已发群 ${watch.chat}（${catName}）`
+        : `轻通道：回复截图发送失败（${sent.error}）`);
+    } catch (error) {
+      record('error', `轻通道（${watch.key}）：推送失败（${error?.message ?? error}）`);
+    }
   }
 
   /**
@@ -1526,6 +2037,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
       vipUser,
       vipRecentChat: vipFresh() ? vip.chat : null,
       watching: watcher.list(),
+      lightWatches: [...lightWatches.keys()],
       activity: activity.map((item) => ({ ...item })),
       busy: cats.filter((row) => hasSession(row)).map((row) => row.id),
       cats,
@@ -1541,6 +2053,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     if (ticking) return;
     const snap = state.snapshot();
     if (!snap.enabled) return;
+    // 补订阅（断线自愈）——订阅中断不再等到下次开启才恢复（2026-10-14）
+    await ensureWatching();
     // 计时基准 = 最近一次活动（指令 / 猫的回复）——不是「最后一条指令」（否则刚开工就被判空闲）
     const since = Math.max(
       Number(snap.lastActivityAt) || 0,
@@ -1580,6 +2094,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     // 撤订要撤干净——漏掉 pollTimer / analyzeTimers 会让进程退出时留着在途句柄
     // （自测里表现为退出码失真：libuv 断言）。armAll 装上的，stop 全摘。
     disarmAll();
+    clearLightWatches('应用停止');
   }
 
   // ── 本地 HTTP API（界面 + 业务面工具）────────────────────────────────────
@@ -1610,7 +2125,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
         chat: body?.chat ?? null,
         sourceTag: body?.sourceTag === true,
         watch: body?.watch !== false,
-        dryRun: body?.dryRun === true
+        dryRun: body?.dryRun === true,
+        by: body?.by === 'qq' ? 'qq' : 'app'
       })
     }),
     'POST /api/nav/say': async ({ body }) => ({ body: await say(body?.chat, body?.text) }),
@@ -1658,8 +2174,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
   return {
     state, ch4, watcher, shot,
     health, renderReceipt, open, close, send, status, say, sayAt, sayImage,
-    armCat, armAll, disarmAll, resetSession, newSession, waitForReply,
+    armCat, armAll, disarmAll, ensureWatching, resetSession, newSession, waitForReply,
     scheduleAnalysis, runAnalysis, analyzeOnce, collectThink, thinkText,
+    pullCatView, digestFromView, digestFromSession, composeActivity,
+    armLightWatch, cancelLightWatch, clearLightWatches, lightWatches,
     editImage, comfy,
     start, stop, api, idleCloseMs
   };

@@ -190,6 +190,7 @@ export function registerNavTools() {
 - key：猫名或 id——${CAT_HINT}；拿不准目标时传 majordomo。
 - text：给猫的**完整指令原文**——照抄用户的指令内容，不要改写、不要加解释、不要加礼貌语、不要带触发标记（如「（@我/提到我）」这类是给判断用的，不是指令内容）。
 🔴 只投递**指令**（要猫干活的）；群里的闲聊不要调本工具。
+🔴 领航员**未开启**时也能投——限本人（569145850）**点名了猫**的指令：投递 + 回复截图照常（**不带投送后分析**）；没点名猫的、或非本人的请求，未开启时不要投。
 投递成功后猫会在 CH4 里干活；猫的回复到达时系统会自动截图发群，你不需要再复述。`,
     category: 'system',
     icon: '📮',
@@ -209,7 +210,8 @@ export function registerNavTools() {
         const data = await call('/api/nav/send', {
           method: 'POST',
           // 不带 chat——回消息群由自研单体按「最近一条 VIP 群消息」解析（比 chatKey 更准）
-          body: { key, text }
+          // by:'qq'——本工具只从群内被调用；未开启时的轻通道闸门（本人 + 近期 @）据此生效
+          body: { key, text, by: 'qq' }
         });
         if (data?.ok !== true) return err(`投递未受理：${JSON.stringify(data?.reply ?? data)}`);
         return ok(`已投递 → ${key}（端口 ${data.port}）：${text.slice(0, 80)}\n猫的回复到达时会自动截图发群。`);

@@ -190,6 +190,20 @@ export function createCh4Client({ log, mainPort = DEFAULT_MAIN_PORT }) {
   }
 
   /**
+   * 拉某猫的完整前文（对话端口专属）——全条目（system / user / assistant / tool），
+   * 抢救模式代读的数据源（design §六b；Rushiera 2026-10-14 定）。
+   *
+   * @param {string} key 猫寻址
+   * @param {number} [max] 取末尾条数（端点侧 1-500 夹取，缺省 200）
+   * @returns {Promise<object>} { ok, count, chars, items }
+   */
+  async function fullctx(key, max = 200) {
+    const resolved = await resolveKey(key);
+    const port = resolved === 'majordomo' ? await majorPort() : await catPort(resolved);
+    return request(`http://127.0.0.1:${port}/api/v1/fullctx?max=${Number(max) || 200}`);
+  }
+
+  /**
    * 主干端口（对外暴露——SSE 订阅用）。
    *
    * @returns {Promise<number>} 端口
@@ -199,5 +213,5 @@ export function createCh4Client({ log, mainPort = DEFAULT_MAIN_PORT }) {
     return resolved === 'majordomo' ? majorPort() : catPort(resolved);
   }
 
-  return { snapshot, cats, detail, command, send, resolveKey, history, keyinfo, portOf, mainPort };
+  return { snapshot, cats, detail, command, send, resolveKey, history, keyinfo, fullctx, portOf, mainPort };
 }

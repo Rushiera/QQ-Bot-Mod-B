@@ -42,10 +42,10 @@ const RESET_READY_TIMEOUT_MS = 30000;
 /** 投递后自动做一次「猫会话分析」的延迟（毫秒）——替代「已投递」式回话（Rushiera 2026-10-11）。 */
 const ANALYZE_DELAY_MS = 60 * 1000;
 
-/** 抢救模式：代读原文的字符上限（超出保留头尾、砍中段）——救援猫也要吃得下。 */
+/** 抢救模式：代读**完整前文**（fullctx 拼正文）的字符上限（超出保留头尾、砍中段）——救援猫也要吃得下。 */
 const RESCUE_SOURCE_MAX = 600000;
 
-/** 抢救模式：代读原文保留头部比例（其余留尾部）——任务背景在头、近期进展在尾。 */
+/** 抢救模式：代读正文保留头部比例（其余留尾部）——任务背景在头、近期进展在尾。 */
 const RESCUE_HEAD_RATIO = 0.3;
 
 /** 抢救模式：视为「交接摘要」的最短长度（字符）——更短的按「先回了一句」处理（催办后继续等）。 */
@@ -1019,19 +1019,69 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
-   * 会话关键信息索引——原文轨迹的目录（每条一行：位置 / 角色 / 时间 / 首段）。
+   * 完整前文条目 → 正文文本 + 时间→位置表（抢救模式代读用；Rushiera 2026-10-14 定）。
    *
-   * 为什么需要（Rushiera 2026-10-14）：抢救模式下原文超限会被砍中段（头 30% + 尾 70%），
-   * 被砍掉的关键条在索引里仍留「位置 + 首段」——救援猫据此知道「哪一条在哪、讲了什么」，
-   * 位置号与 `traceText` 的条号一致（同一过滤集），需要细节时按号回查。
+   * 条目顺序拼接（每条带 `【#i 角色 时间】` 头，位置可回查）；`system` 注入块不入正文——
+   * 接手方自带同类知识文件，且它会吃掉头 30% 额度（头要留给任务背景）。
+   *
+   * @param {Array<object>} items fullctx 条目
+   * @returns {{ text: string, marks: Map<string, {i: number, offset: number}> }} 正文 + 时间→位置表
+   */
+  function fullContextText(items) {
+    const rows = Array.isArray(items) ? items : [];
+    const parts = [];
+    const marks = new Map();
+    let offset = 0;
+    for (const row of rows) {
+      const role = String(row?.role ?? '');
+      if (role === 'system') continue;
+      const body = String(row?.content ?? row?.preview ?? '').trim();
+      if (!body) continue;
+      const i = Number(row?.i) || 0;
+      const when = Number(row?.time)
+        ? new Date(Number(row.time)).toLocaleString('zh-CN', { hour12: false })
+        : '';
+      const block = `【#${i} ${roleTag(role)}${when ? ` ${when}` : ''}】\n${body}`;
+      const key = String(row?.time ?? '');
+      if (key && !marks.has(key)) marks.set(key, { i, offset });
+      parts.push(block);
+      offset += block.length + 2;
+    }
+    return { text: parts.join('\n\n'), marks };
+  }
+
+  /**
+   * 条目角色标签——正文头与索引行共用。
+   *
+   * @param {string} role 角色（user / assistant / tool / system / report / reply / roundsum）
+   * @returns {string} 中文标签
+   */
+  function roleTag(role) {
+    if (role === 'user') return '用户';
+    if (role === 'assistant' || role === 'reply') return '猫';
+    if (role === 'tool') return '工具';
+    if (role === 'roundsum') return '轮结算';
+    if (role === 'report') return '加载报告';
+    if (role === 'system') return '注入';
+    return role || '条目';
+  }
+
+  /**
+   * 会话关键信息索引——正文的目录（每条一行：正文位置 / 角色 / 时间 / 首段）。
+   *
+   * 位置 = 该条在**正文**中的条号与起始字符（按未截断的正文计）；正文超限砍中段时，
+   * 落在被省略段的关键条标「⚠中段已省略」——救援猫据此知道「哪一条在哪、讲了什么」，
+   * 需要细节按位置回查（Rushiera 2026-10-14 定）。
    *
    * @param {Array<object>} items keyinfo 条目
+   * @param {Map<string, {i: number, offset: number}>} marks 时间→正文位置表（fullContextText 产出）
+   * @param {{ truncated: boolean, headLen: number, tailStart: number }} cut 正文截断信息
    * @param {number} [maxChars] 每条首段截断长度
    * @returns {string} 索引文本（无内容时为空串）
    */
-  function traceIndex(items, maxChars = 120) {
+  function keyIndex(items, marks, cut, maxChars = 120) {
     const rows = Array.isArray(items) ? items : [];
-    const keep = ['user', 'reply', 'roundsum'];
+    const keep = ['report', 'user', 'reply', 'roundsum'];
     const lines = [];
     let pos = 0;
     for (const row of rows) {
@@ -1043,9 +1093,14 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       const when = Number(row?.time)
         ? new Date(Number(row.time)).toLocaleString('zh-CN', { hour12: false })
         : '';
-      const tag = role === 'user' ? '用户' : role === 'reply' ? '猫' : '轮结算';
       const brief = text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
-      lines.push(`[${pos}] ${tag}${when ? ` ${when}` : ''} —— ${brief}`);
+      const hit = marks.get(String(row?.time ?? ''));
+      let where = '正文位置未定位';
+      if (hit) {
+        const omitted = cut.truncated && hit.offset >= cut.headLen && hit.offset < cut.tailStart;
+        where = `正文 #${hit.i}（第 ${group(hit.offset)} 字符起）${omitted ? '·⚠中段已省略' : ''}`;
+      }
+      lines.push(`[${pos}] ${roleTag(role)}${when ? ` ${when}` : ''} —— ${where} —— ${brief}`);
     }
     return lines.join('\n');
   }
@@ -1772,30 +1827,41 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
-   * 抓目标猫的会话原文（抢救模式——交救援猫代读）。
+   * 抓目标猫的**完整前文**（抢救模式——交救援猫代读）。
    *
-   * 与 reset 的「原文轨迹」同源（keyinfo 的 user / reply / roundsum 条），但取值更宽：
-   * 不限条数，只按字符上限截断（保留头尾、砍中段）。
+   * 数据源（Rushiera 2026-10-14 定）：`fullctx` 全条目拼正文——含工具调用 / 思考 / 工具结果，
+   * 不再只取 `keyinfo` 的四类关键信息（旧版工具密集的会话只带过去千分之几）。system 注入块
+   * 不入正文（接手方自带；且会吃掉头 30% 额度）。另附**关键信息索引**——每条标出它在正文
+   * 中的位置（条号 + 起始字符），正文被砍中段时仍可按位置回查。
    *
    * @param {string} key 目标猫
    * @returns {Promise<{ text: string, index: string, count: number, chars: number, truncated: boolean }>} 结果
    */
   async function grabCatSource(key) {
-    const info = await ch4.keyinfo(key, 100000);
-    const items = Array.isArray(info?.items) ? info.items : [];
-    const full = traceText(items, 0);
-    // 关键信息索引——原文被砍中段时，条目的「位置 + 首段」仍保留（Rushiera 2026-10-14）
-    const index = traceIndex(items);
-    const count = Number(info?.count ?? items.length);
-    if (full.length <= rescueMaxChars) return { text: full, index, count, chars: full.length, truncated: false };
-    const headLen = Math.floor(rescueMaxChars * RESCUE_HEAD_RATIO);
+    const ctx = await ch4.fullctx(key, 100000);
+    if (ctx?.ok === false) throw new Error(String(ctx?.error ?? '完整前文读取失败'));
+    const items = Array.isArray(ctx?.items) ? ctx.items : [];
+    const built = fullContextText(items);
+    const count = Number(ctx?.count ?? items.length);
+    const total = built.text.length;
+    const truncated = total > rescueMaxChars;
+    const headLen = truncated ? Math.floor(rescueMaxChars * RESCUE_HEAD_RATIO) : total;
     const tailLen = rescueMaxChars - headLen;
-    const omitted = full.length - rescueMaxChars;
+    const tailStart = truncated ? total - tailLen : total;
+    let index = '';
+    try {
+      const info = await ch4.keyinfo(key, 100000);
+      index = keyIndex(info?.items, built.marks, { truncated, headLen, tailStart });
+    } catch (error) {
+      record('error', `${key}：关键信息索引抓取失败（${error?.message ?? error}）`);
+    }
+    if (!truncated) return { text: built.text, index, count, chars: total, truncated: false };
+    const omitted = total - rescueMaxChars;
     return {
-      text: `${full.slice(0, headLen)}\n\n…（中段省略 ${group(omitted)} 字符）…\n\n${full.slice(-tailLen)}`,
+      text: `${built.text.slice(0, headLen)}\n\n…（中段省略 ${group(omitted)} 字符）…\n\n${built.text.slice(-tailLen)}`,
       index,
       count,
-      chars: full.length,
+      chars: total,
       truncated: true
     };
   }
@@ -1828,7 +1894,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
-   * 抢救模式——目标猫自己跑不动时，由另一只空闲猫代读它的会话，产出交接摘要。
+   * 抢救模式——目标猫自己跑不动时，由另一只空闲猫代读它的完整前文，产出交接摘要。
    *
    * @param {object} options 选项
    * @param {string} options.resolved 目标猫 key
@@ -1846,17 +1912,17 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     try {
       source = await grabCatSource(resolved);
     } catch (error) {
-      record('error', `${name}：会话原文抓取失败（${error?.message ?? error}）`);
-      return { ok: false, error: '会话原文抓取失败' };
+      record('error', `${name}：完整前文抓取失败（${error?.message ?? error}）`);
+      return { ok: false, error: '完整前文抓取失败' };
     }
     if (!source.text) {
-      record('error', `${name}：会话原文为空——无可代读内容`);
-      return { ok: false, error: '会话原文为空' };
+      record('error', `${name}：完整前文为空——无可代读内容`);
+      return { ok: false, error: '完整前文为空' };
     }
-    record('reset', `${name}：会话原文已抓取（${source.count} 条 / ${group(source.chars)} 字符${source.truncated ? '·超限截断' : ''}）→ 投给 ${rescuer.name} 代读`);
+    record('reset', `${name}：完整前文已抓取（${source.count} 条 / ${group(source.chars)} 字符${source.truncated ? '·超限截断' : ''}）→ 投给 ${rescuer.name} 代读`);
     const askAt = Date.now();
     await ch4.send(rescuer.key, [
-      `【领航员·前文抢救】目标：${name}。它自己的会话已经跑不动了（前文太长 / 无响应），没法自己收工整理——现在由你代读它的会话原文，产出一份**交接摘要**，交给它的下一个会话。`,
+      `【领航员·前文抢救】目标：${name}。它自己的会话已经跑不动了（前文太长 / 无响应），没法自己收工整理——现在由你代读它的**完整前文**，产出一份**交接摘要**，交给它的下一个会话。`,
       '',
       '摘要要求（足量、详尽，宁多勿漏——接手方只有这份摘要，猜不到你没写的）：',
       '· 任务全貌与背景（在做什么、为什么做）',
@@ -1867,12 +1933,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       '· 不确定或待确认的点（明确标注，别让接手方当成事实）',
       '· 用户提过的原始要求（照抄关键句，别改写）',
       '',
-      '【会话关键信息索引】（位置 = 原文轨迹中的条号；中段被省略时，索引里仍保留该条首段与位置——需要细节按号回查）',
+      '【会话关键信息索引】（位置 = 该条在正文中的条号与起始字符；中段被省略时，索引里仍保留该条首段与位置——需要细节按位置回查）',
       source.index || '（未取到条目）',
       '',
-      `原文在下面（${source.count} 条 / ${group(source.chars)} 字符${source.truncated ? '，超长已砍中段' : ''}）。本次**不要调工具**，只读原文；只输出摘要正文（纯文本，小标题 + 列表），不要复述原文、不要输出别的话；篇幅不设上限。`,
+      `完整前文在下面（${source.count} 条 / ${group(source.chars)} 字符${source.truncated ? '，超长已砍中段' : ''}）。本次**不要调工具**，只读前文；只输出摘要正文（纯文本，小标题 + 列表），不要复述原文、不要输出别的话；篇幅不设上限。`,
       '',
-      '—— 会话原文 ——',
+      '—— 会话完整前文 ——',
       source.text
     ].join('\n'));
     const summary = await waitSummary(rescuer.key, { since: askAt - 2000, name: rescuer.name });

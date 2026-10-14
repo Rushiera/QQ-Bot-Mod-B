@@ -1973,3 +1973,43 @@ R喵喵：交接摘要已注入，等待确认
 | 1 | 群内真发群（R喵 调 `nav_shot` 出图回群）——需群内 @ 触发（自测不打扰真群） | 待群内实测 |
 | 2 | 内容 > `SHOT_MAX_HEIGHT`（30000px）时仍会截尾——正常会话远未触及；再高需分段拼接 | 待触发 |
 | 3 | 关硬件加速对界面渲染性能的影响（软件合成）——本应用界面轻，未观察到问题 | 观察 |
+
+---
+
+## 五十七、抢救模式·完整前文改造（2026-10-14 · v0.67）
+
+> 触发：Rushiera 复核两次 majordomo 抢救——「我感觉R喵和R喵喵在重建前文抢救模式的时候没有携带majordomo的会话，我记得我要求是带600k的信息」；核实后指令：「改一下设计 我说的是600k，其中前部30% 尾部70%， 并且再额外加上关键信息（附带在正文中的位置）」。
+
+**一、问题实锤（旧口径）**
+
+| 项 | 实况 |
+|:--|:--|
+| 旧数据源 | `grabCatSource()` = `keyinfo` 全量 → `traceText`——只含「加载报告 / user / reply / roundsum」四类（CH4 `BuildKeyInfo` 口径），工具调用 / 思考 / 工具结果全不进 |
+| 两次 majordomo 抢救（21:46 / 21:55） | 只抓到 **6 条 / 1,375 字符**、**2 条 / 4,182 字符** |
+| 会话真体量（`data:sessions_ctx` 留档） | `majordomo_20261014_214616.txt` = **81,697 tokens**（≈23.5 万字符）· `_215522.txt` = **258,843 tokens**——旧口径只带过去千分之几 |
+| 600k 上限 | `RESCUE_SOURCE_MAX` / `navigator.rescueMaxChars` 只是上限——旧链永远够不着 |
+
+**二、改造（Rushiera 定）**
+
+| 项 | 内容 |
+|:--|:--|
+| 数据源 | `keyinfo` → **`fullctx`**（`GET /api/v1/fullctx`，CH4 全条目：system / user / assistant / tool）——`ch4.js` 新增 `fullctx(key, max)` |
+| 正文 | 全条目拼正文（每条带 `【#i 角色 时间】` 头）；**`system` 注入块不入正文**（接手方自带同类知识文件，且会吃掉头 30% 额度） |
+| 截断 | 正文超 `rescueMaxChars`（默认 600000 字符）→ 保留**头 30% + 尾 70%**、中段标省略（原口径不变） |
+| 关键信息索引 | `keyinfo` 四类保留——**位置改指正文**：`正文 #<条号>（第 <起始字符> 字符起）`；落在被省略段的关键条标「⚠中段已省略」（`keyIndex()`；时间匹配 fullctx 条目，匹配不到标「正文位置未定位」） |
+| 落地文件 | `app/src/navigator/ch4.js`（+`fullctx`）· `app/src/navigator/index.js`（`grabCatSource` 重写 · 新增 `fullContextText` / `roleTag` / `keyIndex` · `traceIndex` 退役）· `app/src/config.js`（注释）· `design-qqbotb-navigator.md` §六b（代读 / 留痕行）· `tools/verify-navigator.mjs`（断言同步） |
+
+**三、验证**
+
+| 面 | 结果 |
+|:--|:--|
+| 语法 | `node --check` 三文件 0 错（`navigator/index.js` / `navigator/ch4.js` / `config.js`） |
+| 自测 | `tools/verify-navigator.mjs` **51/51**——其中「抢救·完整前文抓取」实测：majordomo 当前会话 **138 条 / 384,948 字符** + 索引 1,044 字符（旧口径同场只出 1,375 字符级） |
+
+**遗留 / 待确认：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 真链路验收——群内「用抢救模式重建 X 的前文」跑一次全链，核对正文规模与索引位置 | 待触发 |
+| 2 | 600k 正文 ≈ 25 万 tokens 级——救援猫上下文压力（选猫已按「最干净」优先）；是否再设更低的软上限 | 按需再议 |
+| 3 | 生效需**重启应用**（改的是单体源码 `app/src/`） | 待 Rushiera 主持 |

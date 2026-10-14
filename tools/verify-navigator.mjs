@@ -287,7 +287,7 @@ navReset.stop();
 
 // ── 11 nav_reset 抢救模式：选猫判据 + 原文抓取 + 入口透传（Rushiera 2026-10-14）──
 // 判据：① API 面回执回显 rescue（入口没丢参数）② 选猫排除目标猫自身 / 忙猫 ③ 候选存在时 majordomo 优先
-//       ④ 原文抓取走只读 keyinfo（按字符上限截断：头尾保留）⑤ 源码面存在代读段（真代读涉真猫 + 几分钟等待，走群内实测）。
+//       ④ 完整前文抓取走只读 fullctx（按字符上限截断：头尾保留）+ keyinfo 位置索引 ⑤ 源码面存在代读段（真代读涉真猫 + 几分钟等待，走群内实测）。
 const navSalvage = createNavigator({
   log,
   dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-salvage-')),
@@ -313,14 +313,14 @@ check('抢救·选猫排除目标猫自身', !pickedOther || String(pickedOther.
   pickedOther ? `${pickedOther.name}（${pickedOther.reason}）` : '无候选');
 
 const srcSalvage = await navSalvage.grabCatSource('majordomo');
-check('抢救·原文抓取（只读 keyinfo + 关键信息索引）',
+check('抢救·完整前文抓取（只读 fullctx + 关键信息位置索引）',
   typeof srcSalvage.text === 'string' && typeof srcSalvage.index === 'string' && srcSalvage.chars >= 0,
   `${srcSalvage.count} 条 / ${srcSalvage.chars} 字符${srcSalvage.truncated ? '·超限截断' : ''} · 索引 ${srcSalvage.index.length} 字符`);
 
 const salvageSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
 check('抢救·源码代读段在位',
   salvageSrc.includes('async function rescueSummary') && salvageSrc.includes('async function pickRescueCat')
-  && salvageSrc.includes('function traceIndex') && salvageSrc.includes('抢救摘要已取到'),
+  && salvageSrc.includes('function keyIndex') && salvageSrc.includes('抢救摘要已取到'),
   '');
 navSalvage.stop();
 

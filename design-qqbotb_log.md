@@ -1528,3 +1528,38 @@ R喵喵：交接摘要已注入，等待确认
 | 2 | 协议端 `autoLoginAccount` 是否配成机器人号（重启后自动恢复登录，`webui.json` 现为空） | 未做——属产品决定，等 Rushiera 拍板 |
 | 3 | 界面像素级核对（卡片渲染） | 未做——需应用内核驻留才能截图；本次只做 ID 交叉核对 + 语法检查 |
 | 4 | 新文件未入库（`tools/entry.cmd` · `启动QQAgent-仅业务面.*` · `app/src/napcat/webui.js` · `app/tools/verify-login.mjs`） | 收工随 git 提交 |
+
+---
+
+## 四十七、白名单加群 112562956（v0.58 · 2026-10-13）
+
+> 触发：Rushiera——「白名单群加 112562956」。
+
+**动作：** 经业务面 `POST http://127.0.0.1:3210/api/config` 热写 `allow.groups` → **8 群**（7 旧 + `112562956`「偶像大师摸鱼会二代」）· `private` 未动 · 协议端 / 自研单体未动。
+
+**现象与根因（白名单的唯一真相源是运行实例内存）：**
+
+| 面 | 证据 | 结论 |
+|:--|:--|:--|
+| 文件曾有此群 | `_unpack/data/config.json` 本场次 20:29 读得 `allow.groups` = 8 群（含 `112562956`）· 文件 mtime 20:21 | 有人**直改文件**加了群 |
+| 内存无此群 | `GET /api/config`（20:37）`allow.groups` = 7 群（无 `112562956`） | 直改文件**不生效**——判断读的是内存 |
+| 文件被抹回 | 20:38 `config.json` 被重写（mtime 20:38），8 群 → 7 群 | 应用侧一次配置写入按内存重写整个文件，外部写入被抹掉 |
+
+- 判断链：`app.js` `ingestMessage` / `ingestPoke` → `allowed(kind, id, getConfig())`；`config.js` `getConfig()` 返回**内存** `currentConfig`（启动时从盘读一次，之后只由 `updateConfig()` 更新）。
+- `updateConfig()` 是唯一的「内存 + 落盘」同步口——应用内部多处调用（`memory.js` `memberNotes` · `community.js` · `providers.js` 等），每次都会按内存重写整个 `config.json`。
+- 故：**改白名单 / 配置一律走 `POST /api/config`**；直改 `_unpack/data/config.json` 既不生效、又会被应用内部写入抹掉（`tools/apply-qqagent-policy.mjs` 这类直写脚本同理）。
+
+**验证实锤：**
+
+| 面 | 结果 |
+|:--|:--|
+| POST 回执 | `allow.groups` = 8 群（含 `112562956`） |
+| 内存读回 | `GET http://127.0.0.1:3210/api/config` → 8 群（含 `112562956`） |
+| 落盘 | `_unpack/data/config.json` `allow.groups` = 8 群（含 `112562956`） |
+| 生效 | **即时**——热写，无需重启 |
+
+**遗留：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 消费点——群 `112562956` 首条消息到达 → 自动建 `data/messages/group_112562956.json` | 待验（本场次内该群无新消息） |

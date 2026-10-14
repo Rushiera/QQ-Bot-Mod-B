@@ -163,7 +163,7 @@ navIdle.stop();
 // 判据：view 事件的 reason / toolcard / gap_text 块（persist.items · payload 形态）被收集；
 //       live 临时区（thinksse / toolrun）入直播态；thinkText 直接读回；组装含工具调用行。
 //       注：条目正文在生产形态里位于 item.payload（v0.45 首版误读 item.text——本版修正）。
-const rfRow = cats.find((row) => row.running === true && Number(row.port) > 0)
+const rfRow = cats.find((row) => Number(row.port) > 0 && (!row.runState || String(row.runState) === 'idle'))
   || cats.find((row) => Number(row.port) > 0)
   || cats[0];
 const armed = await navIdem.armCat(rfRow);
@@ -283,6 +283,45 @@ check('nav_reset·带 text 回执回显', resetBody?.body?.text === '__selftest_
 const resetSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
 check('nav_reset·源码投递段在位', resetSrc.includes('ch4.send(resolved, userText)') && resetSrc.includes('用户原话已投递'));
 navReset.stop();
+
+// ── 11 nav_reset 抢救模式：选猫判据 + 原文抓取 + 入口透传（Rushiera 2026-10-14）──
+// 判据：① API 面回执回显 rescue（入口没丢参数）② 选猫排除目标猫自身 / 忙猫 ③ 候选存在时 majordomo 优先
+//       ④ 原文抓取走只读 keyinfo（按字符上限截断：头尾保留）⑤ 源码面存在代读段（真代读涉真猫 + 几分钟等待，走群内实测）。
+const navSalvage = createNavigator({
+  log,
+  dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-salvage-')),
+  config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
+  onebot: { call: async () => ({}), status: () => ({ self: { userId: 2405997337 } }) }
+});
+const salvageBody = await navSalvage.api['POST /api/nav/reset']({ body: { key: 'no-such-cat-selftest', rescue: true, dryRun: true } });
+check('nav_reset·抢救模式回执回显（干跑）', salvageBody?.body?.rescue === true && salvageBody?.body?.dryRun === true,
+  JSON.stringify(salvageBody?.body ?? {}).slice(0, 90));
+
+const pickedAny = await navSalvage.pickRescueCat({});
+const idleIds = new Set(cats.filter((row) => !row?.runState || String(row.runState) === 'idle').map((row) => String(row.id)));
+check('抢救·选中猫为空闲猫（非在跑）', !pickedAny || idleIds.has(String(pickedAny.key)),
+  pickedAny ? `${pickedAny.name}（${pickedAny.reason}）` : '无候选');
+const majorRow = cats.find((row) => String(row.id) === 'majordomo');
+const majorIdle = !majorRow?.runState || String(majorRow.runState) === 'idle';
+check('抢救·majordomo 空闲时优先 / 忙时让位',
+  !pickedAny || (majorIdle ? String(pickedAny.key) === 'majordomo' : String(pickedAny.key) !== 'majordomo'),
+  `${majorIdle ? '主干空闲' : '主干在跑'} → ${pickedAny ? pickedAny.name : '无候选'}`);
+
+const pickedOther = await navSalvage.pickRescueCat({ excludeKey: 'majordomo' });
+check('抢救·选猫排除目标猫自身', !pickedOther || String(pickedOther.key) !== 'majordomo',
+  pickedOther ? `${pickedOther.name}（${pickedOther.reason}）` : '无候选');
+
+const srcSalvage = await navSalvage.grabCatSource('majordomo');
+check('抢救·原文抓取（只读 keyinfo + 关键信息索引）',
+  typeof srcSalvage.text === 'string' && typeof srcSalvage.index === 'string' && srcSalvage.chars >= 0,
+  `${srcSalvage.count} 条 / ${srcSalvage.chars} 字符${srcSalvage.truncated ? '·超限截断' : ''} · 索引 ${srcSalvage.index.length} 字符`);
+
+const salvageSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
+check('抢救·源码代读段在位',
+  salvageSrc.includes('async function rescueSummary') && salvageSrc.includes('async function pickRescueCat')
+  && salvageSrc.includes('function traceIndex') && salvageSrc.includes('抢救摘要已取到'),
+  '');
+navSalvage.stop();
 
 const passed = results.filter((r) => r.ok).length;
 console.log(`\n结果：${passed}/${results.length} 通过`);

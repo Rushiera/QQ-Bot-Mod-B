@@ -42,6 +42,18 @@ const RESET_READY_TIMEOUT_MS = 30000;
 /** 投递后自动做一次「猫会话分析」的延迟（毫秒）——替代「已投递」式回话（Rushiera 2026-10-11）。 */
 const ANALYZE_DELAY_MS = 60 * 1000;
 
+/** 抢救模式：代读原文的字符上限（超出保留头尾、砍中段）——救援猫也要吃得下。 */
+const RESCUE_SOURCE_MAX = 600000;
+
+/** 抢救模式：代读原文保留头部比例（其余留尾部）——任务背景在头、近期进展在尾。 */
+const RESCUE_HEAD_RATIO = 0.3;
+
+/** 抢救模式：视为「交接摘要」的最短长度（字符）——更短的按「先回了一句」处理（催办后继续等）。 */
+const RESCUE_SUMMARY_MIN = 200;
+
+/** 抢救模式：救援猫回短话后最多催办次数（超过即判失败，不清前文）。 */
+const RESCUE_RETRY_MAX = 3;
+
 /**
  * 进度判读提示词——猫还在跑（尚未回复）时用（Rushiera 2026-10-11：要「做到哪 / 什么情况 / 还要多久」）。
  *
@@ -188,6 +200,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   const analyzeDelayMs = navConfig.analyzeDelayMs === undefined
     ? ANALYZE_DELAY_MS
     : Number(navConfig.analyzeDelayMs) || 0;
+  // 抢救模式代读上限（design §六b 抢救模式）——超出保留头尾、砍中段
+  const rescueMaxRaw = Number(navConfig.rescueMaxChars);
+  const rescueMaxChars = Number.isFinite(rescueMaxRaw) && rescueMaxRaw > 0 ? rescueMaxRaw : RESCUE_SOURCE_MAX;
   const services = Array.isArray(navConfig.services) ? navConfig.services : [];
   const vipUser = String(navConfig.vipUser || '');
   // 图像编辑（design-qqbotb-navigator.md §十八）——ComfyDock「[生成]」工作区
@@ -948,6 +963,38 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
+   * 会话关键信息索引——原文轨迹的目录（每条一行：位置 / 角色 / 时间 / 首段）。
+   *
+   * 为什么需要（Rushiera 2026-10-14）：抢救模式下原文超限会被砍中段（头 30% + 尾 70%），
+   * 被砍掉的关键条在索引里仍留「位置 + 首段」——救援猫据此知道「哪一条在哪、讲了什么」，
+   * 位置号与 `traceText` 的条号一致（同一过滤集），需要细节时按号回查。
+   *
+   * @param {Array<object>} items keyinfo 条目
+   * @param {number} [maxChars] 每条首段截断长度
+   * @returns {string} 索引文本（无内容时为空串）
+   */
+  function traceIndex(items, maxChars = 120) {
+    const rows = Array.isArray(items) ? items : [];
+    const keep = ['user', 'reply', 'roundsum'];
+    const lines = [];
+    let pos = 0;
+    for (const row of rows) {
+      const role = String(row?.role ?? '');
+      if (!keep.includes(role)) continue;
+      pos += 1;
+      const text = String(row?.content ?? row?.preview ?? '').replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      const when = Number(row?.time)
+        ? new Date(Number(row.time)).toLocaleString('zh-CN', { hour12: false })
+        : '';
+      const tag = role === 'user' ? '用户' : role === 'reply' ? '猫' : '轮结算';
+      const brief = text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+      lines.push(`[${pos}] ${tag}${when ? ` ${when}` : ''} —— ${brief}`);
+    }
+    return lines.join('\n');
+  }
+
+  /**
    * 播报事实行——未回复时给「接的什么活 / 有没有产出」（判读之外的确定性信息）。
    *
    * @param {Array<object>} items keyinfo 条目
@@ -1634,6 +1681,154 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
+   * 挑一只「抢救猫」——空闲且没有参与内容的猫（majordomo 优先）。
+   *
+   * 判据（design §六b 抢救模式）：runState 为 idle（不在跑）、无待处理、非目标猫本身；
+   * majordomo 优先，其余按前文条数升序（越干净越优先——它要腾出上下文装目标猫的原文）。
+   *
+   * @param {object} options 选项
+   * @param {string} [options.excludeKey] 排除的猫（目标猫自身）
+   * @returns {Promise<object|null>} { key, name, contextCount, reason }；无可用时 null
+   */
+  async function pickRescueCat({ excludeKey = '' } = {}) {
+    const rows = await ch4.cats();
+    const exclude = new Set([String(excludeKey || '')]);
+    const candidates = rows.filter((row) => {
+      const id = String(row?.id ?? '');
+      if (!id || exclude.has(id)) return false;
+      if (row?.runState && String(row.runState) !== 'idle') return false;
+      if (Number(row?.pending ?? 0) > 0) return false;
+      return true;
+    });
+    if (candidates.length === 0) return null;
+    const clean = (row) => Number(row?.contextCount ?? 0);
+    const major = candidates.find((row) => String(row.id) === 'majordomo');
+    if (major) {
+      return { key: 'majordomo', name: String(major.name || 'majordomo'), contextCount: clean(major), reason: 'majordomo 优先' };
+    }
+    const best = candidates.slice().sort((a, b) => clean(a) - clean(b))[0];
+    return {
+      key: String(best.id),
+      name: String(best.name || best.id),
+      contextCount: clean(best),
+      reason: `空闲且前文最干净（${clean(best)} 条）`
+    };
+  }
+
+  /**
+   * 抓目标猫的会话原文（抢救模式——交救援猫代读）。
+   *
+   * 与 reset 的「原文轨迹」同源（keyinfo 的 user / reply / roundsum 条），但取值更宽：
+   * 不限条数，只按字符上限截断（保留头尾、砍中段）。
+   *
+   * @param {string} key 目标猫
+   * @returns {Promise<{ text: string, index: string, count: number, chars: number, truncated: boolean }>} 结果
+   */
+  async function grabCatSource(key) {
+    const info = await ch4.keyinfo(key, 100000);
+    const items = Array.isArray(info?.items) ? info.items : [];
+    const full = traceText(items, 0);
+    // 关键信息索引——原文被砍中段时，条目的「位置 + 首段」仍保留（Rushiera 2026-10-14）
+    const index = traceIndex(items);
+    const count = Number(info?.count ?? items.length);
+    if (full.length <= rescueMaxChars) return { text: full, index, count, chars: full.length, truncated: false };
+    const headLen = Math.floor(rescueMaxChars * RESCUE_HEAD_RATIO);
+    const tailLen = rescueMaxChars - headLen;
+    const omitted = full.length - rescueMaxChars;
+    return {
+      text: `${full.slice(0, headLen)}\n\n…（中段省略 ${group(omitted)} 字符）…\n\n${full.slice(-tailLen)}`,
+      index,
+      count,
+      chars: full.length,
+      truncated: true
+    };
+  }
+
+  /**
+   * 等救援猫产出交接摘要——太短（先回了一句）时催办后继续等，最多 RESCUE_RETRY_MAX 次。
+   *
+   * @param {string} key 救援猫
+   * @param {object} options 选项
+   * @param {number} options.since 起点时刻
+   * @param {string} [options.name] 救援猫显示名（留痕用）
+   * @returns {Promise<string>} 摘要正文（空串 = 未取到）
+   */
+  async function waitSummary(key, { since, name: catName = key } = {}) {
+    let cursor = since;
+    for (let attempt = 0; attempt <= RESCUE_RETRY_MAX; attempt += 1) {
+      const reply = await waitForReply(key, { since: cursor });
+      if (!reply) return '';
+      if (reply.length >= RESCUE_SUMMARY_MIN) return reply;
+      record('reset', `${catName}：先回了一句短话（${reply.length} 字符），催办摘要（${attempt + 1}/${RESCUE_RETRY_MAX}）`);
+      cursor = Date.now();
+      try {
+        await ch4.send(key, '请直接输出**交接摘要正文**（纯文本，小标题 + 列表）——不要确认、不要复述原文、不要调工具；上一句不是摘要。');
+      } catch (error) {
+        record('error', `${catName}：催办投递失败（${error?.message ?? error}）`);
+        return '';
+      }
+    }
+    return '';
+  }
+
+  /**
+   * 抢救模式——目标猫自己跑不动时，由另一只空闲猫代读它的会话，产出交接摘要。
+   *
+   * @param {object} options 选项
+   * @param {string} options.resolved 目标猫 key
+   * @param {string} options.name 目标猫显示名
+   * @returns {Promise<object>} { ok, summary, rescuer, source } 或 { ok:false, error }
+   */
+  async function rescueSummary({ resolved, name }) {
+    const rescuer = await pickRescueCat({ excludeKey: resolved });
+    if (!rescuer) {
+      record('error', `${name}：抢救失败——没有空闲且未参与内容的猫可用`);
+      return { ok: false, error: '没有空闲且未参与内容的猫可用作抢救' };
+    }
+    record('reset', `${name}：抢救猫 = ${rescuer.name}（${rescuer.reason}，前文 ${rescuer.contextCount} 条）`);
+    let source;
+    try {
+      source = await grabCatSource(resolved);
+    } catch (error) {
+      record('error', `${name}：会话原文抓取失败（${error?.message ?? error}）`);
+      return { ok: false, error: '会话原文抓取失败' };
+    }
+    if (!source.text) {
+      record('error', `${name}：会话原文为空——无可代读内容`);
+      return { ok: false, error: '会话原文为空' };
+    }
+    record('reset', `${name}：会话原文已抓取（${source.count} 条 / ${group(source.chars)} 字符${source.truncated ? '·超限截断' : ''}）→ 投给 ${rescuer.name} 代读`);
+    const askAt = Date.now();
+    await ch4.send(rescuer.key, [
+      `【领航员·前文抢救】目标：${name}。它自己的会话已经跑不动了（前文太长 / 无响应），没法自己收工整理——现在由你代读它的会话原文，产出一份**交接摘要**，交给它的下一个会话。`,
+      '',
+      '摘要要求（足量、详尽，宁多勿漏——接手方只有这份摘要，猜不到你没写的）：',
+      '· 任务全貌与背景（在做什么、为什么做）',
+      '· 已完成的步骤与做法（关键路径 / 命令 / 文件 / 接口）',
+      '· 未完成事项与下一步',
+      '· 关键结论、踩过的坑、被否决的方案与原因',
+      '· 继续工作所必需的上下文（路径 / 参数 / 约定 / 凭证位置）',
+      '· 不确定或待确认的点（明确标注，别让接手方当成事实）',
+      '· 用户提过的原始要求（照抄关键句，别改写）',
+      '',
+      '【会话关键信息索引】（位置 = 原文轨迹中的条号；中段被省略时，索引里仍保留该条首段与位置——需要细节按号回查）',
+      source.index || '（未取到条目）',
+      '',
+      `原文在下面（${source.count} 条 / ${group(source.chars)} 字符${source.truncated ? '，超长已砍中段' : ''}）。本次**不要调工具**，只读原文；只输出摘要正文（纯文本，小标题 + 列表），不要复述原文、不要输出别的话；篇幅不设上限。`,
+      '',
+      '—— 会话原文 ——',
+      source.text
+    ].join('\n'));
+    const summary = await waitSummary(rescuer.key, { since: askAt - 2000, name: rescuer.name });
+    if (!summary) {
+      record('error', `${name}：抢救摘要未取到（救援猫 ${rescuer.name}），整理中止`);
+      return { ok: false, error: '抢救摘要未取到', rescuer };
+    }
+    record('reset', `${name}：抢救摘要已取到（${rescuer.name} 代读，${summary.length} 字符）`);
+    return { ok: true, summary, rescuer, source };
+  }
+
+  /**
    * 前文整理重启——收工整理 → 抓原文轨迹 → 新会话 → 注入「摘要 + 轨迹」→ 自动继续。
    *
    * 延续性优先（Rushiera 2026-10-11）：交接材料 = 猫自述摘要 + 领航员客观抓取的原文轨迹，
@@ -1643,15 +1838,27 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string} options.key 目标猫
    * @param {string|number} [options.chat] 回报群
    * @param {string} [options.text] 用户原话——新会话就绪后作为第一条指令投递（可选）
+   * @param {boolean} [options.rescue] 抢救模式——目标猫自己跑不动时由空闲猫代读（可选）
    * @returns {Promise<object>} 结果
    */
-  async function resetSession({ key, chat = null, text = '' }) {
+  async function resetSession({ key, chat = null, text = '', rescue = false }) {
     const userText = String(text || '').trim();
     const resolved = await ch4.resolveKey(key);
     const name = await catNameOf(resolved);
     const target = resolveChat(chat);
-    record('reset', `${name}：前文整理重启开始`);
+    record('reset', rescue
+      ? `${name}：前文整理重启（抢救模式）开始——由空闲猫代读`
+      : `${name}：前文整理重启开始`);
 
+    let summary = '';
+    let summaryFrom = '猫自述';
+    if (rescue) {
+      // 抢救模式：跳过目标猫自述，由另一只空闲猫代读它的会话（design §六b 抢救模式）
+      const salvaged = await rescueSummary({ resolved, name });
+      if (!salvaged.ok) return { ok: false, error: salvaged.error };
+      summary = salvaged.summary;
+      summaryFrom = `抢救猫 ${salvaged.rescuer.name} 代读`;
+    } else {
     // ① 收工整理——让它把工作状态写成交接摘要（不调工具）
     const askAt = Date.now();
     await ch4.send(resolved, [
@@ -1671,12 +1878,13 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       '①②③做完再输出摘要；报告与摘要都只输出正文（纯文本，小标题 + 列表），篇幅不设上限。'
     ].join('\n'));
     // 不设时限——收工 + 落盘 + 推 git + 摘要，大前文的猫实测 8 分钟（等「转发回复」那一刻）
-    const summary = await waitForReply(resolved, { since: askAt - 2000 });
+    summary = await waitForReply(resolved, { since: askAt - 2000 });
     if (!summary) {
       record('error', `${name}：交接摘要未取到，整理中止`);
       return { ok: false, error: '交接摘要未取到' };
     }
     record('reset', `${name}：交接摘要已取到（${summary.length} 字符）`);
+    }
 
     // ①b 抓原文轨迹（必须在清前文之前——清掉就没了）：摘要之外的客观留存
     let trace = '';
@@ -1694,7 +1902,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     const material = [
       `# 交接材料 · ${name}（${new Date().toLocaleString('zh-CN', { hour12: false })}）`,
       '',
-      '## 交接摘要（猫自述）',
+      `## 交接摘要（${summaryFrom}）`,
       '',
       summary,
       '',
@@ -1753,7 +1961,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       // 不另发「整理完成」通知——猫的回复由出站决策发（有回复 → 截图；还没回复 → 检查点播报）
       scheduleAnalysis(resolved, target, { reason: '整理重启后' });
     }
-    return { ok: true, key: resolved, name, summary, trace, ack, material: materialFile, delivered };
+    return { ok: true, key: resolved, name, summary, summaryFrom, rescue, trace, ack, material: materialFile, delivered };
   }
 
   /**
@@ -2236,9 +2444,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     'POST /api/nav/reset': async ({ body }) => {
       const key = body?.key || 'majordomo';
       const text = String(body?.text || '').trim();
-      resetSession({ key, chat: body?.chat ?? null, text })
+      const rescue = body?.rescue === true;
+      // 干跑（自测用）——只回显参数，不启动后台执行（避免自测真去投递 / 打扰真猫）
+      if (body?.dryRun === true) return { body: { ok: true, dryRun: true, key, text, rescue } };
+      resetSession({ key, chat: body?.chat ?? null, text, rescue })
         .catch((error) => record('error', `整理重启失败（${key}）：${error?.message ?? error}`));
-      return { body: { ok: true, accepted: true, key, text, hint: '整理重启已在后台执行——进度看活动流' } };
+      return { body: { ok: true, accepted: true, key, text, rescue, hint: rescue ? '抢救模式整理已在后台执行——进度看活动流' : '整理重启已在后台执行——进度看活动流' } };
     }
   };
 
@@ -2246,6 +2457,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     state, ch4, watcher, shot,
     health, renderReceipt, open, close, send, status, say, sayAt, sayImage,
     armCat, armAll, disarmAll, ensureWatching, resetSession, newSession, waitForReply,
+    pickRescueCat, grabCatSource,
     scheduleAnalysis, runAnalysis, analyzeOnce, collectThink, thinkText,
     pullCatView, digestFromView, digestFromSession, composeActivity,
     armLightWatch, cancelLightWatch, clearLightWatches, lightWatches,

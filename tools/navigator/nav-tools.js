@@ -363,6 +363,8 @@ export function registerNavTools() {
 - key：要整理的猫（${CAT_HINT}）。
 - text：**你这次要对它说的原话**（可选）——用户原话照抄，别改写。系统会在它接上之后把它作为第一条指令投递。
   例：用户说「重建 majordomo 的前文，告诉他，历史消息里有两个需求…你检查一下群bot的领航员前文」→ nav_reset(key='majordomo', text='历史消息里有两个需求一个是发给你的，另一个是发给R喵的…你检查一下群bot的领航员前文')——**只投「告诉他」之后的那句**，别把「重建前文」这半句也塞进去。
+- rescue：**抢救模式**（可选，默认 false）——目标猫**自己已经跑不动**时用（前文太长 / 无响应 / 产不出摘要）：不逼它自己收工，改由**另一只空闲且没有参与内容的猫**（majordomo 优先）代读它的会话，产出交接摘要；之后的清前文 / 注入 / 继续与正常流程一样。
+  例：用户说「用抢救模式重建 X 的前文」「X 的前文抢救一下」→ nav_reset(key='X', rescue=true)。
 🔴 只要「清掉会话 / 直接开新会话」用 nav_new——本工具会先让它收工出交接摘要，耗时几分钟；别拿它当清会话使。
 🔴 只接受 QQ 569145850 本人的请求。整个过程无需人干预，进度看领航员活动流；耗时几分钟（要等它先写摘要，再等它接上）。`,
     category: 'system',
@@ -371,7 +373,8 @@ export function registerNavTools() {
       type: 'object',
       properties: {
         key: { type: 'string', description: `要整理的猫（${CAT_HINT}）` },
-        text: { type: 'string', description: '你这次要对它说的原话（可选；照抄，不改写）——新会话接上之后作为第一条指令投递' }
+        text: { type: 'string', description: '你这次要对它说的原话（可选；照抄，不改写）——新会话接上之后作为第一条指令投递' },
+        rescue: { type: 'boolean', description: '抢救模式（可选，默认 false）——目标猫自己跑不动时，由另一只空闲猫代读它的会话产出交接摘要' }
       },
       required: ['key']
     },
@@ -379,10 +382,13 @@ export function registerNavTools() {
       const key = String(args?.key || '').trim();
       if (!key) return err('key 不能为空——要整理哪只猫的前文？');
       const text = String(args?.text || '').trim();
+      const rescue = args?.rescue === true;
       try {
-        const data = await call('/api/nav/reset', { method: 'POST', body: { key, text } });
+        const data = await call('/api/nav/reset', { method: 'POST', body: { key, text, rescue } });
         if (data?.ok !== true) return err(`整理重启未受理：${JSON.stringify(data).slice(0, 200)}`);
-        return ok(`已开始整理重启：${key}。流程 = 收工整理 → 新会话 → 注入交接摘要 → 自动继续${text ? ' → 投递你的原话' : ''}；耗时几分钟，进度会同步到群。`);
+        return ok(rescue
+          ? `已开始抢救模式整理：${key}。流程 = 找空闲猫代读 → 产出交接摘要 → 新会话 → 注入摘要 → 自动继续${text ? ' → 投递你的原话' : ''}；耗时几分钟，进度会同步到群。`
+          : `已开始整理重启：${key}。流程 = 收工整理 → 新会话 → 注入交接摘要 → 自动继续${text ? ' → 投递你的原话' : ''}；耗时几分钟，进度会同步到群。`);
       } catch (error) {
         return err(`整理重启失败（自研单体没在跑？）：${error?.message ?? error}`);
       }

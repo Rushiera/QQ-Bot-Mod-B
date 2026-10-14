@@ -69,6 +69,14 @@ check('comfy_edit·参数面（prompt 必填 / messageId 可选）',
 check('comfy_edit·描述含前置两条',
   !!def && def.description.includes('领航员已开启') && def.description.includes('ComfyDock 在线'));
 
+// ── 2b nav_reset 定义面：抢救模式参数（Rushiera 2026-10-14）──────────────────
+const resetDef = getTool('nav_reset');
+check('nav_reset·抢救模式参数面（rescue 可选）',
+  !!resetDef && !!resetDef.parameters?.properties?.rescue
+  && !(resetDef.parameters.required || []).includes('rescue')
+  && resetDef.description.includes('抢救模式'),
+  resetDef ? JSON.stringify(resetDef.parameters.required) : '未注册');
+
 // ── 3 comfy_edit 执行面（不触网）────────────────────────────────────────────
 const ctx = {
   chatKey: 'group:selftest',

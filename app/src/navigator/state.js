@@ -6,8 +6,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-/** 空闲暂关阈值——全猫停工且无指令满此时长（毫秒）。 */
-export const IDLE_CLOSE_MS = 30 * 60 * 1000;
+/** 空闲暂关阈值——全猫停工且无活动满此时长（毫秒）。 */
+export const IDLE_CLOSE_MS = 180 * 60 * 1000;
 
 /** 指令流水保留条数（跨群记忆的载体——"刚刚让你干什么了"）。 */
 const COMMAND_LOG_LIMIT = 50;

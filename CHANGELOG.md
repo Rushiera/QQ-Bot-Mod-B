@@ -65,3 +65,4 @@
 
 | v0.57 | 2026-10-12 | 协议端登录面进自研单体（概览「账号登录」卡片：状态 / 快速登录 / 扫码登录——`src/napcat/webui.js` + `GET /api/qq/login` · `POST /api/qq/login/quick`）+ 入口归位（`启动QQAgent.*` 保留为单体入口别名——旧快捷方式指向它；仅业务面回落另存 `启动QQAgent-仅业务面.*`；单体启动体收敛 `tools/entry.cmd`）· 自测 `app/tools/verify-login.mjs` 5/5 · 生效需重启应用（详见 `design-qqbotb_log.md` §四十六） |
 | v0.58 | 2026-10-13 | 白名单加群 `112562956`（偶像大师摸鱼会二代）——经业务面 `POST /api/config` 热写 `allow.groups` → 8 群（即时生效，无需重启）；判例：白名单判断读**运行实例内存**（`getConfig()`），直改 `_unpack/data/config.json` 不生效且会被应用内部配置写入抹掉（详见 `design-qqbotb_log.md` §四十七） |
+| v0.59 | 2026-10-14 | 领航员空闲暂关阈值 30 分钟 → 3 小时——`navigator.idleCloseMs`（`config.js` 默认段）+ `IDLE_CLOSE_MS`（`state.js` 兜底）同步；设计文档三处对齐；应用已重启，`/api/nav/status` 实测 `idleCloseMs=10800000`（详见 `design-qqbotb_log.md` §四十八） |

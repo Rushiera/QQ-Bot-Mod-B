@@ -1563,3 +1563,30 @@ R喵喵：交接摘要已注入，等待确认
 | # | 项 | 状态 |
 |:--:|:--|:--|
 | 1 | 消费点——群 `112562956` 首条消息到达 → 自动建 `data/messages/group_112562956.json` | 待验（本场次内该群无新消息） |
+
+
+---
+
+## 四十八、领航员空闲暂关阈值 30 分钟 → 3 小时（v0.59 · 2026-10-14）
+
+> 触发：Rushiera——「把领航员超时自动关闭的限时从半个小时改到3个小时」。
+
+**改动：**
+
+| 面 | 文件 | 改动 |
+|:--|:--|:--|
+| 生效源（默认配置） | `app/src/config.js` | `navigator.idleCloseMs`：`30 * 60 * 1000` → `180 * 60 * 1000` |
+| 兜底常量 | `app/src/navigator/state.js` | `IDLE_CLOSE_MS`：`30 * 60 * 1000` → `180 * 60 * 1000` |
+| 设计文档 | `design-qqbotb-navigator.md` | 摘要 / §四 / §十一 三处「30 分钟」→「3 小时」；§四 判据基准同步为「最近一次活动」（v0.40 修正的文档补齐） |
+
+**判据链（未改）：** `createNavigator` 读 `navConfig.idleCloseMs`（`config.js` DEFAULTS，可被 `app/data/config.json` 覆盖）→ 守护每 60 秒巡检：`now − max(lastActivityAt, lastCommandAt, openedAt) ≥ idleCloseMs` 且全猫 `runState = idle` → 暂关（发 `activeChat` + 场次沉淀）。
+
+**验证实锤：**
+
+| 面 | 证据 |
+|:--|:--|
+| 语法 | `node --check` × 2（`app/src/config.js` · `app/src/navigator/state.js`）退出 0 |
+| 重启 | `启动QQBotB.bat` 一键全流程（停旧实例 → 清锁 → 开启动会话 → 起新）· 2026-10-14 12:50 前后 |
+| 消费点 | `GET http://127.0.0.1:3280/api/nav/status` → `idleCloseMs: 10800000`（= 180 分钟）· `enabled: true`（重启后状态恢复）· 持久观测重建（10 只猫订阅就绪） |
+
+**生效：** 已重启生效（改的是 `app/` 源码——启动时读取，重启吃下）。

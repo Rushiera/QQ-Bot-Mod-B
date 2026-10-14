@@ -821,6 +821,38 @@ patch('memory-reach-clear', 'orchestrator.js',
       setMemoryFloor(chatKey, 0);`);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 补丁：端点降级守卫（B19）——2026-10-14 群 361820329 实证
+// 背景：端点在单次 prompt 越过其容忍线（实测 ≈194k tokens / ≈306k 字符）后不再正常推理，
+//   而是回 200 + usage{prompt_tokens:14, completion_tokens:28}（恒定值，连系统提示都装不下）。
+//   客户端照单收下 → recordPromptTokens 把 14 写成轮转基线 → shouldRollover 估算恒小
+//   → 永不轮转 → 前文只增不减 → 继续被降级：自锁（该群 rollovers 恒 0 的根因）。
+// 修法：回报值与本地组装量严重不成比例时**不采信**（基线保持原值）并出声告警——
+//   失败必须可见（AGENTS §一-4），静默失败是自锁的入口。
+// 注：守卫只防"新污染"；已污染的基线靠清会话（POST /api/chats/<key>/clear）恢复。
+// ─────────────────────────────────────────────────────────────────────────────
+patch('degrade-guard', 'orchestrator.js',
+`      // 基线 = 单次上下文（最后一轮的 prompt），不是本次运行所有轮次的累积
+      // [qqagent-session-patch:rollover-baseline]
+      if (!lastError && !isRollover) recordPromptTokens(chatKey, session.lastPromptTokens || session.usage?.promptTokens);`,
+`      // 基线 = 单次上下文（最后一轮的 prompt），不是本次运行所有轮次的累积
+      // [qqagent-session-patch:rollover-baseline]
+      if (!lastError && !isRollover) {
+        // 端点降级守卫：回报的 prompt_tokens 与本地组装量严重不成比例 → 该值不是"上下文大小"，
+        // 而是端点异常产物；采信它会把轮转基线击穿（→ 永不轮转 → 前文只增不减，自锁）。
+        // [qqagent-session-patch:degrade-guard]
+        const pt = Number(session.lastPromptTokens || session.usage?.promptTokens) || 0;
+        const chars = Number(session.promptChars) || 0;
+        const expected = Math.round(chars / 1.5);
+        if (pt > 0 && chars >= 20000 && pt < expected / 5) {
+          logger.warn('session', chatKey + ' 端点回报 prompt_tokens=' + pt + '，本地组装 ' + chars
+            + ' 字符（≈' + expected + ' tokens）严重不成比例 → 疑似端点降级，本轮不采信该值（基线保持 '
+            + getSessionState(chatKey).lastPromptTokens + '）');
+        } else {
+          recordPromptTokens(chatKey, pt);
+        }
+      }`);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 报告
 // ─────────────────────────────────────────────────────────────────────────────
 console.log(JSON.stringify({

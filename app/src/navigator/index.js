@@ -1582,9 +1582,11 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
    * @param {object} options 选项
    * @param {string} options.key 目标猫
    * @param {string|number} [options.chat] 回报群
+   * @param {string} [options.text] 用户原话——新会话就绪后作为第一条指令投递（可选）
    * @returns {Promise<object>} 结果
    */
-  async function resetSession({ key, chat = null }) {
+  async function resetSession({ key, chat = null, text = '' }) {
+    const userText = String(text || '').trim();
     const resolved = await ch4.resolveKey(key);
     const name = await catNameOf(resolved);
     const target = resolveChat(chat);
@@ -1655,7 +1657,6 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     record('reset', `${name}：新会话已请求（${JSON.stringify(newSession).slice(0, 80)}）`);
     await waitSessionReady(resolved, { beforeCount });
 
-    // ③ 注入交接摘要 + ④ 自动继续（同一条消息即"继续"）
     const injectAt = Date.now();
     const parts = [
       '【上一段会话的收工报告与交接摘要】',
@@ -1679,11 +1680,20 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     // ⑤ 等它接上（回复由持久观测自动截图发群，不额外截图）
     const ack = await waitForReply(resolved, { since: injectAt - 2000, timeoutMs: 180000 });
     record('reset', `${name}：整理重启完成${ack ? '' : '（未见确认回复，可能仍在跑）'}`);
+
+    // ⑥ 用户原话（nav_reset 带 text 时）——接上之后作为第一条指令投递，不再靠两步 nav_new + nav_send
+    let delivered = null;
+    if (userText) {
+      const deliverAt = Date.now();
+      await ch4.send(resolved, userText);
+      delivered = await waitForReply(resolved, { since: deliverAt - 2000, timeoutMs: 180000 });
+      record('reset', `${name}：用户原话已投递（${userText.length} 字符）${delivered ? '' : '（未见确认回复）'}`);
+    }
     if (target) {
       // 不另发「整理完成」通知——猫的回复由出站决策发（有回复 → 截图；还没回复 → 检查点播报）
       scheduleAnalysis(resolved, target, { reason: '整理重启后' });
     }
-    return { ok: true, key: resolved, name, summary, trace, ack, material: materialFile };
+    return { ok: true, key: resolved, name, summary, trace, ack, material: materialFile, delivered };
   }
 
   /**
@@ -2165,9 +2175,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {} }) {
     }),
     'POST /api/nav/reset': async ({ body }) => {
       const key = body?.key || 'majordomo';
-      resetSession({ key, chat: body?.chat ?? null })
+      const text = String(body?.text || '').trim();
+      resetSession({ key, chat: body?.chat ?? null, text })
         .catch((error) => record('error', `整理重启失败（${key}）：${error?.message ?? error}`));
-      return { body: { ok: true, accepted: true, key, hint: '整理重启已在后台执行——进度看活动流' } };
+      return { body: { ok: true, accepted: true, key, text, hint: '整理重启已在后台执行——进度看活动流' } };
     }
   };
 

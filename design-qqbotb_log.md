@@ -1673,3 +1673,42 @@ R喵喵：交接摘要已注入，等待确认
 |:--:|:--|:--|
 | 1 | 「猫 R喵」与「群 bot R喵」同名是长期噪声源——是否改名由 Rushiera 定（工具侧不擅自改） | 待定 |
 | 2 | 15:26 那条（读全）实际由 majordomo 做了并已落地 v0.60；若需猫 R喵 复核，由主理方另派 | 待定 |
+
+## 五十一、投递错位两处改动（v0.62 · 2026-10-14）
+
+> 承接 §五十（侦查 + 交猫 R喵 开工）——本轮由 majordomo 接手落地两处改动面；猫 R喵 在另一会话自行推进的部分不在此列。
+
+**一、教材消歧（`tools/apply-qqagent-config.mjs` · NAV_RULES「判断」段）**
+
+| # | 规则 | 处置的根因 |
+|:--:|:--|:--|
+| 1 | **称呼前缀不是「叫你转达」**——「跟 X 说 / 告诉 X / 让 X 做 / 给 X 派个活」里的 X 就是**收件猫**；判例直接写进教材（「跟R喵说，上工qqbotb…」→ 投 `nav_send(key="R喵")`） | 根因 ② 称呼前缀被当指令正文 |
+| 2 | **区分口径**——X 是猫名（majordomo / R喵 / … / rf）→ 直接投那只猫；X 是本 bot 昵称（R喵 / Shieraru / 你 / 小喵）→ 去掉前缀再判收件猫（剩余正文没点名 → 投 majordomo） | 同上 |
+| 3 | **同名歧义**——群里 bot 显示名与 CH4 猫同为「R喵」→ 看到「R喵」**默认按猫处理**；只有整句读成「@你，让你转告别人」时才按转达 | 根因 ① 同名歧义 |
+
+**二、`nav_reset` 增 `text`（根因 ③）**
+
+| 面 | 改动 | 落点 |
+|:--:|:--|:--|
+| 单体 | `resetSession({ key, chat, text })`——接上（`ack`）之后新增第 ⑥ 步：`ch4.send(resolved, userText)` + 等回复；返回值增 `delivered` | `app/src/navigator/index.js` |
+| API | `POST /api/nav/reset` 透传 `text`（回执回显 `text`，证明入口没丢参数） | 同上 |
+| 业务面工具 | `nav_reset` 参数面增可选 `text` + 描述改「全自动⑤步」+ 示例（只投「告诉他」之后那句） | `tools/navigator/nav-tools.js` |
+| 教材 | 「前文整理重启」段补一条：带新指令时把原话一起传 `nav_reset(key=X, text=Y)` | `tools/apply-qqagent-config.mjs` |
+
+**三、自测与落盘**
+
+| 面 | 结果 |
+|:--:|:--|
+| `verify-navigator.mjs` | **41/41**（新增 2 条：nav_reset 带 text 回执回显 / 源码投递段在位） |
+| `verify-qqagent-navtools.mjs` | **8/8**（工具组 10 件注册） |
+| `patch-qqagent-navigator.mjs` | `module-nav-tools` updated（其余 5 点 skipped） |
+| 教材落 `roleText` | `roleTextChars` 94483 → **95123**（业务面开新会话才读到） |
+| 应用重启 | `tools/entry.cmd` 一键全流程；`/api/nav/status` 实测 `watching` 10 只 · 3280 在听 |
+
+**遗留 / 待确认：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 「猫 R喵」与「群 bot R喵」是否改名——工具侧未擅自改，由 Rushiera 定 | 待定 |
+| 2 | 消歧规则与 `nav_reset(text)` 的**群内实测**（真实消息走一遍）——本轮只到自测与重启 | 待你发起 |
+| 3 | 猫 R喵 在自己会话里推进的同类改动（若已做）需与本轮改动对账，避免双写冲突 | 待核对 |

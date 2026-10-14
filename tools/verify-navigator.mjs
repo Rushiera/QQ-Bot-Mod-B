@@ -255,6 +255,21 @@ const pull = await navPull.pullCatView('majordomo');
 check('现场拉取·取到整幅视图', !!pull && Array.isArray(pull.items), pull ? `items=${pull.items.length} live=${pull.live?.type ?? 'null'}` : 'null');
 navPull.stop();
 
+// ── 10 nav_reset 带 text：参数不吞 + 源码投递段在位（Rushiera 2026-10-14）────
+// 判据：API 面回执回显 text（证明入口没丢参数）；源码面存在「接上之后投递用户原话」这一段
+//       （真投递涉真猫与几分钟等待——不进自测，验收走群内实测）。
+const navReset = createNavigator({
+  log,
+  dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-reset-')),
+  config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
+  onebot: { call: async () => ({}), status: () => ({ self: { userId: 2405997337 } }) }
+});
+const resetBody = await navReset.api['POST /api/nav/reset']({ body: { key: 'no-such-cat-selftest', text: '__selftest__ 告诉他 Y' } });
+check('nav_reset·带 text 回执回显', resetBody?.body?.text === '__selftest__ 告诉他 Y', JSON.stringify(resetBody?.body ?? {}).slice(0, 90));
+const resetSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
+check('nav_reset·源码投递段在位', resetSrc.includes('ch4.send(resolved, userText)') && resetSrc.includes('用户原话已投递'));
+navReset.stop();
+
 const passed = results.filter((r) => r.ok).length;
 console.log(`\n结果：${passed}/${results.length} 通过`);
 process.exit(passed === results.length ? 0 : 1);

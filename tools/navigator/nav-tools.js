@@ -358,25 +358,31 @@ export function registerNavTools() {
   registerTool({
     id: 'nav_reset',
     name: '领航员·前文整理重启',
-    description: `把某只猫的前文整理重启——全自动四步：① 让它先做一次收工整理（产出交接摘要）② 清前文开新会话（重新注入知识文件）③ 把交接摘要注入新会话 ④ 让它据此继续工作。
+    description: `把某只猫的前文整理重启——全自动：① 让它先做一次收工整理（产出交接摘要）② 清前文开新会话（重新注入知识文件）③ 把交接摘要注入新会话 ④ 让它据此继续工作 ⑤ **带上你这次要对它说的原话**（可选）。
 用途：某只猫前文太长、快撑不住上下文时，用户说一句「清理一下 X 的前文，然后让工作继续」就调本工具。
 - key：要整理的猫（${CAT_HINT}）。
+- text：**你这次要对它说的原话**（可选）——用户原话照抄，别改写。系统会在它接上之后把它作为第一条指令投递。
+  例：用户说「重建 majordomo 的前文，告诉他，历史消息里有两个需求…你检查一下群bot的领航员前文」→ nav_reset(key='majordomo', text='历史消息里有两个需求一个是发给你的，另一个是发给R喵的…你检查一下群bot的领航员前文')——**只投「告诉他」之后的那句**，别把「重建前文」这半句也塞进去。
 🔴 只要「清掉会话 / 直接开新会话」用 nav_new——本工具会先让它收工出交接摘要，耗时几分钟；别拿它当清会话使。
 🔴 只接受 QQ 569145850 本人的请求。整个过程无需人干预，进度看领航员活动流；耗时几分钟（要等它先写摘要，再等它接上）。`,
     category: 'system',
     icon: '♻️',
     parameters: {
       type: 'object',
-      properties: { key: { type: 'string', description: `要整理的猫（${CAT_HINT}）` } },
+      properties: {
+        key: { type: 'string', description: `要整理的猫（${CAT_HINT}）` },
+        text: { type: 'string', description: '你这次要对它说的原话（可选；照抄，不改写）——新会话接上之后作为第一条指令投递' }
+      },
       required: ['key']
     },
     async execute(ctx, args) {
       const key = String(args?.key || '').trim();
       if (!key) return err('key 不能为空——要整理哪只猫的前文？');
+      const text = String(args?.text || '').trim();
       try {
-        const data = await call('/api/nav/reset', { method: 'POST', body: { key } });
+        const data = await call('/api/nav/reset', { method: 'POST', body: { key, text } });
         if (data?.ok !== true) return err(`整理重启未受理：${JSON.stringify(data).slice(0, 200)}`);
-        return ok(`已开始整理重启：${key}。流程 = 收工整理 → 新会话 → 注入交接摘要 → 自动继续；耗时几分钟，进度会同步到群。`);
+        return ok(`已开始整理重启：${key}。流程 = 收工整理 → 新会话 → 注入交接摘要 → 自动继续${text ? ' → 投递你的原话' : ''}；耗时几分钟，进度会同步到群。`);
       } catch (error) {
         return err(`整理重启失败（自研单体没在跑？）：${error?.message ?? error}`);
       }

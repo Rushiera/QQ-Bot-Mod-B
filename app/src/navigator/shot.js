@@ -26,8 +26,8 @@ const CARD_CSS = fs
   .readFileSync(path.join(moduleDir, 'chat-card.css'), 'utf8')
   .replace('../fonts/SarasaMonoSC-Regular.ttf', FONT_HREF);
 
-/** 单张卡最多渲染的块数（防超长）。 */
-const MAX_BLOCKS = 40;
+/** 单张卡最多渲染的块数（防超长）——「截全」口径：上限放到远高于常规会话，正常会话不再截尾。 */
+const MAX_BLOCKS = 300;
 
 /** 视觉调用超时（毫秒）。 */
 const VISION_TIMEOUT_MS = 90000;

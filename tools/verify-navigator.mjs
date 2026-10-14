@@ -2,7 +2,8 @@
 //
 // 用法：node tools/verify-navigator.mjs
 // 做什么：以真实模块 + 真实 CH4（8080 在跑）跑一遍——状态机落盘 / 猫群读取 / 单猫详情 / 健康检查 /
-//   回执渲染 / 会话分析读全（合成帧 + 现场拉取）/ 轻通道闸门（放行例投到不存在的猫名——不打扰真猫）。
+//   回执渲染 / 会话分析读全（合成帧 + 现场拉取）/ 轻通道闸门（放行例投到不存在的猫名——不打扰真猫）/
+//   会话截图（显式块出图——壳层 shot 用替身；真渲染与发群走群内实测）。
 // 边界：不向真猫投递消息——投递的真链路验收走群内实测。
 
 import fs from 'node:fs';
@@ -322,6 +323,32 @@ check('抢救·源码代读段在位',
   && salvageSrc.includes('function traceIndex') && salvageSrc.includes('抢救摘要已取到'),
   '');
 navSalvage.stop();
+
+// ── 12 nav_shot 会话截图：显式块出图 + 源码段在位（Rushiera 2026-10-14）──────
+// 判据：① API 面 POST /api/nav/shot 带显式 blocks → 渲染对话卡 + 走壳层 shot（替身）出图
+//       ② 源码面存在 shotSession 定义与发群分支（真截图 / 真发群走群内实测）。
+const navShot = createNavigator({
+  log,
+  dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-shot-')),
+  config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
+  onebot: { call: async () => ({}), status: () => ({ self: { userId: 2405997337 } }) },
+  hooks: {
+    shot: async (htmlFile, outFile) => {
+      fs.mkdirSync(path.dirname(outFile), { recursive: true });
+      fs.copyFileSync(htmlFile, `${outFile}.html`); // 留存渲染产物（真 shot 会删原 html）
+      fs.writeFileSync(outFile, Buffer.from([0x89, 0x50, 0x4e, 0x47])); // 非空即可——真渲染走群内实测
+      return outFile;
+    }
+  }
+});
+const shotBody = await navShot.api['POST /api/nav/shot']({ body: { key: 'majordomo', send: false, blocks: [{ renderType: 'text', text: '__selftest__ 会话卡' }] } });
+check('会话截图·显式块出图（路由接 shotSession）',
+  shotBody?.body?.ok === true && shotBody?.body?.blockCount === 1,
+  JSON.stringify(shotBody?.body ?? {}).slice(0, 120));
+const shotSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
+check('会话截图·源码段在位（shotSession + 发群分支）',
+  shotSrc.includes('async function shotSession') && shotSrc.includes('sayImage(target, png, caption)'), '');
+navShot.stop();
 
 const passed = results.filter((r) => r.ok).length;
 console.log(`\n结果：${passed}/${results.length} 通过`);

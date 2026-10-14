@@ -10,6 +10,7 @@
 //   POST /api/nav/send               投递（body { key, text }）
 //   POST /api/nav/new-session        新会话（body { keys: 'a,b,c' }——发布 /new，不清前文交接）
 //   POST /api/nav/comfy              图像编辑（body { chat, prompt, file, url }——送上 ComfyDock 生成工作区，出图自动回群）
+//   POST /api/nav/shot               会话截图（body { key, send:true }——把某猫会话画成卡发群；不带 blocks 时拉该猫会话）
 //
 // 「指令 / 闲聊」的语义判断归模型——本模块不做判定，也不替猫编造进度。
 // 依赖：QQBot mod B 自研单体（Electron 应用）在 127.0.0.1:3280 在跑。
@@ -318,6 +319,35 @@ export function registerNavTools() {
         return ok(`会话分析已触发（只读，不发消息给猫）：${done.join('，')}\n结果由领航员自己发群。`);
       } catch (error) {
         return err(`会话分析失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── nav_shot ────────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_shot',
+    name: '领航员·截图会话',
+    description: `把某只猫**当前的会话**渲染成一张会话卡截图发到群里（与领航员开场巡检同款样式——CH4 会话页的对话气泡卡）。
+用途：群里 @ 你说「截一下 X 的会话」「把 X 的会话发来看看」这类**要图**的请求时调本工具。
+- key：目标猫（${CAT_HINT}）。
+🔴 只读——只是把会话画成图，**不给猫发消息**、不改它的前文（要「它现在在干什么」的判读用 nav_analyze）。
+🔴 只接受 QQ 569145850 本人的请求。
+出图由领航员自己发群（会话卡 + 一段解读），你不用复述。`,
+    category: 'system',
+    icon: '🖼️',
+    parameters: {
+      type: 'object',
+      properties: { key: { type: 'string', description: `目标猫（${CAT_HINT}）` } },
+      required: ['key']
+    },
+    async execute(ctx, args) {
+      const key = String(args?.key || 'majordomo').trim();
+      try {
+        const data = await call('/api/nav/shot', { method: 'POST', body: { key, send: true, by: 'qq' } });
+        if (data?.ok !== true) return err(`截图未受理：${data?.error ?? JSON.stringify(data).slice(0, 200)}`);
+        return ok(`已截 ${key} 的会话卡并发群${data.sent === false ? '（发送失败）' : ''}。`);
+      } catch (error) {
+        return err(`会话截图失败（自研单体没在跑？）：${error?.message ?? error}`);
       }
     }
   });

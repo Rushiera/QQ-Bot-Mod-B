@@ -52,6 +52,10 @@ const DEFAULTS = {
     idleCloseMs: 180 * 60 * 1000,
     // 开场巡检最多截几只猫（0 = 不限——开启时把有会话的猫全部发一遍）
     tourLimit: 0,
+    // 「截全」口径：开场巡检 / 手动截图取会话的条数上限（keyinfo max）——取够，不截尾
+    tourKeyinfoMax: 80,
+    // 「截全」口径：群内「截一下 X 的会话」取会话的条数上限（keyinfo max）
+    shotKeyinfoMax: 80,
     // 前文整理重启：注入新会话的原文轨迹条数（0 = 不限）——「少量缩减」口径，保留近期原文
     resetTraceLimit: 100,
     // 抢救模式（design §六b）：代读目标猫会话原文的字符上限——超出保留头 30% + 尾 70%

@@ -3,7 +3,7 @@
 // 用法：node verify-qqagent-navtools.mjs
 // 判据：
 //   1 补丁落盘：标记齐全 + nav-tools.js 在位
-//   2 工具注册：领航员工具组 10 件经 tools.js 真实入口（buildToolDefs）进 registry
+//   2 工具注册：领航员工具组 11 件经 tools.js 真实入口（buildToolDefs）进 registry
 //   3 comfy_edit 定义面：参数面（prompt 必填 / messageId 可选）+ 描述含前置两条
 //   4 comfy_edit 执行面：空提示词 / 本群没有带图消息 → 报错退出（不触网）
 //
@@ -45,7 +45,7 @@ function check(name, ok, detail = '') {
 
 const NAV_TOOL_IDS = [
   'nav_status', 'nav_open', 'nav_close', 'nav_send', 'nav_detail',
-  'nav_health', 'nav_analyze', 'nav_new', 'nav_reset', 'comfy_edit'
+  'nav_health', 'nav_analyze', 'nav_shot', 'nav_new', 'nav_reset', 'comfy_edit'
 ];
 
 // ── 0 补丁落盘 ──────────────────────────────────────────────────────────────
@@ -76,6 +76,13 @@ check('nav_reset·抢救模式参数面（rescue 可选）',
   && !(resetDef.parameters.required || []).includes('rescue')
   && resetDef.description.includes('抢救模式'),
   resetDef ? JSON.stringify(resetDef.parameters.required) : '未注册');
+
+// ── 2c nav_shot 定义面：截图会话（key 必填 + 描述含「会话卡」）──────────────
+const shotDef = getTool('nav_shot');
+check('nav_shot·定义面（key 必填 / 描述含会话卡）',
+  !!shotDef && Array.isArray(shotDef.parameters?.required) && shotDef.parameters.required.includes('key')
+  && shotDef.description.includes('会话卡'),
+  shotDef ? JSON.stringify(shotDef.parameters.required) : '未注册');
 
 // ── 3 comfy_edit 执行面（不触网）────────────────────────────────────────────
 const ctx = {

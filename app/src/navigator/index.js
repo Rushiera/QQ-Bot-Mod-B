@@ -768,6 +768,62 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
+   * 截取某只猫的当前会话卡（可选发群）——与开场巡检同款渲染。
+   *
+   * 用途：群里 @ 说「截一下 X 的会话」时，产出**会话卡截图**（CH4 会话页同款对话气泡卡），
+   * 不是浏览器开网页截的图。只读——只画会话，**不给猫发消息、不改它的前文**。
+   *
+   * @param {object} options 选项
+   * @param {string} [options.key] 猫 key
+   * @param {string|number|null} [options.chat] 回报群（空 = 按新鲜 VIP 群消息解析）
+   * @param {Array<object>|null} [options.blocks] 显式块（测试用；空 = 拉该猫会话）
+   * @param {boolean} [options.send] 是否发群（false = 只出图，返回路径）
+   * @returns {Promise<object>} { ok, file?, blockCount?, insight?, sent?, error? }
+   */
+  async function shotSession({ key = 'majordomo', chat = null, blocks = null, send = false } = {}) {
+    let resolved = String(key || 'majordomo').trim() || 'majordomo';
+    try {
+      resolved = (await ch4.resolveKey(resolved)) || resolved;
+    } catch { /* 解析失败按原值 */ }
+    const catName = await catNameOf(resolved);
+    let useBlocks = Array.isArray(blocks) && blocks.length ? blocks : null;
+    if (!useBlocks) {
+      try {
+        const info = await ch4.keyinfo(resolved, Math.max(20, Number(navConfig.shotKeyinfoMax) || 80));
+        useBlocks = itemsToBlocks(Array.isArray(info?.items) ? info.items : [], 0);
+      } catch (error) {
+        record('error', `会话截图（${resolved}）：拉会话失败（${error?.message ?? error}）`);
+        return { ok: false, error: `拉 ${catName} 的会话失败：${error?.message ?? error}` };
+      }
+    }
+    if (!useBlocks || useBlocks.length === 0) {
+      return { ok: false, error: `${catName} 的会话是空的——没有可截的内容` };
+    }
+    let png;
+    try {
+      png = await shot.shoot({ catName, blocks: useBlocks, at: new Date().toLocaleString('zh-CN', { hour12: false }) });
+    } catch (error) {
+      record('error', `会话截图（${resolved}）：渲染失败（${error?.message ?? error}）`);
+      return { ok: false, error: `渲染截图失败：${error?.message ?? error}` };
+    }
+    const result = { ok: true, file: png, blockCount: useBlocks.length };
+    if (send) {
+      const target = resolveChat(chat);
+      if (!target) return { ok: false, error: '没有回消息群——先在群里说一句', file: png };
+      const insight = await shot.analyze(png);
+      result.insight = insight;
+      const caption = insight ? `${catName} 的会话：\n${insight}` : `${catName} 的会话`;
+      const sent = await sayImage(target, png, caption);
+      result.sent = sent.ok;
+      record(sent.ok ? 'send' : 'error', sent.ok
+        ? `会话截图已发群 ${target}（${catName}）`
+        : `会话截图发送失败（${sent.error}）`);
+      if (!sent.ok) result.error = sent.error;
+    }
+    return result;
+  }
+
+  /**
    * 为一只猫建立（或修复）持久观测——领航员开启期间常驻（任何一轮回复都截图发群，无例外）。
    *
    * 断线自愈（2026-10-14）：已有会话但订阅已断（watcher 无该 key）→ 就地重连——
@@ -1543,7 +1599,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     for (const row of picked) {
       try {
         // 开场一次性给全：取该猫较完整的会话（含开场问候）；后续只发新增（持久观测按 startedAt 增量取）
-        const info = await ch4.keyinfo(row.id, 20);
+        const info = await ch4.keyinfo(row.id, Math.max(20, Number(navConfig.tourKeyinfoMax) || 80));
         const blocks = itemsToBlocks(info?.items, 0);
         if (blocks.length === 0) continue;
         const png = await shot.shoot({
@@ -2428,14 +2484,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       })
     }),
     'POST /api/nav/shot': async ({ body }) => ({
-      body: await (async () => {
-        const catName = await catNameOf(body?.key || 'majordomo');
-        const blocks = Array.isArray(body?.blocks) && body.blocks.length
-          ? body.blocks
-          : [{ renderType: 'user', text: '（手动截图测试）' }];
-        const png = await shot.shoot({ catName, blocks, at: new Date().toLocaleString('zh-CN', { hour12: false }) });
-        return { ok: true, file: png, insight: await shot.analyze(png) };
-      })()
+      body: await shotSession({
+        key: body?.key || 'majordomo',
+        chat: body?.chat ?? null,
+        blocks: Array.isArray(body?.blocks) ? body.blocks : null,
+        send: body?.send === true
+      })
     }),
     'GET /api/nav/detail': async ({ query }) => ({ body: await ch4.detail(query.get('key') || 'majordomo') }),
     'POST /api/nav/new-session': async ({ body }) => ({

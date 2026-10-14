@@ -12,6 +12,7 @@
 | 协议端 WebUI 监听面 | 现监听 `::`（全网卡）——建议收窄至 `127.0.0.1`；属协议端自身配置，待 Rushiera 定 | ⏳ 待定 |
 | 日志时间戳对齐 | 日志页协议端行的外层时间戳为**转发时刻**（同批历史日志挤同一秒）；原始时间在行内——可按原行时间戳对齐 | ⏳ 待定 |
 | 群 361820329 静默不回 | ✅ 已闭合（2026-10-14）——清会话恢复（20:51 实测恢复发言）+ 轮转阈值 300000→160000 + 端点降级守卫（补丁点 `degrade-guard`）；诊断见 §五十二 · 修复见 §五十五 | ✅ 已闭合 |
+| 领航员会话截图群内实测 | v0.66「截全」+ `nav_shot`——自测 51/51 · 业务面 10/10 · 单体真实出图已验（含 24691px 超长卡）；**群内真发群**（R喵 调 `nav_shot` 回群）待群内 @ 触发（§五十六） | ⏳ 待实测 |
 
 ## 一、运行形态（design §三）
 
@@ -1901,3 +1902,74 @@ R喵喵：交接摘要已注入，等待确认
 | 1 | 端点为何以 200 + `usage{prompt_tokens:14, completion_tokens:28}`（恒定值）返回而非 4xx——未取证 | 待确认 |
 | 2 | 端点容忍线精确值（仅观测 193,767 正常 / 14 异常的区间）——160000 是留余量的工程取值 | 待确认 |
 | 3 | 守卫的**行为路径**（真降级发生时）未实机触发——本轮只验证到「boot 干净 + 逻辑命中 + 语法 0 错」 | 待触发 |
+
+## 五十六、领航员「截全」+ 群内截图单猫会话（2026-10-14 · v0.66）
+
+> 触发：Rushiera「开工qqbotB，打开领航员模式时的同步工作状态如果会话内容太多目前看来好像没有截全的样子 还是要截全，另外让群bot截图具体的某只猫的会话，我希望的不是浏览器截图而是这种内容，不影响其他的截图指令」。
+> 指令：「对的 开工把，先用cdp，不行我之后改成分段拼接」——即 CDP 全页为首选，分段拼接为备选。
+
+**一、诉求一 · 开场「同步工作状态」截不全——三处叠加**
+
+| # | 位置 | 原值 | 后果 |
+|:--:|:--|:--|:--|
+| 1 | `app/main.js` `hooks.shot` | 截图高 `min(max(h,200), 4000)` | 内容超 4000px 底部直接裁掉 |
+| 2 | `app/src/navigator/shot.js` `MAX_BLOCKS` | 40 | 单卡最多渲 40 块 |
+| 3 | `app/src/navigator/index.js` 开场巡检 | `keyinfo(id, 20)` | 只取最后 20 条 |
+
+**二、CDP 路线实测——不可用（改走原生整页截图）**
+
+按指令先验 CDP `Page.captureScreenshot{captureBeyondViewport:true}`：
+
+- 独立 electron 复现（`CatTemp/cdptest`）：`Page.getLayoutMetrics` 正常返回内容尺寸（如 7435px），但 `Page.captureScreenshot`（带/不带 `captureBeyondViewport`、带/不带 `Emulation.setDeviceMetricsOverride`）**卡死并拖垮渲染进程**——Promise 永不 resolve，进程随后退出。
+- 线上后果：`/api/nav/shot` 请求挂起（实测 45 秒超时 abort），无日志。
+
+→ CDP 方案**否决**（本机 Electron 44 实测不可用）；按指令的备选「分段拼接」亦未启用（见下——原生整页已够）。
+
+**三、原生整页截图——可行（含 GPU 纹理上限的处置）**
+
+- 原生 `win.setContentSize(800, H)` + `win.webContents.capturePage()`：H 取 `document.body` 实际高度。
+- **GPU 纹理上限 16384px**：开硬件加速时 `capturePage` 在 H > 16384 报 `UnknownVizError`（实测 16384 OK / 17000 FAIL）。
+- **处置**：`app.disableHardwareAcceleration()`（软件合成）——实测 `capturePage` 到 **40000px** 仍 OK。
+- 安全上限 `SHOT_MAX_HEIGHT = 30000`（防超大 PNG 拖垮发群）。
+
+**四、落地（v0.66 改动清单）**
+
+| 文件 | 改动 |
+|:--|:--|
+| `app/main.js` | `app.disableHardwareAcceleration()` + `SHOT_MAX_HEIGHT`；`hooks.shot` 改原生 `setContentSize` + `capturePage`（去 4000 上限；日志记「内容高 → 取高」） |
+| `app/src/navigator/shot.js` | `MAX_BLOCKS` 40 → **300** |
+| `app/src/navigator/index.js` | 开场巡检改 `keyinfo(row.id, tourKeyinfoMax)`；新增 `shotSession()`；`POST /api/nav/shot` 接 `shotSession`（`send` / `chat` / `blocks` 透传） |
+| `app/src/config.js` | `navigator.tourKeyinfoMax = 80` · `navigator.shotKeyinfoMax = 80` |
+| `tools/navigator/nav-tools.js` | 新增业务面工具 `nav_shot`（把某猫会话画成卡发群；只读） |
+| `tools/apply-qqagent-config.mjs` | 领航员教材加 `nav_shot` 一行（`roleTextChars` 95302 → **95412**） |
+| `tools/verify-navigator.mjs` | +2 断言（会话截图·显式块出图 / 源码段在位）→ **51/51** |
+| `tools/verify-qqagent-navtools.mjs` | 工具组 10 → **11 件** + `nav_shot` 定义面断言 → **10/10** |
+
+**五、诉求二 · 群内截图单猫会话（`nav_shot`）**
+
+- 形态：与开场巡检**同款会话卡**（复用 `shot.js` 的 `renderCard`；CH4 会话页对话气泡卡），**不是**浏览器开网页截的图。
+- 链路：群内 @ → 业务面 R喵 调 `nav_shot(key)` → 单体 `POST /api/nav/shot`（`send:true`）→ `shotSession` 拉该猫会话（`keyinfo`，条数上限 `shotKeyinfoMax`）→ 渲染 → 截图 → 解读 → 发群。
+- 只读：不给猫发消息、不改前文（要「它现在在干什么」用 `nav_analyze`）。
+- 回消息群：`resolveChat`（显式 chat 优先，否则取新鲜 VIP 群消息所在群）。
+- 边界：`browser-*` 等既有截图指令一律未动。
+
+**六、验证**
+
+| 面 | 结果 |
+|:--|:--|
+| 语法 | `node --check` 六文件 0 错 |
+| CDP 复现 | `CatTemp/cdptest` 独立 electron：CDP captureScreenshot 卡死（带/不带 clip、带/不带 Emulation 均复现） |
+| 原生上限 | hw accel 关：16384 / 17000 / 20000 / 25935 / 40000 全 OK；开：16384 OK / 17000 FAIL |
+| 真实出图（小） | `POST /api/nav/shot {key:R喵喵}` → 2.2 秒出图 |
+| 真实出图（大） | `POST /api/nav/shot {key:majordomo}` → 800×**6314**px（超旧 4000 上限）；裁底 OCR 到底部末行「…然后直接动手推进未完成的事项。」——完整无截断 |
+| 超长卡 | 合成 200 块 → 800×**24691**px；裁底 OCR 到底部为 **BLOCK-200**（末块在位）——远超 16384 上限仍截全 |
+| 业务面 | `verify-qqagent-navtools.mjs` 10/10（工具组 11 件）· `verify-navigator.mjs` 51/51 |
+| 生效 | 应用已重启（`启动QQBotB.bat`）；`_unpack` 侧 nav-tools.js 已同步（补丁 `patch-qqagent-navigator.mjs`） |
+
+**遗留 / 待确认：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 群内真发群（R喵 调 `nav_shot` 出图回群）——需群内 @ 触发（自测不打扰真群） | 待群内实测 |
+| 2 | 内容 > `SHOT_MAX_HEIGHT`（30000px）时仍会截尾——正常会话远未触及；再高需分段拼接 | 待触发 |
+| 3 | 关硬件加速对界面渲染性能的影响（软件合成）——本应用界面轻，未观察到问题 | 观察 |

@@ -9,6 +9,14 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createApp } from './src/app.js';
 
+// 领航员对话卡整页截图的**安全上限**（px）——按内容高度取窗口高，超过则截到此值。
+// 取值口径：远超常规会话（旧实现硬编码 4000，一长就截尾），又拦住超大 PNG 拖垮发群。
+const SHOT_MAX_HEIGHT = 30000;
+
+// 关硬件加速走软件合成：GPU 的 16384px 纹理上限会让超长会话卡截图直接失败
+// （实测 `UnknownVizError`）；软件合成实测可截到 40000px+（2026-10-14）。
+app.disableHardwareAcceleration();
+
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const BOOT_LOG = path.join(moduleDir, 'data', 'boot.log');
 
@@ -176,7 +184,11 @@ app.whenReady().then(async () => {
       fs.writeFileSync(file, image.toPNG());
       return file;
     };
-    // 壳层能力：领航员截图——离屏窗口加载渲染好的对话卡 HTML，按内容高度整页截图
+    // 壳层能力：领航员截图——离屏窗口加载渲染好的对话卡 HTML，按内容实际高度整页截图。
+    // 「截全」口径（2026-10-14）：窗口高度贴合内容（上限 SHOT_MAX_HEIGHT），配合
+    // app.disableHardwareAcceleration() 解除 GPU 16384 纹理上限——超长会话不再截尾。
+    // 🔴 不走 CDP Page.captureScreenshot：本机 Electron 44 上该调用（带不带
+    // captureBeyondViewport）会卡死并拖垮渲染进程（实测），整页截图用原生 capturePage。
     core.hooks.shot = async (htmlFile, outFile) => {
       const win = new BrowserWindow({
         width: 800,
@@ -189,12 +201,13 @@ app.whenReady().then(async () => {
         await win.loadFile(htmlFile);
         await new Promise((resolve) => setTimeout(resolve, 500));
         // 高度贴合内容（body 为 height:auto——不用 scrollHeight：内容不足时它取视口高，底部留白）
-        const height = await win.webContents.executeJavaScript(
+        const natural = await win.webContents.executeJavaScript(
           'Math.ceil(document.body.getBoundingClientRect().height)'
         );
-        const target = Math.min(Math.max(Number(height) || 600, 200), 4000);
+        const target = Math.min(Math.max(Number(natural) || 600, 200), SHOT_MAX_HEIGHT);
+        bootLog(`截图 ${path.basename(outFile)}：内容高 ${natural}px → 取 ${target}px`);
         win.setContentSize(800, target);
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        await new Promise((resolve) => setTimeout(resolve, 400));
         const image = await win.webContents.capturePage();
         fs.mkdirSync(path.dirname(outFile), { recursive: true });
         fs.writeFileSync(outFile, image.toPNG());

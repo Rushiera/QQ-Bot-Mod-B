@@ -212,7 +212,11 @@ if (armed) {
   check('会话分析·摘要不可用回落原文截断',
     fallback.includes('__selftest__ 回落甲'),
     fallback.replace(/\n/g, ' | ').slice(0, 90));
+  check('会话分析·播报精简为空时不发正文（回落分项）',
+    (await navIdem.composeBrief(digestFallback, [])) === '', '');
   summaryStub = async () => '__selftest__ 摘要';
+  check('会话分析·播报整条精简（LLM 一句话）',
+    (await navIdem.composeBrief(digestFallback, [])) === '__selftest__ 摘要', '');
   navIdem.disarmAll();
 }
 
@@ -283,6 +287,12 @@ const resetBody = await navReset.api['POST /api/nav/reset']({ body: { key: 'no-s
 check('nav_reset·带 text 回执回显', resetBody?.body?.text === '__selftest__ 告诉他 Y', JSON.stringify(resetBody?.body ?? {}).slice(0, 90));
 const resetSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
 check('nav_reset·源码投递段在位', resetSrc.includes('ch4.send(resolved, userText)') && resetSrc.includes('用户原话已投递'));
+// 报告分次收集（Rushiera 2026-10-15）：单条 assistant 输出受端点上限约束 → 逐轮收集拼接，完成标记收口
+check('nav_reset·报告分次收集段在位', resetSrc.includes('collectReport') && resetSrc.includes('RESET_REPORT_DONE') && resetSrc.includes('催办续写'));
+// 原文轨迹只落盘不注入（Rushiera 2026-10-15）：报告是唯一注入材料——轨迹留档备查，不进新会话前文
+check('nav_reset·原文轨迹只落盘不注入',
+  resetSrc.includes('仅落盘备查，不注入前文') && !resetSrc.includes('【上一段会话原文轨迹】'),
+  '');
 navReset.stop();
 
 // ── 11 nav_reset 抢救模式：选猫判据 + 原文抓取 + 入口透传（Rushiera 2026-10-14）──
@@ -320,7 +330,7 @@ check('抢救·完整前文抓取（只读 fullctx + 关键信息位置索引）
 const salvageSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
 check('抢救·源码代读段在位',
   salvageSrc.includes('async function rescueSummary') && salvageSrc.includes('async function pickRescueCat')
-  && salvageSrc.includes('function keyIndex') && salvageSrc.includes('抢救摘要已取到'),
+  && salvageSrc.includes('function keyIndex') && salvageSrc.includes('抢救报告已取到'),
   '');
 navSalvage.stop();
 

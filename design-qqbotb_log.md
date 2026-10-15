@@ -2013,3 +2013,110 @@ R喵喵：交接摘要已注入，等待确认
 | 1 | 真链路验收——群内「用抢救模式重建 X 的前文」跑一次全链，核对正文规模与索引位置 | 待触发 |
 | 2 | 600k 正文 ≈ 25 万 tokens 级——救援猫上下文压力（选猫已按「最干净」优先）；是否再设更低的软上限 | 按需再议 |
 | 3 | 生效需**重启应用**（改的是单体源码 `app/src/`） | 待 Rushiera 主持 |
+
+---
+
+## 五十八、播报整条 LLM 精简（2026-10-14 · v0.68）
+
+> 触发：Rushiera「群bot的领航员模式下还是会读完会话直接输出一大堆没有整理的内容，我需要他用llm思考精简成几十个字这种，而且这个需求已经做过一次，不知道为什么没有解决」。
+
+**一、根因（v0.63 为什么没解决）**
+
+| 项 | 实况 |
+|:--|:--|
+| v0.63（§五十三）作用域 | 只有 **think 段**——把思考原文压成两三句中文；播报其余段（`接的活` / `最近产出` / `最近工具调用（近 6 次）` / 旁白 / `正在写回复`）**原样保留** |
+| 用户口径 | 「一大堆没有整理的内容」= **整条播报**，不只是 think——范围太窄即根因 |
+| 群内误传纠正 | R喵 在群里答「改提示词/配置要新会话才吃到」**不成立**——播报摘要属自研单体 `app/src/` 代码面，生效条件是**重启应用**（新会话是业务面 R喵 自己的机制） |
+
+**二、改造（方案 B——整条播报交一次 LLM）**
+
+| 项 | 内容 |
+|:--|:--|
+| 出口 | `emitOutbound` ② 分支：先 `composeBrief(digest, rows)` 出「几十个字」正文——非空则 `body = head + brief`（就一句）；为空才回落分项素材（`progressFacts` + `composeActivity`）→ 再空走截图 + 视觉判读 |
+| `head` | 保留：`⏳ <猫名> 还在跑·<label>，尚未回复` |
+| 新增 `composeBrief(digest, items)` | 素材 = `progressFacts(items)` + `composeActivity(digest, {raw:true})`（思考段贴**原文**截断，供精简取材、不调 LLM）；整段素材交**一次** `shot.summarize`，提示词 `BRIEF_PROMPT`（一句话 / ≤50 字 / 说清在干什么·做到哪·有没有卡点） |
+| 新增 `briefMaterial` | 素材拼装（事实行 + 分项活动） |
+| `composeActivity` 签名 | 加第二参 `{ raw = false }`——`raw=true` 思考段走 `clipText(thinkSource, THINK_FALLBACK_MAX)`（不调 LLM）；缺省仍走 `summarizeThink` |
+| `shot.summarize` | 支持 `options.prompt` 覆盖提示词（缺省 `SUMMARY_PROMPT` = think 摘要）——播报整条精简传入自己的提示词 |
+| 新增常量 / 缓存 | `BRIEF_MAX = 120`（保底截断，提示词已限 50 字）· `BRIEF_PROMPT` · `briefCache`（素材 → 一句话；上限复用 `THINK_SUMMARY_CACHE_MAX`） |
+| 不可用回落 | `summaryConf.enabled === false` / 素材空 / 调用异常 / 输出空 → 返回空串 + `record('watch','播报精简为空——回落分项素材')` |
+| 配置 | **未新增配置项**——复用 `navigator.summary`（enabled / model / timeoutMs / maxTokens / maxChars），模型沿用快档 `deepseek-v4.1-flash` |
+| 落地文件 | `app/src/navigator/index.js`（`BRIEF_MAX` / `BRIEF_PROMPT` / `briefCache` / `briefMaterial` / `composeBrief` / `composeActivity{raw}` / `emitOutbound` ② 分支 / 导出）· `app/src/navigator/shot.js`（`summarize` 支持 `options.prompt`）· `tools/verify-navigator.mjs`（+2 断言） |
+
+**三、验证**
+
+| 面 | 结果 |
+|:--|:--|
+| 语法 | 改后经 `tools/verify-navigator.mjs` 加载（ESM 全链解析）无错 |
+| 自测 | `tools/verify-navigator.mjs` **53/53**——新增「播报精简为空时不发正文（回落分项）」「播报整条精简（LLM 一句话）」两断言；既有「读全组装 / think 不倾倒原文 / 摘要不可用回落 / 抢救模式 / 轻通道 / 会话截图」全过 |
+| 真链路 | **已验收**（2026-10-14 23:40，应用重启后 `POST /api/nav/analyze` 触发 rb 播报）——群 689942975 实际输出 = `⏳ rb 还在跑·v0.68 verify，尚未回复` + `它正用 curl 重发分析请求验证 v0.68，重启部署中，暂无卡点。`（head + 一句话，约 30 字） |
+
+**四、真链路暴露的二次根因——max_tokens 被推理吃光 🔴**
+
+首次真链路（23:36）**回落了分项素材**（日志 `播报精简为空——回落分项素材`）。排查：
+
+| 步 | 证据 |
+|:--|:--|
+| 1 | `summarize` 返回空串且**无** `think 摘要失败` / `端点未配置` 告警 → 端点 200 但 `content` 为空 |
+| 2 | 探针复验（`probe-text-summary.mjs --via=shot`）think 样本 2.5 秒出稿 → 链路本身可用 |
+| 3 | 探针喂**真实量级素材**（~1500 字符）→ `usage` 显示 `reasoning_tokens=351` / `completion_tokens=375`（上限 400）——**推理链吃掉绝大部分 `max_tokens`**，素材再长一点即 `content` 恒空 |
+| 4 | 定性 | 快档 `deepseek-v4.1-flash` 也是**推理模型**——`maxTokens=400` 对整段播报素材不够；旧 think 摘要（单块思考）勉强够，故 v0.63「看着能跑」 |
+
+修法：`navigator.summary.maxTokens` **400 → 1500**（`config.js` DEFAULTS + `index.js` `SUMMARY_DEFAULTS` 同步）；`shot.summarize` 增**空内容告警**（记 `finish_reason` + `reasoning` 字符数，落 `[WARN]`）——把此类静默失败转成可见。探针 `tools/probe-text-summary.mjs` 增 `--prompt=` / `--sample-file=`（喂自定义提示词与真实素材复验）。
+
+**遗留 / 待确认：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 「播报精简」与「think 摘要」共用 `navigator.summary`（含 `maxTokens`）——若需独立控制，另加配置项 | 按需再议 |
+| 2 | 素材再长（think 上万字符）时推理链仍可能触顶——`maxChars=4000` 已限素材长度；必要时再抬 `maxTokens` 或压素材 | 观察 |
+| 3 | 生效需**重启应用**（已执行 ×2：首版 + maxTokens 修） | ✅ |
+
+---
+
+## 五十九、前文整理·报告分次收集（2026-10-15 · Rushiera 定）
+
+> 触发：Rushiera 复核重建后的材料体量——「将近 1m 字符的会话被压缩到 10k 实在不可思议……我希望尽可能保留信息，以需要继续会话的信息为主」；方案选定：**只改输出报告**（正常 / 抢救两个模式一起改），不动前文注入面、不读文件。
+
+**一、问题实锤**
+
+| 项 | 实况 |
+|:--|:--|
+| 材料构成 | `摘要（猫自述 / 抢救猫代读） + 原文轨迹（keyinfo 四类）` |
+| R喵 案例材料 | 22,333 字节 ≈ 13.55k 字符（用户反馈的「13.55k」） |
+| **报告本体被截断** | 翻 CH4 完整前文留档 `data:sessions_ctx/639259389468574799_20261014_195206.txt`——R喵 收工输出标 `[[content 5786]]`，**断在第五节**（「（受 ASCII + CRLF」），第六节（不确定点）、第七节（用户原始要求）**整段丢失** |
+| 截断根因 | CH4 请求体（`Mau.Providers/DeepSeekLlmRuntime.Serialize.cs` → `BuildChatRequestBody`）**不带 `max_tokens`** → 单条 assistant 输出上限由端点默认值定；同会话 assistant 输出无一超 5786 字符（tool 回执可到 74 万字符） |
+
+**二、改造（只改输出报告）**
+
+| 项 | 内容 |
+|:--|:--|
+| 口径 | 报告**以「接手方能无疑问地继续」为准**——继续工作所需的一切（结论 / 数据 / 路径 / 参数 / 原话）都写进去；旧的、不再需要的信息可以略过；篇幅不设上限 |
+| 输出方式 | prompt 要求**分多次消息输出**（每次几个小节），**全部写完时最后一条以 `【整理完毕】` 结尾** |
+| 收集 | 新增 `collectReport()`（替代 `waitSummary` 与正常模式的单次 `waitForReply`）——**逐轮收集拼接**：①先回一句短话 → 催正文；②正文未完（无完成标记）→ 催续写；首轮不设时限、续写轮 300 秒上限；轮数上限 12、总长上限 200k 字符（安全阀） |
+| 两模式合流 | 正常模式（猫自述）与抢救模式（救援猫代读）**都走 `collectReport`** |
+| 落地文件 | `app/src/navigator/index.js`（`RESET_REPORT_DONE` / `RESET_REPORT_MAX_ROUNDS` / `RESET_REPORT_MAX_CHARS` / `RESET_REPORT_WAIT_MS` · `collectReport` · 两处 prompt · 两处调用）· `tools/verify-navigator.mjs`（+1 断言） |
+
+**三、验证**
+
+| 面 | 结果 |
+|:--|:--|
+| 语法 | `node --check app/src/navigator/index.js` 退出 0 |
+| 自测 | `tools/verify-navigator.mjs` **54/54**（新增「报告分次收集段在位」） |
+
+**四、注入面收尾（同日 · Rushiera 定）**
+
+| 项 | 内容 |
+|:--|:--|
+| 标题统一 | 材料与注入标题「交接摘要」→「**交接报告**」（正文口径上轮已改，本轮统一称谓）；注入头改「【上一段会话的交接报告】」，尾注改「以上是你上一段工作的交接报告（前文已按此重置，你的记忆就靠这份材料）」 |
+| 轨迹**不注入** | `resetSession` 注入面只留报告——「【上一段会话原文轨迹】」段整体移除；轨迹仍抓取（清前文前）但**只落盘**（材料文件标「仅落盘备查，不注入前文」）。依据：用户口径「原文轨迹属『不再提及就不需要』的信息——归档即可，前文只装接手方继续干活所需」 |
+| 轮数放宽 | `RESET_REPORT_MAX_ROUNDS` 12 → **30**——实测单条约 5.8k 字符，12 轮封顶约 69k，够不到「宁多勿漏」；字符安全阀 200k 不变（对应用户「后文 240k 可接受」的射程） |
+| 死常量清理 | 删除 `RESCUE_RETRY_MAX`（上一轮改 `collectReport` 后已无引用） |
+| 落地文件 | `app/src/navigator/index.js`（注入段 / 材料块 / 常量与注释口径）· `tools/verify-navigator.mjs`（断言同步 + 新增「原文轨迹只落盘不注入」） |
+
+**遗留 / 待确认：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 真链路验收——重启应用后跑一次 `nav_reset`，核对报告条数与体量（是否 >5786 且含完成标记） | 待触发 |
+| 2 | 生效需**重启应用**（改的是单体源码 `app/src/`） | 待 Rushiera 主持 |

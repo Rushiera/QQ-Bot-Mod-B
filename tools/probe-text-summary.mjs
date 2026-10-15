@@ -32,6 +32,8 @@ for (const raw of process.argv.slice(2)) {
 const model = String(args.model ?? '').trim() || api.model;
 const maxTokens = Number(args['max-tokens']) || 500;
 const via = String(args.via ?? 'raw').trim();
+const prompt = String(args.prompt ?? '').trim();
+const sampleFile = String(args['sample-file'] ?? '').trim();
 
 /** 样本：一段真实形态的猫 think（含英文推理流、多转折、中英夹杂）。 */
 const sample = [
@@ -41,6 +43,9 @@ const sample = [
   '我先确认一下这是不是新问题。grep 一下 readFileSync 的用法，再看有没有 offset 记录。',
   '如果确实是从头读，那这是个 bug，得改成记录偏移量。'
 ].join('\n');
+
+/** 实际输入——`--sample-file` 时读文件（用于喂真实播报素材）。 */
+const input = sampleFile ? fs.readFileSync(sampleFile, 'utf8').replace(/^\uFEFF/, '') : sample;
 
 const t0 = Date.now();
 
@@ -53,18 +58,20 @@ if (via === 'shot') {
     vision: { baseUrl: api.baseUrl, apiKey: api.apiKey, model: api.model },
     summary: { model, timeoutMs: 20000, maxTokens, maxChars: 4000 }
   });
-  const out = await shot.summarize(sample);
+  const out = await shot.summarize(input, prompt ? { prompt } : {});
   console.log('via            = shot.summarize');
   console.log('model          =', model);
   console.log('elapsed_ms     =', Date.now() - t0);
   console.log('summary        =', JSON.stringify(out));
 } else {
-  const question = [
-    '下面是一段 AI 猫的思考过程。用两三句中文总结它现在在想什么、进展到哪、有没有卡点。',
-    '只输出总结本身，不要复述原文。',
-    '',
-    sample
-  ].join('\n');
+  const question = prompt
+    ? `${prompt}\n\n${input}`
+    : [
+      '下面是一段 AI 猫的思考过程。用两三句中文总结它现在在想什么、进展到哪、有没有卡点。',
+      '只输出总结本身，不要复述原文。',
+      '',
+      input
+    ].join('\n');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
   try {

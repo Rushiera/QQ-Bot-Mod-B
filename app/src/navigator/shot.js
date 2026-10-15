@@ -236,7 +236,8 @@ ${CARD_CSS}
    * 推理吃光 max_tokens 时 content 恒空），不适合播报这种高频短调用；flash 档实测 2 秒出稿。
    *
    * @param {string} text 思考原文
-   * @param {object} [options] 覆盖项（model / timeoutMs / maxTokens / maxChars）
+   * @param {object} [options] 覆盖项（model / prompt / timeoutMs / maxTokens / maxChars）
+   *   prompt 缺省走 SUMMARY_PROMPT（think 摘要）；播报整条精简传入自己的提示词。
    * @returns {Promise<string>} 摘要（失败返回空串——调用方回落原文截断）
    */
   async function summarize(text, options = {}) {
@@ -259,13 +260,19 @@ ${CARD_CSS}
         body: JSON.stringify({
           model,
           max_tokens: maxTokens,
-          messages: [{ role: 'user', content: `${SUMMARY_PROMPT}\n\n${source.slice(0, maxChars)}` }]
+          messages: [{ role: 'user', content: `${String(options.prompt ?? SUMMARY_PROMPT)}\n\n${source.slice(0, maxChars)}` }]
         }),
         signal: controller.signal
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error?.message || `HTTP ${response.status}`);
-      return String(data?.choices?.[0]?.message?.content ?? '').trim();
+      const content = String(data?.choices?.[0]?.message?.content ?? '').trim();
+      if (!content) {
+        const finish = data?.choices?.[0]?.finish_reason ?? '?';
+        const rlen = String(data?.choices?.[0]?.message?.reasoning_content ?? '').length;
+        log.warn('navigator', `摘要空内容（finish=${finish}，reasoning=${rlen} 字符）——多为 max_tokens 被推理吃光`);
+      }
+      return content;
     } catch (error) {
       log.warn('navigator', `think 摘要失败：${error?.message ?? error}`);
       return '';

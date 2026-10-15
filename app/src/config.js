@@ -69,7 +69,9 @@ const DEFAULTS = {
       enabled: true,
       model: 'deepseek-v4.1-flash',
       timeoutMs: 20000,
-      maxTokens: 400,
+      // maxTokens 需留足推理空间：快档也是推理模型，整段播报素材的推理链可吃 350-900 token，
+      // 400 会被推理吃光 → content 恒空（2026-10-14 实锤：播报精简回落分项）。1500 留足余量。
+      maxTokens: 1500,
       maxChars: 4000
     },
     services: [

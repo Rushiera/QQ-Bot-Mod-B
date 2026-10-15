@@ -30,7 +30,7 @@ const WATCH_TIMEOUT_MS = 10 * 60 * 1000;
 /** 兜底轮询间隔（毫秒）——SSE 判据落空时按 keyinfo 的轮结算行收尾。 */
 const POLL_INTERVAL_MS = 5000;
 
-/** 交接轨迹默认条数（0 = 不限）——「少量缩减」口径：保留近期原文，不追求一句不丢。 */
+/** 交接轨迹默认条数（0 = 不限）——「少量缩减」口径：保留近期原文，不追求一句不丢（仅落盘备查，不注入前文）。 */
 const RESET_TRACE_LIMIT = 100;
 
 /** 单条回复在轨迹里的截断长度（字符）——用户原话不截断。 */
@@ -48,11 +48,20 @@ const RESCUE_SOURCE_MAX = 600000;
 /** 抢救模式：代读正文保留头部比例（其余留尾部）——任务背景在头、近期进展在尾。 */
 const RESCUE_HEAD_RATIO = 0.3;
 
-/** 抢救模式：视为「交接摘要」的最短长度（字符）——更短的按「先回了一句」处理（催办后继续等）。 */
+/** 抢救模式：视为「交接报告」的最短长度（字符）——更短的按「先回了一句」处理（催办后继续等）。 */
 const RESCUE_SUMMARY_MIN = 200;
 
-/** 抢救模式：救援猫回短话后最多催办次数（超过即判失败，不清前文）。 */
-const RESCUE_RETRY_MAX = 3;
+/** 交接报告完成标记——猫输出含它即视为「整理完毕」（分多次输出时用于判收口；Rushiera 2026-10-15 定）。 */
+const RESET_REPORT_DONE = '【整理完毕】';
+
+/** 交接报告收集上限——最多续写催办轮数（单条消息受端点输出上限约束，长报告须分多次输出后拼接；放宽到 30 轮——实测单条约 5.8k 字符，12 轮封顶约 69k，达不到「宁多勿漏」）。 */
+const RESET_REPORT_MAX_ROUNDS = 30;
+
+/** 交接报告收集上限——总长字符数（安全阀，防单会话无限续写）。 */
+const RESET_REPORT_MAX_CHARS = 200000;
+
+/** 交接报告：续写轮等待上限（毫秒）——首轮不设上限（完整收工耗时不定），续写轮设上限防挂死。 */
+const RESET_REPORT_WAIT_MS = 300000;
 
 /**
  * 进度判读提示词——猫还在跑（尚未回复）时用（Rushiera 2026-10-11：要「做到哪 / 什么情况 / 还要多久」）。
@@ -70,7 +79,7 @@ const BLOCK_TYPES = ['user', 'stream', 'text', 'reason', 'toolcard'];
 
 /** think 摘要默认配置（可被 `navigator.summary` 覆盖）——模型必须选快档，见 `shot.summarize` 注释。 */
 const SUMMARY_DEFAULTS = {
-  enabled: true, model: 'deepseek-v4.1-flash', timeoutMs: 20000, maxTokens: 400, maxChars: 4000
+  enabled: true, model: 'deepseek-v4.1-flash', timeoutMs: 20000, maxTokens: 1500, maxChars: 4000
 };
 
 /** think 摘要输出上限（字符）——超出再截（提示词已限 120 字，此处为保底）。 */
@@ -81,6 +90,17 @@ const THINK_FALLBACK_MAX = 600;
 
 /** think 摘要缓存条数上限——同一段思考不重复请求。 */
 const THINK_SUMMARY_CACHE_MAX = 100;
+
+/** 播报精简输出上限（字符）——提示词已限 50 字，此处为保底截断。 */
+const BRIEF_MAX = 120;
+
+/**
+ * 播报精简提示词——把整段进度素材压成几十个字（Rushiera 2026-10-14）。
+ *
+ * 与 think 摘要（SUMMARY_PROMPT）的区别：think 摘要只压思考段；本提示词吃**整段素材**
+ * （接的活 / 最近产出 / 思考片段 / 工具调用 / 旁白），只吐一句话——播报正文就这一句。
+ */
+const BRIEF_PROMPT = '下面是某只 AI 猫正在跑任务的进度素材（它接的活、最近产出、思考片段、工具调用、旁白）。用一句话概括它现在在干什么、做到哪一步、有没有卡点，总长控制在 50 字以内。只输出这一句话，不要分点、不要复述原文、不要加任何前缀。';
 
 /** 每猫留存的思考块条数上限（环形）——会话分析「直接读 think」的数据源。 */
 const THINK_KEEP = 200;
@@ -239,6 +259,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
 
   /** think 摘要缓存（思考原文 → 摘要）——同一段思考不重复请求。 */
   const thinkSummaryCache = new Map();
+
+  /** 播报精简缓存（素材原文 → 一句话）——同一段素材不重复请求。 */
+  const briefCache = new Map();
 
   /** 等「本轮回复」的等待器（猫 key → Set<resolve>）——前文整理重启用：挂持久观测的轮结束信号，不设时限。 */
   const roundWaiters = new Map();
@@ -694,22 +717,29 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         source = 'ring';
       }
     }
-    const activity = await composeActivity(digest);
-    if (activity) {
+    // 🔴 整条播报交 LLM 精简（Rushiera 2026-10-14）：不再分项罗列（接的活 / 最近产出 / 工具调用 /
+    //    旁白），只发「几十个字」的一句话；精简不可用时回落分项素材 → 截图判读。
+    if (!emptyDigest(digest)) {
       record('watch', `${catName}：播报素材 = ${source === 'pull' ? '现场拉取' : '常驻环'}（think ${digest?.thinks?.length ?? 0} / 工具 ${digest?.tools?.length ?? 0} / 旁白 ${digest?.gaps?.length ?? 0}${digest?.liveThink ? ' / 直播思考' : ''}${digest?.liveTool ? ' / 进行中工具' : ''}）`);
     }
-    let insight = '';
-    if (!activity) {
-      // 兜底：截图 + 视觉判读（读不到 think / 工具时才走——慢、贵、二手）
-      try {
-        const png = await shot.shoot({ catName, blocks: replyBlocksOf(rows), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
-        if (png) insight = await shot.analyze(png, PROGRESS_QUESTION);
-      } catch (error) {
-        record('error', `播报（${key}）：判读失败（${error?.message ?? error}）——仅发事实`);
+    const brief = await composeBrief(digest, rows);
+    let detail = '';
+    if (!brief) {
+      const activity = await composeActivity(digest);
+      let insight = '';
+      if (!activity) {
+        // 兜底：截图 + 视觉判读（读不到 think / 工具时才走——慢、贵、二手）
+        try {
+          const png = await shot.shoot({ catName, blocks: replyBlocksOf(rows), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
+          if (png) insight = await shot.analyze(png, PROGRESS_QUESTION);
+        } catch (error) {
+          record('error', `播报（${key}）：判读失败（${error?.message ?? error}）——仅发事实`);
+        }
       }
+      detail = [progressFacts(rows), activity || insight].filter((line) => String(line ?? '').trim()).join('\n');
     }
     const head = `⏳ ${catName} 还在跑${label}，尚未回复`;
-    const body = [head, progressFacts(rows), activity || insight]
+    const body = [head, brief || detail]
       .filter((line) => String(line ?? '').trim()).join('\n');
     const sent = await sayAt(target, body, vipUser);
     if (sent.ok) {
@@ -991,8 +1021,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   /**
    * 会话条目 → 原文轨迹文本（前文整理重启用——留存用户原话与猫的回复原文）。
    *
-   * 交接摘要由猫自己写、必然有取舍；原文轨迹是客观留存。两者一起注入才能保住延续性
-   * （Rushiera 2026-10-11：「重启结果应优先确保当前会话内容的延续性」）。
+   * 轨迹只**落盘备查**、不进新会话前文（Rushiera 2026-10-15：原文轨迹属「不再提及就不需要」的
+   * 信息——归档即可；前文只装交接报告，确保接手方能无疑问地继续）。抓取须在清前文之前。
    *
    * @param {Array<object>} items keyinfo 条目
    * @param {number} limit 取末尾条数上限
@@ -1465,6 +1495,64 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
+   * 播报精简的原始素材——事实行（接的活 / 最近产出）+ 分项活动（思考原文 / 工具 / 旁白 / 直播态）。
+   *
+   * @param {object} digest 活动摘要
+   * @param {Array<object>} items keyinfo 条目
+   * @returns {Promise<string>} 素材文本（无内容时空串）
+   */
+  async function briefMaterial(digest, items) {
+    const parts = [];
+    const facts = progressFacts(items);
+    if (facts) parts.push(facts);
+    const activity = await composeActivity(digest, { raw: true });
+    if (activity) parts.push(activity);
+    return parts.join('\n');
+  }
+
+  /**
+   * 进度素材 → 播报正文（整条交 LLM 精简成几十个字）。
+   *
+   * Rushiera 2026-10-14：用户要「用 LLM 精简成几十个字」——不再分项罗列（接的活 / 最近产出 /
+   * 最近工具调用 / 旁白），整段素材交一次 LLM 压成一句话。精简不可用（未启用 / 端点未配置 /
+   * 调用失败 / 输出为空）返回空串——调用方回落分项素材。
+   *
+   * @param {object} digest 活动摘要
+   * @param {Array<object>} items keyinfo 条目（事实行素材）
+   * @returns {Promise<string>} 一句话（无内容或不可用时为空串）
+   */
+  async function composeBrief(digest, items) {
+    if (summaryConf.enabled === false) return '';
+    const material = await briefMaterial(digest, items);
+    if (!material) return '';
+    const cached = briefCache.get(material);
+    if (cached) return cached;
+    let brief = '';
+    try {
+      brief = await summarize(material, {
+        model: summaryConf.model,
+        prompt: BRIEF_PROMPT,
+        timeoutMs: Number(summaryConf.timeoutMs) || undefined,
+        maxTokens: Number(summaryConf.maxTokens) || undefined,
+        maxChars: Number(summaryConf.maxChars) || undefined
+      });
+    } catch (error) {
+      record('error', `播报精简异常：${error?.message ?? error}——回落分项素材`);
+    }
+    if (!brief) {
+      record('watch', '播报精简为空——回落分项素材');
+      return '';
+    }
+    const clipped = clipText(String(brief).replace(/\s+/g, ' ').trim(), BRIEF_MAX);
+    briefCache.set(material, clipped);
+    if (briefCache.size > THINK_SUMMARY_CACHE_MAX) {
+      const oldest = briefCache.keys().next().value;
+      if (oldest !== undefined) briefCache.delete(oldest);
+    }
+    return clipped;
+  }
+
+  /**
    * 活动摘要 → 播报文本（会话分析正文）。
    *
    * 组成（Rushiera 2026-10-14「让他读全一点」）：它现在在想（直播态 → 最近思考）·
@@ -1474,9 +1562,11 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    *    多转折、上千字），整段贴群不可读——交 LLM 压成两三句中文；摘要不可用时回落原文截断。
    *
    * @param {object} digest 活动摘要
+   * @param {object} [options] 选项
+   * @param {boolean} [options.raw] true = 思考段贴原文截断（不调 LLM）——供播报整条精简取素材
    * @returns {Promise<string>} 文本（无内容时为空串）
    */
-  async function composeActivity(digest) {
+  async function composeActivity(digest, { raw = false } = {}) {
     if (!digest) return '';
     const lines = [];
     const fresh = (at) => at && Date.now() - at <= LIVE_FRESH_MS;
@@ -1485,7 +1575,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     const lastThink = digest.thinks.length > 0 ? String(digest.thinks[digest.thinks.length - 1].text ?? '').trim() : '';
     const thinkSource = liveThink || lastThink;
     if (thinkSource) {
-      lines.push(`· ${liveThink ? '它现在在想' : '它最近在想'}：\n${await summarizeThink(thinkSource)}`);
+      const thinkBody = raw ? clipText(thinkSource, THINK_FALLBACK_MAX) : await summarizeThink(thinkSource);
+      lines.push(`· ${liveThink ? '它现在在想' : '它最近在想'}：\n${thinkBody}`);
     }
     // ② 工具调用——最近 6 次 + 进行中（直播态 toolrun）
     const recent = digest.tools.slice(-6);
@@ -1742,9 +1833,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   /**
    * 等某猫出「本轮回复」——挂持久观测的轮结束信号唤醒，**默认不设时限**。
    *
-   * 为什么不再用固定超时轮询（Rushiera 2026-10-11 定）：完整收工 + 落盘 + 推 git + 交接摘要，
+   * 为什么不再用固定超时轮询（Rushiera 2026-10-11 定）：完整收工 + 落盘 + 推 git + 交接报告，
    * 大前文的猫实测 8 分钟——固定窗口（原 240s）必判失败。判例：R喵 434k 前文，
-   * 17:39:23 投递、17:43:24 判「交接摘要未取到」中止，而它 17:47:17 才产出摘要。
+   * 17:39:23 投递、17:43:24 判「交接报告未取到」中止，而它 17:47:17 才产出报告。
    * 正常情形下收工报告必然产出，等待就挂到「转发回复」那一刻（持久观测 `finishSession`）。
    *
    * @param {string} key 猫 key
@@ -1867,34 +1958,51 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
-   * 等救援猫产出交接摘要——太短（先回了一句）时催办后继续等，最多 RESCUE_RETRY_MAX 次。
+   * 收集交接报告——猫分多次输出时逐轮拼接，直到出现完成标记（或达上限）。
    *
-   * @param {string} key 救援猫
+   * 为什么分多次（Rushiera 2026-10-15 定）：单条 assistant 消息受端点输出上限约束（实测 R喵 报告
+   * 断在 5786 字符、摘要后两节整段丢失）——长报告必须分多条写，领航员逐轮收全后一次注入。
+   * 两种催办：①先回一句短话 → 催正文；②正文未完（无完成标记）→ 催续写。
+   *
+   * @param {string} key 猫 key（救援猫或目标猫）
    * @param {object} options 选项
    * @param {number} options.since 起点时刻
-   * @param {string} [options.name] 救援猫显示名（留痕用）
-   * @returns {Promise<string>} 摘要正文（空串 = 未取到）
+   * @param {string} [options.name] 显示名（留痕用）
+   * @returns {Promise<string>} 报告正文（空串 = 未取到）
    */
-  async function waitSummary(key, { since, name: catName = key } = {}) {
+  async function collectReport(key, { since, name: catName = key } = {}) {
     let cursor = since;
-    for (let attempt = 0; attempt <= RESCUE_RETRY_MAX; attempt += 1) {
-      const reply = await waitForReply(key, { since: cursor });
-      if (!reply) return '';
-      if (reply.length >= RESCUE_SUMMARY_MIN) return reply;
-      record('reset', `${catName}：先回了一句短话（${reply.length} 字符），催办摘要（${attempt + 1}/${RESCUE_RETRY_MAX}）`);
+    let text = '';
+    for (let round = 0; round <= RESET_REPORT_MAX_ROUNDS; round += 1) {
+      const reply = await waitForReply(key, { since: cursor, timeoutMs: round === 0 ? 0 : RESET_REPORT_WAIT_MS });
+      if (!reply) return text;
+      if (text.length === 0 && reply.length < RESCUE_SUMMARY_MIN) {
+        record('reset', `${catName}：先回了一句短话（${reply.length} 字符），催办报告（${round + 1}/${RESET_REPORT_MAX_ROUNDS}）`);
+        cursor = Date.now();
+        try {
+          await ch4.send(key, '请直接输出**交接报告正文**（纯文本，小标题 + 列表）——不要确认、不要复述原文、不要调工具；上一句不是报告。');
+        } catch (error) {
+          record('error', `${catName}：催办投递失败（${error?.message ?? error}）`);
+          return text;
+        }
+        continue;
+      }
+      text = text.length > 0 ? `${text}\n\n${reply}` : reply;
+      if (text.includes(RESET_REPORT_DONE) || text.length >= RESET_REPORT_MAX_CHARS) break;
       cursor = Date.now();
       try {
-        await ch4.send(key, '请直接输出**交接摘要正文**（纯文本，小标题 + 列表）——不要确认、不要复述原文、不要调工具；上一句不是摘要。');
+        await ch4.send(key, `请继续输出交接报告的**剩余部分**——接着上次断的地方写，不要重复已输出的内容；全部写完后，最后一条以 ${RESET_REPORT_DONE} 结尾。`);
       } catch (error) {
-        record('error', `${catName}：催办投递失败（${error?.message ?? error}）`);
-        return '';
+        record('error', `${catName}：续写催办投递失败（${error?.message ?? error}）`);
+        break;
       }
+      record('reset', `${catName}：报告未完（已收 ${text.length} 字符），催办续写（${round + 1}/${RESET_REPORT_MAX_ROUNDS}）`);
     }
-    return '';
+    return text;
   }
 
   /**
-   * 抢救模式——目标猫自己跑不动时，由另一只空闲猫代读它的完整前文，产出交接摘要。
+   * 抢救模式——目标猫自己跑不动时，由另一只空闲猫代读它的完整前文，产出交接报告。
    *
    * @param {object} options 选项
    * @param {string} options.resolved 目标猫 key
@@ -1922,9 +2030,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     record('reset', `${name}：完整前文已抓取（${source.count} 条 / ${group(source.chars)} 字符${source.truncated ? '·超限截断' : ''}）→ 投给 ${rescuer.name} 代读`);
     const askAt = Date.now();
     await ch4.send(rescuer.key, [
-      `【领航员·前文抢救】目标：${name}。它自己的会话已经跑不动了（前文太长 / 无响应），没法自己收工整理——现在由你代读它的**完整前文**，产出一份**交接摘要**，交给它的下一个会话。`,
+      `【领航员·前文抢救】目标：${name}。它自己的会话已经跑不动了（前文太长 / 无响应），没法自己收工整理——现在由你代读它的**完整前文**，产出一份**交接报告**，交给它的下一个会话。`,
       '',
-      '摘要要求（足量、详尽，宁多勿漏——接手方只有这份摘要，猜不到你没写的）：',
+      '报告要求（足量、详尽，宁多勿漏——接手方只有这份报告，猜不到你没写的；**以「接手方能无疑问地继续」为准**：继续工作所需的一切都写进去，旧的、不再需要的信息可以略过）：',
       '· 任务全貌与背景（在做什么、为什么做）',
       '· 已完成的步骤与做法（关键路径 / 命令 / 文件 / 接口）',
       '· 未完成事项与下一步',
@@ -1936,25 +2044,27 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       '【会话关键信息索引】（位置 = 该条在正文中的条号与起始字符；中段被省略时，索引里仍保留该条首段与位置——需要细节按位置回查）',
       source.index || '（未取到条目）',
       '',
-      `完整前文在下面（${source.count} 条 / ${group(source.chars)} 字符${source.truncated ? '，超长已砍中段' : ''}）。本次**不要调工具**，只读前文；只输出摘要正文（纯文本，小标题 + 列表），不要复述原文、不要输出别的话；篇幅不设上限。`,
+      `完整前文在下面（${source.count} 条 / ${group(source.chars)} 字符${source.truncated ? '，超长已砍中段' : ''}）。本次**不要调工具**，只读前文；只输出报告正文（纯文本，小标题 + 列表），不要复述原文、不要输出别的话；篇幅不设上限。`,
+      `**报告可能很长——请分多次消息输出**：每次输出一部分（几个小节），单条不要太长（避免被输出上限截断）；每次写完就停下，我会催你继续；**全部写完后，最后一条以 ${RESET_REPORT_DONE} 结尾**。`,
       '',
       '—— 会话完整前文 ——',
       source.text
     ].join('\n'));
-    const summary = await waitSummary(rescuer.key, { since: askAt - 2000, name: rescuer.name });
+    const summary = await collectReport(rescuer.key, { since: askAt - 2000, name: rescuer.name });
     if (!summary) {
-      record('error', `${name}：抢救摘要未取到（救援猫 ${rescuer.name}），整理中止`);
-      return { ok: false, error: '抢救摘要未取到', rescuer };
+      record('error', `${name}：抢救报告未取到（救援猫 ${rescuer.name}），整理中止`);
+      return { ok: false, error: '抢救报告未取到', rescuer };
     }
-    record('reset', `${name}：抢救摘要已取到（${rescuer.name} 代读，${summary.length} 字符）`);
+    record('reset', `${name}：抢救报告已取到（${rescuer.name} 代读，${summary.length} 字符）`);
     return { ok: true, summary, rescuer, source };
   }
 
   /**
-   * 前文整理重启——收工整理 → 抓原文轨迹 → 新会话 → 注入「摘要 + 轨迹」→ 自动继续。
+   * 前文整理重启——收工整理 → 抓原文轨迹（仅落盘）→ 新会话 → 注入交接报告 → 自动继续。
    *
-   * 延续性优先（Rushiera 2026-10-11）：交接材料 = 猫自述摘要 + 领航员客观抓取的原文轨迹，
-   * 两者一起注入——单靠摘要会丢细节，单靠轨迹会太长。
+   * 延续性优先（Rushiera 2026-10-11）：交接材料的主体 = 猫自述（或救援猫代读）的**交接报告**，
+   * 口径为「接手方能无疑问地继续」；长报告分多次输出、由领航员逐轮收全（Rushiera 2026-10-15）。
+   * 原文轨迹另抓一份**只落盘、不注入**——它属「不再提及就不需要」的信息，混进前文只稀释有效信息。
    *
    * @param {object} options 选项
    * @param {string} options.key 目标猫
@@ -1981,14 +2091,14 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       summary = salvaged.summary;
       summaryFrom = `抢救猫 ${salvaged.rescuer.name} 代读`;
     } else {
-    // ① 收工整理——让它把工作状态写成交接摘要（不调工具）
+    // ① 收工整理——让它把工作状态写成交接报告（不调工具）
     const askAt = Date.now();
     await ch4.send(resolved, [
       '【领航员·前文整理】你现在做一次**完整收工**，按顺序：',
       '① 落盘——把该写的写进文件（进度 / 变更 / 设计文档 / todo / CHANGELOG，按你所在项目的收工清单）。',
       '② **推 git**——把当前工作提交并推送（能推的都推掉，别留着）。',
       '③ **收工报告**——按你的收工纪律输出终态断言：完成项 / 落盘位置 / 遗留项去向，零疑问句。',
-      '④ 然后输出一份**交接摘要**——要足量、详尽，宁多勿漏；接手方是你的下一个会话，它只有这份摘要，猜不到你没写的：',
+      '④ 然后输出一份**交接报告**——要足量、详尽，宁多勿漏；接手方是你的下一个会话，它只有这份报告，猜不到你没写的：',
       '   · 任务全貌与背景（在做什么、为什么做）',
       '   · 已完成的步骤与做法（关键路径 / 命令 / 文件 / 接口）',
       '   · 未完成事项与下一步',
@@ -1997,18 +2107,20 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       '   · 不确定或待确认的点（明确标注，别让接手方当成事实）',
       '   · 用户提过的原始要求（照抄关键句，别改写）',
       '',
-      '①②③做完再输出摘要；报告与摘要都只输出正文（纯文本，小标题 + 列表），篇幅不设上限。'
+      '**以「接手方能无疑问地继续」为准**——继续工作所需的一切（结论 / 数据 / 路径 / 参数 / 原话）都写进去，旧的、不再需要的信息可以略过；篇幅不设上限。',
+      '**报告可能很长——请分多次消息输出**：每次输出一部分（几个小节），单条不要太长（避免被输出上限截断）；每次写完就停下，我会催你继续；**全部写完后，最后一条以【整理完毕】结尾**。',
+      '①②③做完再输出报告；报告与摘要都只输出正文（纯文本，小标题 + 列表）。'
     ].join('\n'));
-    // 不设时限——收工 + 落盘 + 推 git + 摘要，大前文的猫实测 8 分钟（等「转发回复」那一刻）
-    summary = await waitForReply(resolved, { since: askAt - 2000 });
+    // 不设时限——收工 + 落盘 + 推 git + 报告（可能分多次输出，逐轮收全），大前文的猫实测 8 分钟起
+    summary = await collectReport(resolved, { since: askAt - 2000, name });
     if (!summary) {
-      record('error', `${name}：交接摘要未取到，整理中止`);
-      return { ok: false, error: '交接摘要未取到' };
+      record('error', `${name}：交接报告未取到，整理中止`);
+      return { ok: false, error: '交接报告未取到' };
     }
-    record('reset', `${name}：交接摘要已取到（${summary.length} 字符）`);
+    record('reset', `${name}：交接报告已取到（${summary.length} 字符）`);
     }
 
-    // ①b 抓原文轨迹（必须在清前文之前——清掉就没了）：摘要之外的客观留存
+    // ①b 抓原文轨迹（必须在清前文之前——清掉就没了）：仅落盘备查，不进注入面
     let trace = '';
     let beforeCount = 0;
     try {
@@ -2016,7 +2128,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       beforeCount = Number(info?.count ?? 0);
       trace = traceText(info?.items, traceLimit);
     } catch (error) {
-      record('error', `${name}：原文轨迹抓取失败（${error?.message ?? error}）——本次仅注入摘要`);
+      record('error', `${name}：原文轨迹抓取失败（${error?.message ?? error}）——本次材料无轨迹留存（报告照常注入）`);
     }
     record('reset', `${name}：原文轨迹已抓取（${trace.length} 字符 / 清前文前 ${beforeCount} 条）`);
 
@@ -2024,11 +2136,11 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     const material = [
       `# 交接材料 · ${name}（${new Date().toLocaleString('zh-CN', { hour12: false })}）`,
       '',
-      `## 交接摘要（${summaryFrom}）`,
+      `## 交接报告（${summaryFrom}）`,
       '',
       summary,
       '',
-      '## 原文轨迹（领航员抓取）',
+      '## 原文轨迹（领航员抓取 · 仅落盘备查，不注入前文）',
       '',
       trace || '（未抓到）',
       ''
@@ -2049,23 +2161,14 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
 
     const injectAt = Date.now();
     const parts = [
-      '【上一段会话的收工报告与交接摘要】',
-      summary
-    ];
-    if (trace) {
-      parts.push(
-        '',
-        '【上一段会话原文轨迹】（末尾若干条，原文照录——供你核对细节，别只信摘要）',
-        trace
-      );
-    }
-    parts.push(
+      '【上一段会话的交接报告】',
+      summary,
       '',
-      '以上是你上一段工作的交接摘要与前文轨迹（前文已按此重置，你的记忆就靠这两份材料）。',
+      '以上是你上一段工作的交接报告（前文已按此重置，你的记忆就靠这份材料）。',
       '据此继续工作——别重新调研已经做过的事：先回一句你在接着做什么，然后直接动手推进未完成的事项。'
-    );
+    ];
     await ch4.send(resolved, parts.join('\n'));
-    record('reset', `${name}：交接摘要已注入，等待确认`);
+    record('reset', `${name}：交接报告已注入，等待确认`);
 
     // ⑤ 等它接上（回复由持久观测自动截图发群，不额外截图）
     const ack = await waitForReply(resolved, { since: injectAt - 2000, timeoutMs: 180000 });
@@ -2090,7 +2193,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * 新会话（/new）——给一只或多只猫**直接开新会话**：清前文 + 重新注入知识文件。
    *
    * 与 `resetSession`（前文整理重启）的区别（Rushiera 2026-10-11）：那是「保住工作地重启」——
-   * 先收工出交接摘要、再开新会话、再把摘要注入让它接着干；本函数只开新会话，
+   * 先收工出交接报告、再开新会话、再把报告注入让它接着干；本函数只开新会话，
    * **不**收工、**不**抓轨迹、**不**注入、**不**让它继续。
    *
    * 群内语义：「清掉 X 的会话」「直接开新会话即可」走本路径；「清理一下 X 的前文，然后让工作继续」才走 reset。
@@ -2579,7 +2682,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     armCat, armAll, disarmAll, ensureWatching, resetSession, newSession, waitForReply,
     pickRescueCat, grabCatSource,
     scheduleAnalysis, runAnalysis, analyzeOnce, collectThink, thinkText,
-    pullCatView, digestFromView, digestFromSession, composeActivity,
+    pullCatView, digestFromView, digestFromSession, composeActivity, composeBrief,
     armLightWatch, cancelLightWatch, clearLightWatches, lightWatches,
     editImage, comfy,
     start, stop, api, idleCloseMs

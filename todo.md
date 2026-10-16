@@ -26,6 +26,7 @@
 | # | 项 | 说明 |
 |:--:|:--|:--|
 | B15 | 真实链路验收：收工轮 → 群记 topic | 群里聊到超阈值触发收工轮后，确认 `_group.json` 的 topic 条目被刷新（来源：`design-qqbotb_log.md` §十一 遗留 1） |
+| B17 | 安静模式真链路验收 | 选一个非在用的群加入 `engage.quiet.chats`，`intervalMs` 临时调小（如 60000）观察：①普通消息不触发发言 ②@ 能回 ③到点出「安静整理轮」（不发言 + 写群记 / 印象 + 归档）④存档与记忆照常（来源：`design-qqbotb_log.md` §六十 遗留 1） |
 
 ## 五、领航员模式（Rushiera 2026-10-11 口述规格 · `design-qqbotb-navigator.md`）
 

@@ -2120,3 +2120,73 @@ R喵喵：交接摘要已注入，等待确认
 |:--:|:--|:--|
 | 1 | 真链路验收——重启应用后跑一次 `nav_reset`，核对报告条数与体量（是否 >5786 且含完成标记） | 待触发 |
 | 2 | 生效需**重启应用**（改的是单体源码 `app/src/`） | 待 Rushiera 主持 |
+
+---
+
+## 六十、安静模式（2026-10-16 · Rushiera 定 · v0.71）
+
+> 触发：Rushiera 2026-10-16 13:03 经领航员轻通道投递——「开工qqbotB，给群加一个安静模式，这个按钮开关放在记忆区，处于这个模式的群聊能不发言就不发言，被@了要能回，存档和记忆功能不受影响，可以改为6个小时一次，不发言只整理」。
+
+**一、语义与口径**
+
+| 项 | 内容 |
+|:--|:--|
+| 开关位置 | 记忆页（群记卡片）——列表徽标 + 详情「🤫 安静模式」按钮，写 `config.engage.quiet.chats`（群号字符串数组） |
+| 安静群行为 | **不参与闲聊**（非 @ 消息只入库、不进 LLM）；**被 @ / 拍一拍 立即触发**走普通轮（可发言）；每 `intervalMs`（默认 6 小时）跑一次「**只整理不发言**」的记忆沉淀轮 |
+| 存档与记忆 | 不受影响——消息照常入库、归档与记忆整理照常 |
+| 默认值 | `config.engage.quiet = { enabled: true, chats: [], intervalMs: 21600000, organizeOnly: true }`——未显式加群前对现网**零影响** |
+
+**二、实现（复用收工轮）**
+
+| 面 | 落点 |
+|:--|:--|
+| 模块 | 新增 `src/quiet-mode.js`——导出 `quietEnabled` / `quietChats` / `isQuietChat` / `quietIntervalMs` / `quietHint`（零依赖，只读配置） |
+| 节拍拉长 | `orchestrator.js` `#noteBrowsePending` 与 `#browseTick` 两处按安静间隔重排——安静群下一拍 = now + `quietIntervalMs()` |
+| 到点整理轮 | 到点且有未读 → `wake(chatKey, { quietOrganize: true })`；无未读零动作 |
+| 强制收工语义 | `isRollover` 并入 `quietOrganize \|\| shouldRollover(...)`——复用既有收工轮全套（发送类工具移除 + 写群记 / 印象 / 要点 / 话题词 + 归档轮转 + `resetSession`） |
+| 指令分叉 / 收尾标记 | `rolloverInstruction('quiet')`；`finishReason` 记「安静整理轮（定时沉淀）」 |
+| 提示段 | 每轮追加【安静模式】段（不闲聊 / 点名才回应 / 6 小时只整理一次） |
+| 静默补拍 | 安静群**不走**静默补拍（`!due && !quiet && idleFireDue`） |
+
+**为什么复用收工轮：** 收工轮已具备「不发言 + 写群记 / 印象 + 归档」全套；安静整理轮只需 `quietOrganize: true` 强制 `isRollover=true`，避免另造一套。
+
+**三、交付物与规模**
+
+| 文件 | 规模 |
+|:--|:--|
+| `tools/patch-qqagent-quiet.mjs` | 427 行 / **23 补丁点**（新增文件 1 + `config.js` 1 + `orchestrator.js` 8 + `ui/app/05-memory-settings.js` 7 + 说明段） |
+| `tools/verify-qqagent-quiet.mjs` | 199 行 / **24 项断言**（判定 5 + 提示段 3 + 源码落点 4 + 链路端到端 3 + 其余） |
+| `_unpack/resources/app/src/quiet-mode.js` | 新增（61 行） |
+
+**四、踩坑（务必延续的惯例）**
+
+| # | 现象 | 根因 / 修法 |
+|:--:|:--|:--|
+| 1 | 补丁首跑后自测 FAIL 2 项 | 4 个补丁点（`orchestrator-hint-append` / `runagent-call` / `ui-list-quiet-html` / `ui-detail-quiet-html`）用 `appliedIf` 做幂等检测，但替换文本里**没有内嵌标记**——检测不到 |
+| 2 | 修法 | 替换文本内嵌 `[qqagent-quiet-patch:<id>]` + 4 处源文件回滚 + 重跑（applied 4 / skipped 19）→ 幂等确认（applied 0 / skipped 23）→ 自测 24/24。**新补丁点一律「标记内嵌 + 默认标记检测」**，勿用 `appliedIf` 替代 |
+
+**五、自测与落地**
+
+| 面 | 结果 |
+|:--|:--|
+| 语法 | `node --check`（4 文件）全过 |
+| 补丁 | 首跑 applied 23 / skipped 0；重跑 applied 0 / skipped 23（幂等） |
+| 自测 | `node tools/verify-qqagent-quiet.mjs` **24/24**（隔离目录 `runtime/.quiet-selftest`） |
+| 补丁链位置 | **链尾**（依赖 `patch-qqagent-engage.mjs` / `patch-qqagent-browse.mjs` 产物——锚点落在浏览节拍巡检上） |
+| 应用重启 | `启动QQBotB.bat` 一键全流程（停旧实例 → 清锁 → 开会话 `mvaj0chg-f14f7c3f` → 起新单体）；启动输出正常（`roleTextChars` 95412） |
+| 重启后核验 | 进程（electron ×4 · QQ Agent ×4 · PID 45988/45540 起于 13:27:33-35）· 业务面 `_unpack/data/config.json` 含 `engage.quiet` 段（205–210 行）· 源码 23 处标记 + `quiet-mode.js` 在位 |
+| 真链路验收 | **待触发**——需 Rushiera 指定测试群（临时把 `intervalMs` 调小观察整理轮），验四点：①普通消息不触发发言 ②@ 能回 ③到点出「安静整理轮」（不发言 + 写群记 / 印象 + 归档）④存档与记忆照常 |
+
+**六、边界（不做）**
+
+- 不在安静群直接禁用触发（那样连 6 小时整理轮都没了，与「存档和记忆不受影响」相悖）
+- 不在发送面硬拦（「@ 能回」靠触发面控制——发送面拦会一并拦掉点名回应）
+- 不新建独立巡检器（复用浏览节拍巡检，少一个定时器）
+- 默认 `chats: []`——未显式加群前对现网零影响
+
+**遗留 / 待确认：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 真链路验收（选一个非在用的群，`intervalMs` 临时调小如 60000） | 待 Rushiera 指定测试群 |
+| 2 | 群侧：Rushiera 群里曾说「一会R喵喵做完了就给你开安静模式」——需她指认目标群 | 待确认 |

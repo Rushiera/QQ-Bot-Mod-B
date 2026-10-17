@@ -2257,3 +2257,64 @@ R喵喵：交接摘要已注入，等待确认
 | 2 | 段高 12000px / 上限 12 段是初值——若手机上看着太长或太糊，调 `navigator.shotSegmentHeight` 即可（0 = 退回单张） | 待体感反馈 |
 | 3 | 开场巡检（`tourKeyinfoMax=80`）仍是「概览口径」——按群逐猫一张，未跟进全量分段（防刷屏） | 设计如此，可按需改 |
 | 4 | 工具描述与教材已落盘（`patch-qqagent-navigator.mjs` 已同步 `_unpack` 侧 `nav-tools.js`；`apply-qqagent-config.mjs --roletext-only` 已写配置）——**生效需业务面重启 / 新会话**（本轮未再重启：避免打断群内正在进行的对话） | 待下次重启 |
+
+## 六十二、记忆不节流：写入放开 + 归档 + 索引 + 检索（2026-10-16 · Rushiera 定 · v0.73）
+
+> 触发：Rushiera 2026-10-16 开工指令——「我感觉现在记忆区的这种记忆方式有点跟不上群友，记忆的内容太少了，你正好读一下现在已经运行一段时间了，有很多存档，你看各个群的记忆应该怎么设置更好」；同日补口径——「记忆不需要节流，写的多不是坏事，但要能归档能索引」。
+> 设计 → `design-qqbotb-memory.md` §3.10。
+
+**一、诊断（全量读档 8 群 · 硬数据）**
+
+| # | 病灶 | 实况 |
+|:--:|:--|:--|
+| 1 | 沉淀口只有收工轮一条窄路 | 印象密度只跟轮转次数相关：1097492606 轮转 7 次 → 31 条印象；512942437 / 112562956 / 785638698 各 200~300 KB 聊天记录、`rollovers=0`、`startedAt=0` → 群记与印象**从未被收工轮写过**。模型主动写那条路不可靠（代码注释自记「实测模型日常几乎不主动调 memory_append」），而 `memoryRules()` 引导只存在于 full 模式，现行 `systemPromptMode=lean` → 模型读不到任何记忆引导 |
+| 2 | 群记被领航场次灌满 | `sedimentVoyage` 每次关闭都写一条 `kind=project`，0 秒 0 指令空场照写。689942975 的 40 条上限里 28 条场次（其中 18 条 0 分 0 秒），淘汰策略「保留最后 N 条」→ 真实 lore / rule / relation 被顺序挤出 |
+| 3 | 三个上限三个数 | 代码 `MAX_ENTRIES=40`（话题另限 12）· 配置 `maxGroupEntries=20` · 重整提示词写死「最多 20 条」 |
+| 4 | 写了也注入不到 | 人档无过滤时最多 20 位群友 × 每人 5 条 → 30+ 人的群一半人进不了提示词；重整面口径「宁少勿错」与写入面「宁可多记」互相抵消 |
+
+**二、口径（写入不节流 · 归档 · 索引 · 检索）**
+
+| 面 | 内容 |
+|:--|:--|
+| 写入 | **不设上限、不淘汰**——群记软上限 200 条（话题 24）、单条 400 字；超软上限**转归档**（原「淘汰最旧」= 丢信息） |
+| 归档 | `data/memory/<chat>/archive/group-<yyyyMMdd>.jsonl` · `archive/member-<yyyyMMdd>.jsonl`——append-only、按天分卷；三类入档：溢出、重整改掉的旧条目、无实绩场次 |
+| 索引 | `data/memory/<chat>/_index.json`——现行池分类计数（byKind）+ 归档计数，每次写入后重建 |
+| 检索 | 新工具 **`memory_search`**——跨现行池 + 归档按关键词搜（`category` = all / member / group；回执带 `archive` 计数） |
+| 注入 | 仍有预算（提示词是硬预算）：群记每类最近 12 条 + 话题 12 条、人档每人最近 8 条 / 最多 30 人；**被截下的条数与归档量在段尾明示** |
+| 沉淀拍 | 新增冷群兜底：节拍到点 && **无未读** && 距上次沉淀 ≥ `memory.sedimentIntervalMs`（12h，0=关）→ 走一次「只整理不发言」的整理轮 |
+| 场次 | `sedimentVoyage` 加实绩判据（≥60 秒 / 有指令 / 有截图 / 有播报 / 有巡检任一），空场只留活动流 trace |
+
+**三、实现（补丁点 24 + 3 个新脚本）**
+
+| 文件 | 改动 |
+|:--|:--|
+| `src/group-memory.js` | 常量放宽 + `saveEntries` 溢出转归档 + 新增 `archiveGroupEntries` / `listArchivedGroupEntries` / `groupArchiveStats` / `rebuildGroupIndex`；`setGroupTopics` 不再静默截断；`formatGroupForPrompt` 注入预算 + 段尾指针 |
+| `src/memory.js` | 注入常量（每人 8 / 30 人）+ 段尾归档指针；新增 `memberArchiveStats` / `searchMemberArchive`；`replaceConsolidated` 去掉总量上限 + 重整前把被改掉的旧条目写进归档 |
+| `src/tools.js` | 新增 `memory_search`（跨现行 + 归档检索） |
+| `src/prompt.js` | `memoryRules()` 改口径（「用得上就记，不怕多」）；**lean 模式补记忆引导**（原漏在 lean 之外） |
+| `src/config.js` | `memory.*` 默认值：`maxImpressionsPerMember` 8→40 · `maxGroupEntries` 20→60 · `consolidateMinIntervalMs` 6h→3h · `discoverMinMessages` 5→3 · `discoverMaxMembers` 6→10 · 新增 `sedimentIntervalMs=12h` |
+| `src/orchestrator.js` | 群记重整上限跟随配置 + 提示词去掉「宁少勿错」；人档 cap 去掉「最多 +2」；新增 `#sedimentDue` 与沉淀拍分支（无未读才走）；整理轮标签 |
+| `src/routes.js` | 记忆列表 / 详情带归档计数与归档条目 |
+| `ui/app/05-memory-settings.js` | 列表项与群记标题行显示「归档 N 条」 |
+| `tools/patch-qqagent-memory.mjs` | 新增 24 个补丁点（`no-throttle-*`）+ 幂等兜底（锚点被后续补丁搬走时按替换体首尾行判定已应用） |
+| `tools/patch-qqagent-session.mjs` / `patch-qqagent-navigator.mjs` | 同步幂等兜底；`orchestrator-run-signature` 锚点跟随 quiet 补丁后的真实签名 |
+| `app/src/navigator/index.js` | `sedimentVoyage` 加实绩判据；`buildVoyageLog` 回执带 `stats`，`close()` 透传 |
+| `tools/migrate-qqagent-memory-archive.mjs`（新） | 存量迁移：空场次下沉归档 + 重建索引（可重放） |
+| `tools/apply-qqagent-memory-limits.mjs`（新） | 参数热写：走业务面 `POST /api/config` + 写后复核（判例 v0.58——直改 `_unpack/data/config.json` 不生效） |
+
+**四、验证**
+
+| 面 | 结果 |
+|:--|:--|
+| 语法 | `node --check` 七文件 0 错 |
+| 自测 | `verify-qqagent-memory.mjs` **43/43**（新增 7a–7g 不节流/归档/索引/检索、8a–8c 沉淀拍与默认值）· `verify-qqagent-session.mjs` **20/20** · `verify-qqagent-memory-reach.mjs` **13/13** · `verify-navigator.mjs` **57/57** · `verify-qqagent-navtools.mjs` **10/10** · `verify-import-integrity.mjs` ALL PASS（60 文件 / 317 符号） |
+| 存量迁移 | 真实数据目录：689942975 移出 18 条 0 秒空场进归档，现行群记 64 → 46（lore 5 / rule 4 / relation 1 / project 24 / topic 12）· 其余 6 群建索引 |
+| 参数热写 | `maxImpressionsPerMember=40` / `maxGroupEntries=60` / `consolidateMinIntervalMs=10800000` / `discoverMinMessages=3` / `discoverMaxMembers=10` / `sedimentIntervalMs=43200000`——写后读回逐项一致 |
+| 真链路 | 记忆页 API：`/api/memory-files` 回执含 `groupArchived` / `memberArchived`；`/api/memory-files/group_689942975` 回执含 `groupArchived`（18 条）与 `archiveStats`；`/api/tools` 里 `memory_search` 已注册 |
+| 生效 | 应用已重启（`启动QQBotB.bat` 一键全流程）；启动会话 `roleTextChars=95412` |
+
+**五、边界（不做）**
+
+- 不做向量化 / 语义检索——本轮只做「关键词 + 归档」，向量库等真出现「关键词搜不到」的判例再上（`勿增实体`）
+- 不改注入段的段落顺序（前缀缓存）——预算只减条数，不动结构
+- 不动群隔离铁律：归档与索引同样以 chatKey 为键，禁止跨群读取

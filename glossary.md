@@ -56,6 +56,10 @@
 | `群记` | 群级记忆——`data/memory/<chat>/_group.json`，条目带 `kind`：`lore` 梗/黑话 · `rule` 群规约定 · `relation` 关系角色 · `project` 长期项目 · `topic` 在聊什么。回答「这个群是什么群、最近在聊什么」 |
 | `群会话` | 会话页一级单位——每 chatKey 一行（群名 / 会话起点 / 前文规模 / 轮转次数 / 记录数 / 未读），点开是该群的运行记录；**不同群视为不同会话** |
 | ~~`话题词`~~ | **已并入群记**（`kind=topic` 条目）——`_topics.json` 退役，解析器 `extractTopicWords` 仍用于收工轮产出 |
+| `记忆不节流` | 写入不设上限、不淘汰（2026-10-17）——现行池超软上限的条目**转归档**而非丢弃；「能记多少」不受限，「注入多少」受预算约束 |
+| `归档` | 记忆的留底层——`data/memory/<chat>/archive/group-<yyyyMMdd>.jsonl` · `member-<yyyyMMdd>.jsonl`，append-only、按天分卷；溢出 / 重整改写 / 空场次三类入档，可被 `memory_search` 检索 |
+| `索引` | `data/memory/<chat>/_index.json`——现行池分类计数（byKind）+ 归档计数，每次写入后重建 |
+| `沉淀拍` | 冷群兜底沉淀通道（2026-10-17）——节拍到点 && 无未读 && 距上次沉淀 ≥ `memory.sedimentIntervalMs`（12h）→ 走一次「只整理不发言」的整理轮；`0` = 关闭 |
 
 ---
 

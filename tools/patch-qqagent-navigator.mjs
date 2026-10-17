@@ -52,7 +52,15 @@ function patch(id, root, rel, anchor, replacement, expect = 1) {
   const a = toEol(anchor, eol);
   const r = toEol(replacement, eol);
   const hits = text.split(a).length - 1;
-  if (hits !== expect) throw new Error('[' + id + '] 锚点命中 ' + hits + ' 次（期望 ' + expect + '）：' + JSON.stringify(a.slice(0, 80)));
+  if (hits !== expect) {
+    // 幂等兜底（2026-10-16）：锚点被后续补丁改写、替换体已在文件里 → 视为已应用。
+    // 判据 = 替换体首行 + 末行同时命中（单行易撞通用代码行）。
+    const lines = r.split('\n').map((s) => s.trim()).filter(Boolean);
+    const first = lines[0] || '';
+    const last = lines[lines.length - 1] || '';
+    if (first && last && text.includes(first) && text.includes(last)) { results.push({ id, file: rel, status: 'skipped' }); return; }
+    throw new Error('[' + id + '] 锚点命中 ' + hits + ' 次（期望 ' + expect + '）：' + JSON.stringify(a.slice(0, 80)));
+  }
   if (!DRY) fs.writeFileSync(file, text.replace(a, () => r), 'utf8');
   results.push({ id, file: rel, status: DRY ? 'dry' : 'applied' });
 }

@@ -159,12 +159,16 @@ check('4b 同一 QQ 号在两群各自成档',
     return a === 'A 群印象' && b === 'B 群印象';
   })());
 
-check('1g topic 超限被截到 12 条',
+check('1g topic 超限转归档（不丢弃）',
   (() => {
-    groupMemory.setGroupTopics(CHAT, Array.from({ length: 20 }, (_, i) => '词' + i));
+    // 记忆不节流（2026-10-16）：现行池话题上限 24，超出的**转归档**而非丢弃
+    // [qqagent-memory-patch:no-throttle-1g]
+    groupMemory.setGroupTopics(CHAT, Array.from({ length: 30 }, (_, i) => '词' + i));
     const n = groupMemory.listGroupEntries(CHAT).filter((x) => x.kind === 'topic').length;
+    const arch = groupMemory.listArchivedGroupEntries(CHAT, { keyword: '词', limit: 100 })
+      .filter((x) => x.kind === 'topic').length;
     groupMemory.setGroupTopics(CHAT, ['突变表', '灰机wiki', 'Cloudflare']);
-    return n === 12;
+    return n === 24 && arch >= 6;
   })());
 
 check('1h 按 id 删条目',
@@ -244,6 +248,56 @@ check('1n 手动「整理本群记忆」仍可重整群记（force）',
   && groupMemory.listGroupEntries(CHAT).some((x) => x.content === '手动重整写入的梗'),
   String(consManual?.groupNote || ''));
 
+// ── 判据 7：记忆不节流（写入放开 + 归档 + 索引 + 检索）─────────────────────
+// 规格（Rushiera 2026-10-16）：「记忆不需要节流，写的多不是坏事，但要能归档能索引」。
+const NO_THROTTLE_CHAT = 'group:361820329';
+const nBefore = groupMemory.listGroupEntries(NO_THROTTLE_CHAT).length;
+for (let i = 0; i < 260; i++) {
+  groupMemory.appendGroupEntry(NO_THROTTLE_CHAT, 'lore', '压测梗 ' + i);
+}
+const nAfter = groupMemory.listGroupEntries(NO_THROTTLE_CHAT).length;
+const nArch = groupMemory.groupArchiveStats(NO_THROTTLE_CHAT).count;
+check('7a 写入超软上限 → 转归档而非淘汰（信息不丢）',
+  nAfter === 200 && nArch >= 60 && nBefore + 260 === nAfter + nArch,
+  '现行=' + nAfter + ' 归档=' + nArch);
+
+const idxFile = path.join(DATA, 'memory', 'group_361820329', '_index.json');
+let idx = null;
+try { idx = JSON.parse(fs.readFileSync(idxFile, 'utf8')); } catch { idx = null; }
+check('7b 索引落盘（_index.json：现行池 + 归档计数 + 分类明细）',
+  !!idx && idx.group?.total === nAfter && idx.archive?.count === nArch && idx.group?.byKind?.lore >= 1,
+  idx ? JSON.stringify({ total: idx.group.total, archive: idx.archive.count }) : '缺失');
+
+const archHit = groupMemory.listArchivedGroupEntries(NO_THROTTLE_CHAT, { keyword: '压测梗 3', limit: 50 });
+check('7c 归档可检索（按关键词）', archHit.length > 0, '命中=' + archHit.length);
+
+const rSearch = await executeTool(buildToolDefs(), { chatKey: NO_THROTTLE_CHAT, memory, session: { feedbacks: [] }, emit: () => {} },
+  'memory_search', JSON.stringify({ keyword: '压测梗 25', limit: 5 }));
+check('7d 工具面 memory_search 跨现行 + 归档检索',
+  !rSearch.isError && /groupArchived/.test(String(rSearch.content)),
+  String(rSearch.content).slice(0, 90).replace(/\n/g, ' '));
+
+const fmtTrunc = groupMemory.formatGroupForPrompt(NO_THROTTLE_CHAT);
+check('7e 注入有预算且明示「已归档」指针',
+  fmtTrunc.includes('未展开') && fmtTrunc.includes('已归档'),
+  fmtTrunc.split('\n').slice(-1)[0]);
+
+const leanPrompt = (() => {
+  // 系统提示 lean 模式必须带上记忆引导（原漏在 lean 之外，模型看不到记忆工具）
+  const src = fs.readFileSync(path.join(APP, 'src', 'prompt.js'), 'utf8');
+  return src.includes('[qqagent-memory-patch:no-throttle-lean-memory]');
+})();
+check('7f lean 模式带记忆引导（不再只有 full 模式有）', leanPrompt);
+
+// 人档：整理时被改掉的旧条目留底进归档
+memory.replaceMember(CHAT, '20005', '群友乙', ['旧印象 A', '旧印象 B']);
+memory.replaceConsolidated(CHAT, { memberImpression: [{ userId: '20005', target: '群友乙', content: '新印象 A' }] });
+const mArch = memory.memberArchiveStats(CHAT);
+const mHit = memory.searchMemberArchive(CHAT, { keyword: '旧印象', limit: 10 });
+check('7g 人档整理改掉的旧条目留底归档（可检索）',
+  mArch.count >= 2 && mHit.length >= 2,
+  '归档=' + mArch.count + ' 命中=' + mHit.length);
+
 // ── 判据 1 / 2：收工轮 = 群记重整的唯一触发点 ────────────────────────────────
 cfg.session.maxContextTokens = 100;
 sessionState.recordPromptTokens(CHAT, 500);
@@ -282,7 +336,9 @@ try {
   patchOut = 'ERR ' + String(error?.message ?? error);
 }
 check('6a 补丁脚本可重放（幂等：applied 0 / 全部跳过）',
-  patchOut.includes('applied 0') && patchOut.includes('skipped 38'),
+  // 幂等判据只看「本轮没有新落盘」——跳过条数随补丁点增长，不能写死。
+  // [qqagent-memory-patch:no-throttle-6a]
+  patchOut.includes('applied 0') && /skipped \d+/.test(patchOut),
   patchOut.split('\n')[0]);
 const orchText = fs.readFileSync(path.join(APP, 'src', 'orchestrator.js'), 'utf8');
 const promptText = fs.readFileSync(path.join(APP, 'src', 'prompt.js'), 'utf8');
@@ -298,6 +354,24 @@ check('6c prompt.js 不再引用话题词模块（_topics.json 退役）',
 check('6d routes 暴露群记 API（POST / PUT / DELETE）',
   routesText.includes('memory-files\\/(group|private)_(\\d+)\\/group$')
   && routesText.includes('\\/group\\/([\\w-]+)$'));
+
+// ── 判据 8：沉淀拍（冷群兜底）+ 参数面 ────────────────────────────────────
+const orchSrc = fs.readFileSync(path.join(APP, 'src', 'orchestrator.js'), 'utf8');
+check('8a 沉淀拍判据在位（#sedimentDue + 到点走整理轮）',
+  orchSrc.includes('[qqagent-memory-patch:no-throttle-sediment-method]')
+  && orchSrc.includes('[qqagent-memory-patch:no-throttle-sediment-tick]')
+  && orchSrc.includes('sedimentOnly'),
+  '三处标记');
+check('8b 沉淀间隔有默认值（memory.sedimentIntervalMs = 12h，0=关）',
+  Number(DEFAULT_CONFIG.memory?.sedimentIntervalMs) === 43200000,
+  DEFAULT_CONFIG.memory?.sedimentIntervalMs);
+check('8c 记忆不节流默认值（条数放开 / 冷却 3h / 发现放宽）',
+  Number(DEFAULT_CONFIG.memory?.maxImpressionsPerMember) === 40
+  && Number(DEFAULT_CONFIG.memory?.maxGroupEntries) === 60
+  && Number(DEFAULT_CONFIG.memory?.consolidateMinIntervalMs) === 10800000
+  && Number(DEFAULT_CONFIG.memory?.discoverMinMessages) === 3
+  && Number(DEFAULT_CONFIG.memory?.discoverMaxMembers) === 10,
+  JSON.stringify(DEFAULT_CONFIG.memory));
 
 // ── 汇总 ────────────────────────────────────────────────────────────────────
 const failed = results.filter((r) => !r.ok);

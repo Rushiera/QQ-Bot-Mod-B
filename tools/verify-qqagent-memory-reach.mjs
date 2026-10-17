@@ -66,7 +66,8 @@ check('3b 会话起点为 0 时不回溯', ss.sessionWindowStart('group:999', { 
 const long = '领航场次·'.repeat(60);
 const e1 = gm.appendGroupEntry(CHAT, 'project', long);
 check('4 群记条目写入', !!e1);
-check('4b 正文按 200 字符截断', e1?.content?.length === 200, e1?.content?.length);
+check('4b 正文按单条上限截断（现行 400 字符；素材 300 字 → 原样保留）',
+  e1?.content?.length === Math.min(long.length, 400), e1?.content?.length);
 gm.appendGroupEntry(CHAT, 'project', long);
 check('4c 同 kind 同内容不重复', gm.listGroupEntries(CHAT).filter((x) => x.content === e1.content).length === 1);
 check('4d 非法 kind 拒绝', gm.appendGroupEntry(CHAT, 'nope', 'x') === null);

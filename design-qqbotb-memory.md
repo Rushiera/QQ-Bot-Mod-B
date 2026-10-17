@@ -175,6 +175,64 @@ data/memory/<chat>/
 
 ---
 
+## 3.10 记忆不节流：写入放开 + 归档 + 索引 + 检索（2026-10-16 定）
+
+> 来源：Rushiera 2026-10-16——「记忆不需要节流，写的多不是坏事，但要能归档能索引」。
+> 前置诊断（实况取证 `_unpack/data/memory/`，8 群）：沉淀口只有收工轮一条窄路（3 个群 `rollovers=0`
+> → 从未沉淀过）；群记被领航场次灌满（689942975 的 40 条里 28 条是场次，其中 18 条 0 秒空场）；
+> 写入面「宁可多记」与重整面「宁少勿错」互相抵消；lean 模式下模型读不到任何记忆引导。
+
+### 3.10.1 三层结构（写多少都不丢）
+
+| 层 | 载体 | 说明 |
+|:--|:--|:--|
+| **现行池** | `_group.json` / `<QQ>.json` | 注入与日常读写面。群记软上限 200 条（话题 24）· 人档单条 400 字 |
+| **归档** | `archive/group-<yyyyMMdd>.jsonl` · `archive/member-<yyyyMMdd>.jsonl` | append-only、按天分卷。溢出转归档、重整改掉的旧条目留底、空场次下沉都落这里 |
+| **索引** | `_index.json` | 现行池分类计数 + 归档计数（每次写入后重建） |
+
+- **写入不设上限、不淘汰**：原「超限淘汰最旧」= 丢信息，改为「超软上限转归档」。
+- **注入有预算**（提示词是硬预算）：群记每类取最近 12 条、话题 12 条；人档每人最近 8 条、最多 30 位群友。
+  被截下的条数与归档量在段尾明示——「（N 条同类条目未展开、M 条已归档——要看得用 `memory_query` / `memory_search`）」。
+
+### 3.10.2 检索面
+
+| 工具 | 语义 |
+|:--|:--|
+| `memory_query` | 读现行池（原样） |
+| **`memory_search`** | 按关键词检索，**跨现行池 + 归档**；`category` = all / member / group；回执带 `archive` 计数 |
+
+### 3.10.3 沉淀通道（补齐「冷群永不沉淀」）
+
+| 通道 | 触发 | 做什么 |
+|:--|:--|:--|
+| 收工轮 | 上下文到阈值 | 原语义不变（写群记 + 印象 + 要点 + 话题） |
+| **沉淀拍** | 节拍到点 && **无未读** && 距上次沉淀 ≥ `memory.sedimentIntervalMs`（默认 12h，0=关） | 走一次「只整理不发言」的整理轮（复用安静模式语义）——冷群也能沉淀 |
+
+- 只在「没有待处理消息」时走——沉淀轮不发言，有未读时先让正常轮把话接完。
+- 会话页标签：`整理轮（定时沉淀 / 安静模式）`。
+
+### 3.10.4 领航场次不再灌群记
+
+`sedimentVoyage` 加**实绩判据**：持续 ≥ 60 秒 · 下过指令 · 发过回复截图 · 发过进度播报 · 有开场巡检——
+任一成立才写群记；空场次只留活动流一行 trace（不静默吞）。存量空场次由
+`tools/migrate-qqagent-memory-archive.mjs` 迁进归档（689942975 移出 18 条）。
+
+### 3.10.5 参数（`config.memory.*`，热写走 `POST /api/config`）
+
+| 键 | 新值 | 原值 |
+|:--|:--:|:--:|
+| `maxImpressionsPerMember` | 40 | 8 |
+| `maxGroupEntries` | 60 | 20 |
+| `consolidateMinIntervalMs` | 3h | 6h |
+| `discoverMinMessages` | 3 | 5 |
+| `discoverMaxMembers` | 10 | 6 |
+| `sedimentIntervalMs` | 12h（新增） | —— |
+
+> 参数落盘脚本：`tools/apply-qqagent-memory-limits.mjs`（走业务面 API 热写 + 写后复核；
+> 判例 v0.58——业务面配置只在运行实例内存生效，直改 `_unpack/data/config.json` 不生效）。
+
+---
+
 ## 四、验收
 
 | # | 判据 |
@@ -193,6 +251,15 @@ data/memory/<chat>/
 | 12 | 收工轮的已读窗口起点 = `min(会话起点, 回溯点)`；日常轮不受影响；沉淀完成后 `memoryFloorTs` 归零 |
 | 13 | 领航员关闭（手动 / 空闲超时两条路径）→ 本群群记新增一条 `kind=project` 的场次小结；写不进去时活动流留 `[error]` 且不阻断关闭 |
 | 14 | 改动由 `tools/patch-qqagent-session.mjs` / `patch-qqagent-navigator.mjs` 落盘（幂等可重放）；`tools/verify-qqagent-memory-reach.mjs` 全过 |
+| 15 | 写入不节流：群记超软上限（200）/ 话题超 24 → **转归档**（`archive/group-<日期>.jsonl`），现行池 + 归档条数 = 写入总数（信息不丢） |
+| 16 | `_index.json` 每次写入后重建（现行池分类计数 + 归档计数）；记忆页列表与详情能看到「归档 N 条」 |
+| 17 | `memory_search` 跨现行池 + 归档按关键词检索（回执带 `archive` 计数） |
+| 18 | 注入面有预算且在段尾明示「未展开 / 已归档」指针（不静默截断） |
+| 19 | 人档重整改掉的旧条目留底进 `archive/member-<日期>.jsonl`（可检索）；重整不再「最多比原条数多 2」地砍 |
+| 20 | lean 模式也带记忆引导（原只在 full 模式，模型读不到记忆工具） |
+| 21 | 冷群兜底：节拍到点 && 无未读 && 距上次沉淀 ≥ `memory.sedimentIntervalMs` → 走「只整理不发言」的整理轮；`0` = 关闭 |
+| 22 | 领航场次无实绩（<60 秒且 0 指令 / 0 截图 / 0 播报 / 0 巡检）**不写群记**，只留活动流 trace |
+| 23 | 参数由 `tools/apply-qqagent-memory-limits.mjs` 经业务面 API 热写并复核；存量迁移 `tools/migrate-qqagent-memory-archive.mjs` 可重放 |
 
 ---
 

@@ -38,7 +38,15 @@ function patch(id, rel, anchor, replacement, expect = 1, appliedIf = null) {
   const a = toEol(anchor, eol);
   const r = toEol(replacement, eol);
   const hits = text.split(a).length - 1;
-  if (hits !== expect) throw new Error('[' + id + '] 锚点命中 ' + hits + ' 次（期望 ' + expect + '）：' + JSON.stringify(a.slice(0, 70)));
+  if (hits !== expect) {
+    // 幂等兜底（2026-10-16）：锚点被后续补丁改写、替换体已在文件里 → 视为已应用。
+    // 判据 = 替换体首行 + 末行同时命中（单行易撞通用代码行）。
+    const lines = r.split('\n').map((s) => s.trim()).filter(Boolean);
+    const first = lines[0] || '';
+    const last = lines[lines.length - 1] || '';
+    if (first && last && text.includes(first) && text.includes(last)) { results.push({ id, file: rel, status: 'skipped' }); return; }
+    throw new Error('[' + id + '] 锚点命中 ' + hits + ' 次（期望 ' + expect + '）：' + JSON.stringify(a.slice(0, 70)));
+  }
   if (!DRY) fs.writeFileSync(file, text.replace(a, () => r), 'utf8');
   results.push({ id, file: rel, status: DRY ? 'dry' : 'applied' });
 }
@@ -992,13 +1000,14 @@ patch('prompt-member-limit', 'src/memory.js',
 `      for (const e of m.impressions.slice(-3)) lines.push(\`- \${who}：\${e.content}\`);`,
 `      // 注入最近 5 条（原 3 条——每人上限提到 8 后，3 条会让模型看不到全貌）
       // [qqagent-memory-patch:prompt-member-limit]
-      for (const e of m.impressions.slice(-5)) lines.push(\`- \${who}：\${e.content}\`);`);
+      for (const e of m.impressions.slice(-5)) lines.push(\`- \${who}：\${e.content}\`);`,
+  1, '[qqagent-memory-patch:no-throttle-member-inject]');
 
 // ③g 注入面放宽：无过滤时最多带 15 → 20 位群友
 patch('prompt-member-count', 'src/memory.js',
 `      : all.slice(0, 15);`,
 `      : all.slice(0, 20);`,
-1, 'all.slice(0, 20);');
+1, 'INJECT_MAX_MEMBERS');
 
 // ④ 工具描述：去掉「临时不要记」的强抑制
 patch('append-desc', 'src/tools.js',
@@ -1020,7 +1029,731 @@ patch('memory-defaults', 'src/config.js',
     maxGroupEntries: 20,                  // 群记条数上限（收工轮重整时用；原为代码兜底 12）
     discoverMinMessages: 5,               // 整理轮"发现新人"的最低发言条数（原 20）
     discoverMaxMembers: 6,                // 单次整理最多发现几位新人（原 3）
-    useChatModel: true,                   // true = 整理模型跟随聊天模型；false = 使用下方专用模型`);
+    useChatModel: true,                   // true = 整理模型跟随聊天模型；false = 使用下方专用模型`,
+1, '[qqagent-memory-patch:no-throttle-defaults]');
+// ─────────────────────────────────────────────────────────────────────────────
+// 补丁 6：记忆不节流 + 归档 + 索引 + 检索（2026-10-16 Rushiera 定）
+//   规格原话：「记忆不需要节流，写的多不是坏事；但要能归档能索引」。
+//   ① 写入不设上限、不淘汰 —— 现行池溢出的最旧条目转归档（archive/，append-only）
+//   ② 索引 _index.json —— 现行池 + 归档的清单与计数
+//   ③ 检索面 —— memory_search 跨现行 + 归档按关键词搜
+//   ④ 注入面仍有预算（提示词是硬预算），被截下的条数在段尾明示
+//   ⑤ 整理轮不再「只减不增」地砍条数；被改掉的旧条目留底进归档
+//   ⑥ lean 模式补记忆引导（原引导只在 full 模式，模型看不到）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ⑥a group-memory.js 常量：上限改为「现行池软上限」，超出的转归档
+patch('no-throttle-consts', 'src/group-memory.js',
+`const RENDER_ORDER = ['rule', 'relation', 'lore', 'project'];
+const MAX_ENTRIES = 40;
+const MAX_TOPICS = 12;
+const MAX_CONTENT = 200;`,
+`const RENDER_ORDER = ['rule', 'relation', 'lore', 'project'];
+// ── 记忆不节流（2026-10-16 Rushiera 定）── [qqagent-memory-patch:no-throttle]
+// 写入不设上限、不淘汰：现行池超软上限的条目**转入归档**（archive/，append-only），
+// 信息不丢。这里的上限只管"现行池多大"，不管"能记多少"。
+const MAX_ENTRIES = 200;          // 现行池软上限（原 40）——超出转归档
+const MAX_TOPICS = 24;            // 话题条目上限（原 12）
+const MAX_CONTENT = 400;          // 单条上限（原 200）
+const ARCHIVE_DIR = 'archive';    // 归档子目录（与活跃档同址）`);
+
+// ⑥b saveEntries：溢出转归档（不再淘汰最旧）
+patch('no-throttle-save', 'src/group-memory.js',
+`  // 上限：topic 单独限流（最易变的一类），其余按总数封顶；超限淘汰最旧的
+  const topics = list.filter((e) => e.kind === 'topic').slice(-MAX_TOPICS);
+  const rest = list.filter((e) => e.kind !== 'topic').slice(-(MAX_ENTRIES - topics.length));
+  const finalList = rest.concat(topics);
+  writeJson(groupMemoryFile(chatKey), {
+    chatKey: String(chatKey),
+    entries: finalList,
+    updatedAt: now
+  });
+  return finalList;
+}`,
+`  // 溢出**转归档**（原：超限淘汰最旧 —— 那是丢信息）——[qqagent-memory-patch:no-throttle]
+  const topics = list.filter((e) => e.kind === 'topic');
+  const rest = list.filter((e) => e.kind !== 'topic');
+  const overflow = rest.slice(0, Math.max(0, rest.length - MAX_ENTRIES))
+    .concat(topics.slice(0, Math.max(0, topics.length - MAX_TOPICS)));
+  if (overflow.length) archiveGroupEntries(chatKey, overflow, 'overflow');
+  const finalList = rest.slice(-MAX_ENTRIES).concat(topics.slice(-MAX_TOPICS));
+  writeJson(groupMemoryFile(chatKey), {
+    chatKey: String(chatKey),
+    entries: finalList,
+    updatedAt: now
+  });
+  rebuildGroupIndex(chatKey);
+  return finalList;
+}`);
+
+// ⑥c 归档 / 索引 / 检索（插在 appendGroupEntry 之前）
+patch('no-throttle-archive', 'src/group-memory.js',
+`/** 追加一条群记（同 kind 同内容不重复写）。 */`,
+`// ── 归档（append-only，只增不改）────────────────────────────────────────────
+// [qqagent-memory-patch:no-throttle-archive]
+// 归档是"留底"不是"垃圾桶"：条目从现行池移出后仍可被 检索记忆（memory_search）搜到。
+function archiveDir(chatKey) {
+  return path.join(MEMORY_DIR, chatDirName(chatKey), ARCHIVE_DIR);
+}
+
+/** 归档分卷：按天一个 JSONL 文件（只追加，不改写）。 */
+function archiveFile(chatKey, at) {
+  const d = new Date(Number(at) || Date.now());
+  const p = (n) => String(n).padStart(2, '0');
+  return path.join(archiveDir(chatKey), 'group-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '.jsonl');
+}
+
+/** 把条目追加进归档（reason 记归档缘由）。返回写入条数。 */
+export function archiveGroupEntries(chatKey, entries, reason = 'manual') {
+  const list = (Array.isArray(entries) ? entries : []).filter((e) => e && e.content);
+  if (!list.length) return 0;
+  try {
+    fs.mkdirSync(archiveDir(chatKey), { recursive: true });
+    const now = Date.now();
+    const lines = list.map((e) => JSON.stringify({
+      id: String(e.id || ''),
+      kind: String(e.kind || ''),
+      content: String(e.content || '').slice(0, MAX_CONTENT),
+      createdAt: Number(e.createdAt) || 0,
+      updatedAt: Number(e.updatedAt) || 0,
+      archivedAt: now,
+      reason: String(reason || 'manual')
+    }));
+    fs.appendFileSync(archiveFile(chatKey, now), lines.join('\\n') + '\\n', 'utf8');
+    rebuildGroupIndex(chatKey);
+    return list.length;
+  } catch (error) {
+    console.warn('[group-memory] 归档失败（条目仍留在现行池）:', error?.message ?? error);
+    return 0;
+  }
+}
+
+/** 读归档条目（keyword / since 过滤；新的在前）。 */
+export function listArchivedGroupEntries(chatKey, { since = 0, keyword = '', limit = 200 } = {}) {
+  const dir = archiveDir(chatKey);
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => f.startsWith('group-') && f.endsWith('.jsonl')).sort(); } catch { return []; }
+  const kw = String(keyword || '').trim().toLowerCase();
+  const out = [];
+  for (const f of files) {
+    let text = '';
+    try { text = fs.readFileSync(path.join(dir, f), 'utf8'); } catch { continue; }
+    for (const line of text.split('\\n')) {
+      const t = line.trim();
+      if (!t) continue;
+      let e = null;
+      try { e = JSON.parse(t); } catch { continue; }
+      if (!e || !e.content) continue;
+      if (since && (Number(e.createdAt) || 0) < since) continue;
+      if (kw && !String(e.content).toLowerCase().includes(kw)) continue;
+      out.push(e);
+    }
+  }
+  out.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+  return limit > 0 ? out.slice(0, limit) : out;
+}
+
+/** 归档统计（索引 / 记忆页用；不递归调 groupMemoryStats）。 */
+export function groupArchiveStats(chatKey) {
+  const dir = archiveDir(chatKey);
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => f.startsWith('group-') && f.endsWith('.jsonl')).sort(); } catch { return { files: 0, count: 0, latestAt: 0 }; }
+  let count = 0;
+  let latestAt = 0;
+  for (const f of files) {
+    let text = '';
+    try { text = fs.readFileSync(path.join(dir, f), 'utf8'); } catch { continue; }
+    for (const line of text.split('\\n')) {
+      const t = line.trim();
+      if (!t) continue;
+      count += 1;
+      try { latestAt = Math.max(latestAt, Number(JSON.parse(t).archivedAt) || 0); } catch { /* 坏行只计数 */ }
+    }
+  }
+  return { files: files.length, count, latestAt };
+}
+
+/** 索引：现行池 + 归档的清单与计数（_index.json；每次写入后重建）。 */
+export function rebuildGroupIndex(chatKey) {
+  try {
+    const entries = listGroupEntries(chatKey);
+    const archive = groupArchiveStats(chatKey);
+    const byKind = {};
+    for (const k of GROUP_KINDS) byKind[k] = entries.filter((e) => e.kind === k).length;
+    writeJson(path.join(MEMORY_DIR, chatDirName(chatKey), '_index.json'), {
+      chatKey: String(chatKey),
+      updatedAt: Date.now(),
+      group: {
+        total: entries.length,
+        byKind,
+        latestAt: entries.reduce((n, e) => Math.max(n, Number(e.updatedAt) || 0), 0)
+      },
+      archive: { files: archive.files, count: archive.count },
+      kinds: GROUP_KINDS
+    });
+  } catch (error) {
+    console.warn('[group-memory] 索引写入失败:', error?.message ?? error);
+  }
+}
+
+/** 追加一条群记（同 kind 同内容不重复写）。 */`);
+
+// ⑥d groupMemoryStats：加归档计数
+patch('no-throttle-stats', 'src/group-memory.js',
+`/** 统计（记忆页 / 整理门槛用）。 */
+export function groupMemoryStats(chatKey) {
+  const entries = listGroupEntries(chatKey);
+  return {
+    count: entries.length,
+    topics: entries.filter((e) => e.kind === 'topic').length,
+    updatedAt: entries.reduce((n, e) => Math.max(n, Number(e.updatedAt) || 0), 0)
+  };
+}`,
+`/** 统计（记忆页 / 整理门槛 / 索引 用）。 */
+export function groupMemoryStats(chatKey) {
+  const entries = listGroupEntries(chatKey);
+  const archive = groupArchiveStats(chatKey);
+  const byKind = {};
+  for (const k of GROUP_KINDS) byKind[k] = entries.filter((e) => e.kind === k).length;
+  return {
+    count: entries.length,
+    topics: entries.filter((e) => e.kind === 'topic').length,
+    byKind,
+    archived: archive.count,
+    archiveFiles: archive.files,
+    updatedAt: entries.reduce((n, e) => Math.max(n, Number(e.updatedAt) || 0), 0)
+  };
+}`);
+
+// ⑥e 注入预算：每类取最近 N 条，被截下的条数与归档量在段尾明示
+patch('no-throttle-inject', 'src/group-memory.js',
+`/** 渲染成【记忆】段的一块（会话要点之后、群友印象之前）。 */
+export function formatGroupForPrompt(chatKey) {
+  const entries = listGroupEntries(chatKey);
+  if (!entries.length) return '';
+  const out = [];
+  const main = entries.filter((e) => e.kind !== 'topic');
+  if (main.length) {`,
+`/** 渲染成【记忆】段的一块（会话要点之后、群友印象之前）。 */
+export function formatGroupForPrompt(chatKey) {
+  const entries = listGroupEntries(chatKey);
+  if (!entries.length) return '';
+  // 注入预算（写入不节流，注入有预算）：每类取最近 N 条；被截下的条数在段尾明示，
+  // 要看全的走 memory_query / memory_search。[qqagent-memory-patch:no-throttle-inject]
+  const INJECT_MAX_PER_KIND = 12;
+  const INJECT_MAX_TOPICS = 12;
+  const out = [];
+  const main = [];
+  let withheld = 0;
+  for (const kind of RENDER_ORDER) {
+    const bucket = entries.filter((e) => e.kind === kind);
+    if (bucket.length > INJECT_MAX_PER_KIND) withheld += bucket.length - INJECT_MAX_PER_KIND;
+    main.push(...bucket.slice(-INJECT_MAX_PER_KIND));
+  }
+  for (const e of entries) {
+    if (RENDER_ORDER.includes(e.kind) || e.kind === 'topic') continue;
+    main.push(e);   // 未知 kind（未来扩展）兜底：不静默丢
+  }
+  if (main.length) {`);
+
+patch('no-throttle-inject-tail', 'src/group-memory.js',
+`  const topics = entries.filter((e) => e.kind === 'topic');
+  if (topics.length) {
+    out.push('【本群在聊】' + topics.map((e) => e.content).join('；'));
+  }
+  return out.join('\\n');
+}`,
+`  const topics = entries.filter((e) => e.kind === 'topic');
+  const topicKeep = topics.slice(-INJECT_MAX_TOPICS);
+  if (topicKeep.length) {
+    out.push('【本群在聊】' + topicKeep.map((e) => e.content).join('；'));
+  }
+  // 段尾明示「还有多少没带进来」——记忆不节流，但注入有预算，得让模型知道怎么取。
+  const archive = groupArchiveStats(chatKey);
+  const tail = [];
+  if (withheld) tail.push(withheld + ' 条同类条目未展开');
+  if (archive.count) tail.push(archive.count + ' 条已归档');
+  if (tail.length) out.push('（' + tail.join('、') + '——要看得用 查询记忆 memory_query / 检索记忆 memory_search）');
+  return out.join('\\n');
+}`);
+
+// ⑥f 旧 kind 渲染兜底循环去重（main 已含未知 kind，原循环保持即可——此处只补注释标记）
+patch('no-throttle-render-note', 'src/group-memory.js',
+`    // 未知 kind（未来扩展）兜底：不静默丢
+    for (const e of main) {
+      if (RENDER_ORDER.includes(e.kind)) continue;
+      out.push('- ' + e.kind + '：' + e.content);
+    }`,
+`    // 未知 kind（未来扩展）兜底：不静默丢 —— [qqagent-memory-patch:no-throttle-render-note]
+    for (const e of main) {
+      if (RENDER_ORDER.includes(e.kind)) continue;
+      out.push('- ' + e.kind + '：' + e.content);
+    }`);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 补丁 6（续）：人档 / 工具面 / 提示词 / 配置 / 整理轮
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ⑥g memory.js 注入预算常量
+patch('no-throttle-inject-consts', 'src/memory.js',
+`const MEMORY_DIR = path.join(DATA_DIR, 'memory');`,
+`const MEMORY_DIR = path.join(DATA_DIR, 'memory');
+// 注入预算（写入不节流，注入有预算）——[qqagent-memory-patch:no-throttle-inject-consts]
+const INJECT_MAX_IMPRESSIONS = 8;    // 每位群友注入最近 N 条（原 5）
+const INJECT_MAX_MEMBERS = 30;       // 无过滤时最多注入几位群友（原 20）
+const MEMBER_ARCHIVE_DIR = 'archive';`);
+
+// ⑥h memory.js formatForPrompt：注入面放宽 + 归档指针
+patch('no-throttle-member-inject', 'src/memory.js',
+`    const filter = userIds ? new Set([...userIds].map(String)) : null;
+    const picked = filter
+      ? all.filter((m) => !m.userId || filter.has(String(m.userId)))  // 无 QQ 号的旧数据始终带上
+      : all.slice(0, 20);
+    if (!picked.length) return '';
+    const lines = ['【对群友的印象】'];
+    for (const m of picked) {
+      const who = notes[String(m.userId)] || m.name || String(m.userId || '') || '某人';
+      // 注入最近 5 条（原 3 条——每人上限提到 8 后，3 条会让模型看不到全貌）
+      // [qqagent-memory-patch:prompt-member-limit]
+      for (const e of m.impressions.slice(-5)) lines.push(\`- \${who}：\${e.content}\`);
+    }
+    return lines.join('\\n');
+  }`,
+`    const filter = userIds ? new Set([...userIds].map(String)) : null;
+    const picked = filter
+      ? all.filter((m) => !m.userId || filter.has(String(m.userId)))  // 无 QQ 号的旧数据始终带上
+      : all.slice(0, INJECT_MAX_MEMBERS);
+    if (!picked.length) return '';
+    const lines = ['【对群友的印象】'];
+    for (const m of picked) {
+      const who = notes[String(m.userId)] || m.name || String(m.userId || '') || '某人';
+      // 注入最近 N 条（写入不节流，注入有预算）——[qqagent-memory-patch:no-throttle-member-inject]
+      for (const e of m.impressions.slice(-INJECT_MAX_IMPRESSIONS)) lines.push(\`- \${who}：\${e.content}\`);
+    }
+    const arch = this.memberArchiveStats(chatKey);
+    if (arch.count) {
+      lines.push('（另有 ' + arch.count + ' 条旧印象已归档——要翻用 检索记忆 memory_search）');
+    }
+    return lines.join('\\n');
+  }
+
+  /** 人档归档统计（索引 / 记忆页用）。 */
+  memberArchiveStats(chatKey) {
+    try {
+      const dir = path.join(MEMORY_DIR, chatDirName(chatKey), MEMBER_ARCHIVE_DIR);
+      let count = 0;
+      let latestAt = 0;
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.startsWith('member-') || !f.endsWith('.jsonl')) continue;
+        const text = fs.readFileSync(path.join(dir, f), 'utf8');
+        for (const line of text.split('\\n')) {
+          const t = line.trim();
+          if (!t) continue;
+          count += 1;
+          try { latestAt = Math.max(latestAt, Number(JSON.parse(t).archivedAt) || 0); } catch { /* 坏行只计数 */ }
+        }
+      }
+      return { count, latestAt };
+    } catch { return { count: 0, latestAt: 0 }; }
+  }
+
+  /** 人档归档检索（memory_search 用；keyword 空 = 最近若干条）。 */
+  searchMemberArchive(chatKey, { keyword = '', limit = 20 } = {}) {
+    const dir = path.join(MEMORY_DIR, chatDirName(chatKey), MEMBER_ARCHIVE_DIR);
+    let files = [];
+    try { files = fs.readdirSync(dir).filter((f) => f.startsWith('member-') && f.endsWith('.jsonl')).sort(); } catch { return []; }
+    const kw = String(keyword || '').trim().toLowerCase();
+    const out = [];
+    for (const f of files) {
+      let text = '';
+      try { text = fs.readFileSync(path.join(dir, f), 'utf8'); } catch { continue; }
+      for (const line of text.split('\\n')) {
+        const t = line.trim();
+        if (!t) continue;
+        let e = null;
+        try { e = JSON.parse(t); } catch { continue; }
+        if (!e || !e.content) continue;
+        if (kw && !String(e.content).toLowerCase().includes(kw)) continue;
+        out.push(e);
+      }
+    }
+    out.sort((a, b) => (Number(b.archivedAt) || 0) - (Number(a.archivedAt) || 0));
+    return out.slice(0, Math.max(1, limit));
+  }`);
+
+// ⑥i memory.js 重整：不再砍到 15 条
+patch('no-throttle-replace-cap', 'src/memory.js',
+`    for (const item of Array.isArray(next?.memberImpression) ? next.memberImpression.slice(0, 15) : []) {`,
+`    // 不设总量上限（记忆不节流）——[qqagent-memory-patch:no-throttle-replace-cap]
+    for (const item of Array.isArray(next?.memberImpression) ? next.memberImpression : []) {`);
+
+// ⑥j memory.js 重整：被改掉的旧条目留底进归档（append-only）
+patch('no-throttle-consolidate-archive', 'src/memory.js',
+`    // 删除所有现有成员文件（整理结果会重建）
+    for (const m of map.values()) {`,
+`    // 归档「被重整丢掉/改写的旧条目」（append-only，只增不改）——重整可以改写，
+    // 旧版本要留得住、查得到。[qqagent-memory-patch:no-throttle-consolidate-archive]
+    try {
+      const kept = new Map();
+      for (const g of groups.values()) {
+        const k = String(g.userId || ('_n_' + g.name));
+        if (!kept.has(k)) kept.set(k, new Set());
+        for (const c of g.contents) kept.get(k).add(String(c));
+      }
+      const lines = [];
+      const at = Date.now();
+      for (const m of map.values()) {
+        const k = String(m.userId || ('_n_' + m.name));
+        const keepSet = kept.get(k) || new Set();
+        for (const e of m.impressions || []) {
+          const c = String(e.content || '');
+          if (!c || keepSet.has(c)) continue;
+          lines.push(JSON.stringify({
+            userId: String(m.userId || ''),
+            name: String(m.name || ''),
+            content: c,
+            createdAt: Number(e.createdAt) || 0,
+            archivedAt: at,
+            reason: 'consolidate'
+          }));
+        }
+      }
+      if (lines.length) {
+        const adir = path.join(MEMORY_DIR, chatDirName(chatKey), MEMBER_ARCHIVE_DIR);
+        fs.mkdirSync(adir, { recursive: true });
+        const d = new Date(at);
+        const p = (n) => String(n).padStart(2, '0');
+        const file = path.join(adir, 'member-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '.jsonl');
+        fs.appendFileSync(file, lines.join('\\n') + '\\n', 'utf8');
+      }
+    } catch (error) {
+      console.warn('[memory] 整理归档失败（不影响整理）:', error?.message ?? error);
+    }
+    // 删除所有现有成员文件（整理结果会重建）
+    for (const m of map.values()) {`);
+
+// ⑥k tools.js 导入：归档检索
+patch('no-throttle-tools-import', 'src/tools.js',
+`import {
+  GROUP_KINDS, GROUP_KIND_LABEL, appendGroupEntry, listGroupEntries, removeGroupEntry
+} from './group-memory.js';`,
+`import {
+  GROUP_KINDS, GROUP_KIND_LABEL, appendGroupEntry, listGroupEntries, removeGroupEntry,
+  // 归档 + 检索（记忆不节流）——[qqagent-memory-patch:no-throttle-tools-import]
+  listArchivedGroupEntries, groupArchiveStats
+} from './group-memory.js';`);
+
+// ⑥l tools.js 新增 memory_search（跨现行 + 归档检索）
+patch('no-throttle-tools-search', 'src/tools.js',
+`  // [qqagent-memory-patch:tools-remove]`,
+`  // [qqagent-memory-patch:no-throttle-tools-search] 记忆检索（跨现行池 + 归档）
+  registerTool({
+    id: 'memory_search',
+    name: '检索记忆',
+    description: '按关键词检索本会话的长期记忆——现行池与归档一起搜。想确认"以前是不是聊过/记过某件事"、或【记忆】段里写了"另有 N 条已归档"时用它。',
+    category: 'memory',
+    icon: '🔎',
+    parameters: {
+      type: 'object',
+      properties: {
+        keyword: { type: 'string', description: '关键词（大小写不敏感；留空 = 只列最近若干条）' },
+        category: { type: 'string', enum: ['all', 'member', 'group'], description: '搜哪一轴（默认 all）' },
+        includeArchived: { type: 'boolean', description: '是否连归档一起搜（默认 true）' },
+        limit: { type: ['integer', 'string'], description: '每轴最多返回几条（默认 20）' }
+      }
+    },
+    async execute(ctx, args) {
+      const keyword = String(args.keyword ?? '').trim();
+      const category = String(args.category ?? 'all').trim();
+      const includeArchived = args.includeArchived !== false;
+      const limit = Math.min(100, Math.max(1, Number(args.limit) || 20));
+      const kw = keyword.toLowerCase();
+      const out = {};
+      if (category === 'all' || category === 'member') {
+        const live = ctx.memory.query(ctx.chatKey).memberImpression
+          .filter((e) => !kw || String(e.content).toLowerCase().includes(kw));
+        out.memberImpression = live.slice(-limit).reverse();
+        if (includeArchived) {
+          const arch = ctx.memory.searchMemberArchive(ctx.chatKey, { keyword, limit });
+          if (arch.length) out.memberImpressionArchived = arch;
+        }
+      }
+      if (category === 'all' || category === 'group') {
+        const live = listGroupEntries(ctx.chatKey)
+          .filter((e) => !kw || String(e.content).toLowerCase().includes(kw));
+        out.group = live.slice(-limit);
+        if (includeArchived) {
+          const arch = listArchivedGroupEntries(ctx.chatKey, { keyword, limit });
+          if (arch.length) out.groupArchived = arch;
+        }
+      }
+      const gArch = groupArchiveStats(ctx.chatKey);
+      out.archive = { group: gArch.count, member: ctx.memory.memberArchiveStats(ctx.chatKey).count };
+      return ok(out);
+    }
+  });
+
+  // [qqagent-memory-patch:tools-remove]`);
+
+// ⑥m prompt.js 记忆引导改口径（写入不节流 + 归档检索）
+patch('no-throttle-memory-rules', 'src/prompt.js',
+`function memoryRules() {
+  return [
+    '【轻量记忆：偶尔用，别当笔记本】',
+    '- memory_append 只用来记录"对某位群友的长期印象"（他的说话风格、爱玩的梗、雷点、身份关系等稳定信息）；这些内容下次运行会自动出现在【记忆】里。',
+    '- 不要记临时话题、临时想法；只记以后跟这个人打交道还用得上的。印象过时/不再准确时用 memory_remove 删掉。',
+    '- 每次扫一眼【记忆】，只有自然相关才主动提起；不要为了用记忆而硬聊旧话题。'
+  ].join('\\n');
+}`,
+`function memoryRules() {
+  // 口径（2026-10-16 Rushiera 定）：记忆不节流 —— 用得上就记，不怕多；
+  // 超量的自动归档、可检索。原口径「偶尔用，别当笔记本」已退役。
+  // [qqagent-memory-patch:no-throttle-memory-rules]
+  return [
+    '【记忆：用得上就记，不怕多】',
+    '- 记录记忆（memory_append）：对某位群友的印象（category=member，需 userId）；或本群的事（category=group）——lore 梗/黑话 · rule 群规约定 · relation 关系角色 · project 长期项目 · topic 在聊什么。',
+    '- 判断标准只有一条："下次进这个群还用得上吗"。用得上就记；重复和过时的条目由整理轮合并，写满的旧条目自动归档、不会丢。',
+    '- 想翻旧事 / 想确认某人某事：调 查询记忆（memory_query）；【记忆】段里写了"另有 N 条已归档"时，用 检索记忆（memory_search）按关键词搜。',
+    '- 每次扫一眼【记忆】，只有自然相关才主动提起；不要为了用记忆而硬聊旧话题。'
+  ].join('\\n');
+}`);
+
+// ⑥n prompt.js lean 模式补记忆引导（原引导只在 full 模式，模型读不到）
+patch('no-throttle-lean-memory', 'src/prompt.js',
+`  const parts = promptMode === 'lean'
+    ? [
+        lead,
+        '',
+        subjectivity(),
+        '',
+        speakOrNot(cfg.participation),
+        '',
+        notAQueue(),
+        '',
+        humanRhythm()
+      ]`,
+`  // lean 模式（[qqagent-talkstyle-patch:prompt-lean]）+ 记忆引导（原 lean 段漏掉记忆，
+  // 模型看不到"有记忆工具"这件事）——[qqagent-memory-patch:no-throttle-lean-memory]
+  const parts = promptMode === 'lean'
+    ? [
+        lead,
+        '',
+        subjectivity(),
+        '',
+        speakOrNot(cfg.participation),
+        '',
+        notAQueue(),
+        '',
+        memoryRules(),
+        '',
+        humanRhythm()
+      ]`);
+
+// ⑥o config.js memory 默认值：条数放开 + 冷却缩短 + 发现放宽
+patch('no-throttle-defaults', 'src/config.js',
+`  memory: {
+    consolidateEnabled: true,
+    consolidateMinIntervalMs: 21600000,  // 默认 6 小时
+    // 记忆沉淀增强（2026-10-11）——[qqagent-memory-patch:memory-defaults]
+    maxImpressionsPerMember: 8,           // 每位群友最多保留的印象条数（原 5）
+    maxGroupEntries: 20,                  // 群记条数上限（收工轮重整时用；原为代码兜底 12）
+    discoverMinMessages: 5,               // 整理轮"发现新人"的最低发言条数（原 20）
+    discoverMaxMembers: 6,                // 单次整理最多发现几位新人（原 3）`,
+`  memory: {
+    consolidateEnabled: true,
+    // 记忆不节流（2026-10-16 Rushiera 定）：「写的多不是坏事，但要能归档能索引」
+    // ——条数放开、超出的转归档；冷却缩短；发现面放宽。
+    // [qqagent-memory-patch:no-throttle-defaults]
+    consolidateMinIntervalMs: 10800000,  // 整理冷却 3 小时（原 6 小时）
+    maxImpressionsPerMember: 40,          // 重整提示词的条数上限（原 8）
+    maxGroupEntries: 60,                  // 群记重整上限（原 20；现行池软上限在 group-memory.js）
+    discoverMinMessages: 3,               // 整理轮"发现新人"的最低发言条数（原 5）
+    discoverMaxMembers: 10,               // 单次整理最多发现几位新人（原 6）`);
+
+// ⑥p orchestrator.js 群记重整：上限放宽 + 提示词去掉"宁少勿错"
+patch('no-throttle-group-maxkeep', 'src/orchestrator.js',
+`    const maxKeep = Math.max(4, Number(cfg.memory?.maxGroupEntries) || 12);`,
+`    // 记忆不节流：上限只作提示词预算（超出的转归档，不丢）——[qqagent-memory-patch:no-throttle-group-maxkeep]
+    const maxKeep = Math.max(8, Number(cfg.memory?.maxGroupEntries) || 60);`);
+
+patch('no-throttle-group-prompt', 'src/orchestrator.js',
+`        '1. 最多 ' + maxKeep + ' 条，每条不超过 120 字；同类合并，宁少勿错。',`,
+`        '1. 条数上限 ' + maxKeep + '（超出的自动归档、不会丢），同类合并成一条、每条不超过 120 字；宁可多留，别把有用信息并没了。',`);
+
+// ⑥q orchestrator.js 人档整理：cap 放开（不再"只减不增"）
+patch('no-throttle-consolidate-cap', 'src/orchestrator.js',
+`    const maxKeep = Number(getConfig().memory?.maxImpressionsPerMember) || 8;
+    const cap = isNew ? maxKeep : Math.min(maxKeep, existing.length + 2);`,
+`    // 记忆不节流：条数只作提示词预算，不再"最多比原条数多 2 条"地砍
+    // [qqagent-memory-patch:no-throttle-consolidate-cap]
+    const maxKeep = Number(getConfig().memory?.maxImpressionsPerMember) || 40;
+    const cap = isNew ? maxKeep : Math.max(maxKeep, existing.length + 10);`);
+
+patch('no-throttle-consolidate-prompt', 'src/orchestrator.js',
+`        \`4. 最多保留 \${maxKeep} 条，每条不超过 120 字。\`,`,
+`        \`4. 条数上限 \${maxKeep}（超出的自动归档、不会丢），同类合并成一条、每条不超过 120 字。\`,`);
+
+patch('no-throttle-new-prompt', 'src/orchestrator.js',
+`        \`3. 最多 \${maxKeep} 条，每条不超过 120 字，用第一人称视角（"他/她…"）。\`,`,
+`        \`3. 条数上限 \${maxKeep}（超出的自动归档、不会丢），每条不超过 120 字，用第一人称视角（"他/她…"）。\`,`);
+
+// ⑥r orchestrator.js 新建印象模式的默认值同步（|| 8 → || 40）
+patch('no-throttle-new-maxkeep', 'src/orchestrator.js',
+`    const maxKeep = Number(getConfig().memory?.maxImpressionsPerMember) || 8;
+    const uid = String(mem.userId || '');`,
+`    const maxKeep = Number(getConfig().memory?.maxImpressionsPerMember) || 40;
+    const uid = String(mem.userId || '');`);
+
+// ⑥s orchestrator.js 自动整理阈值：人数上限跟随新默认
+patch('no-throttle-auto-threshold', 'src/orchestrator.js',
+`      const maxPerMember = Math.max(2, Number(cfg.memory?.maxImpressionsPerMember) || 5);`,
+`      const maxPerMember = Math.max(2, Number(cfg.memory?.maxImpressionsPerMember) || 40);`);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 补丁 7：记忆沉淀拍（冷群兜底）——2026-10-16
+//   问题：唯一的结构化沉淀点是收工轮（上下文到阈值），冷群 rollovers=0 → 永远不沉淀。
+//   解法：到点且「没有待处理消息」时走一次「只整理不发言」的整理轮（复用安静模式语义）。
+// ─────────────────────────────────────────────────────────────────────────────
+
+patch('no-throttle-sediment-config', 'src/config.js',
+`    consolidateMinIntervalMs: 10800000,  // 整理冷却 3 小时（原 6 小时）
+    maxImpressionsPerMember: 40,          // 重整提示词的条数上限（原 8）`,
+`    consolidateMinIntervalMs: 10800000,  // 整理冷却 3 小时（原 6 小时）
+    sedimentIntervalMs: 43200000,         // 记忆沉淀拍间隔（12 小时；0 = 关闭）
+    maxImpressionsPerMember: 40,          // 重整提示词的条数上限（原 8）`);
+
+patch('no-throttle-sediment-import', 'src/orchestrator.js',
+`  recordPromptTokens, resetSession, writeSessionSummary, getSessionState, isRateLimitedError,
+  rateLimitRetryDelayMs
+} from './session-state.js';`,
+`  recordPromptTokens, resetSession, writeSessionSummary, getSessionState, isRateLimitedError,
+  rateLimitRetryDelayMs,
+  // 沉淀拍判据要读会话要点时间——[qqagent-memory-patch:no-throttle-sediment-import]
+  readSessionSummary
+} from './session-state.js';`);
+
+patch('no-throttle-sediment-method', 'src/orchestrator.js',
+`  /** 记下该群下一拍的时间点（force=true 重设相位 —— 运行结束回节拍用）。 */`,
+`  /**
+   * 记忆沉淀拍是否到点（2026-10-16）——冷群兜底：上下文永远到不了收工轮阈值的群
+   * 也要能沉淀记忆。判据三条：
+   *   ① 该群跑过至少一轮（lastPromptTokens>0）——新群第一条消息不该被整理轮吞掉；
+   *   ② 距上次沉淀（_session.json 的 createdAt）≥ memory.sedimentIntervalMs（0=关）；
+   *   ③ 调用方保证此刻没有待处理消息（沉淀轮不发言，不能吞群友的话）。
+   * [qqagent-memory-patch:no-throttle-sediment-method]
+   */
+  #sedimentDue(chatKey, now) {
+    const ms = Number(getConfig().memory?.sedimentIntervalMs);
+    if (!Number.isFinite(ms) || ms <= 0) return false;
+    let st;
+    try { st = getSessionState(chatKey); } catch { return false; }
+    if (!(Number(st?.lastPromptTokens) > 0)) return false;
+    let last = 0;
+    try { last = Number(readSessionSummary(chatKey)?.createdAt) || 0; } catch { last = 0; }
+    return (Number(now) || Date.now()) - last >= ms;
+  }
+
+  /** 记下该群下一拍的时间点（force=true 重设相位 —— 运行结束回节拍用）。 */`);
+
+patch('no-throttle-sediment-tick', 'src/orchestrator.js',
+`      let unread = 0;
+      try { unread = this.store.unreadCount(chatKey); } catch { unread = 0; }
+      if (unread <= 0) continue;   // 没人发言 → 不调 LLM`,
+`      let unread = 0;
+      try { unread = this.store.unreadCount(chatKey); } catch { unread = 0; }
+      // ── 记忆沉淀拍（2026-10-16）：冷群兜底 ──
+      // 只在「没有待处理消息」时走 —— 沉淀轮不发言，有未读时先让正常轮把话接完。
+      // [qqagent-memory-patch:no-throttle-sediment-tick]
+      if (!quiet && unread <= 0 && this.#sedimentDue(chatKey, now)) {
+        logger.info('browse', chatKey + ' 记忆沉淀拍：距上次沉淀已到点，走「只整理不发言」的整理轮');
+        this.wake(chatKey, { quietOrganize: true })
+          .catch((error) => console.error('[orchestrator] 沉淀拍 wake 出错:', error));
+        continue;
+      }
+      if (unread <= 0) continue;   // 没人发言 → 不调 LLM`);
+
+patch('no-throttle-sediment-empty', 'src/orchestrator.js',
+`    const cfgForJudge = getConfig();
+    let triggerEntries = [];
+    if (!proactive) {
+      const probe = this.store.peekUnread(chatKey, 500) || [];
+      if (probe.length === 0 && waitingSessionId) {
+        this.#finishWaiting(waitingSessionId, 'aborted');
+        return;
+      }`,
+`    const cfgForJudge = getConfig();
+    let triggerEntries = [];
+    // 沉淀拍（quietOrganize 且无未读）：不取批、不吞消息 —— 取材面是本会话的已读窗口。
+    // [qqagent-memory-patch:no-throttle-sediment-empty]
+    const sedimentOnly = !!quietOrganize && (this.store.peekUnread(chatKey, 1) || []).length === 0;
+    if (!proactive && !sedimentOnly) {
+      const probe = this.store.peekUnread(chatKey, 500) || [];
+      if (probe.length === 0 && waitingSessionId) {
+        this.#finishWaiting(waitingSessionId, 'aborted');
+        return;
+      }`);
+
+// 沉淀轮的会话页标签（原只有「安静整理轮」一档）
+patch('no-throttle-sediment-label', 'src/orchestrator.js',
+`        session.triggerSummary = quietOrganize ? '安静整理轮（定时沉淀）' : '收工轮（上下文轮转）';`,
+`        session.triggerSummary = quietOrganize ? '整理轮（定时沉淀 / 安静模式）' : '收工轮（上下文轮转）';`);
+
+// ⑥u setGroupTopics：写入不截断（超出的由 saveEntries 转归档，不静默丢）
+patch('no-throttle-topics-write', 'src/group-memory.js',
+`  const list = (Array.isArray(words) ? words : [])
+    .map((w) => String(w || '').trim())
+    .filter(Boolean)
+    .slice(0, MAX_TOPICS);
+  if (!list.length) return 0;`,
+`  // 写入不截断（记忆不节流）——超出的由 saveEntries 转归档，不静默丢。
+  // [qqagent-memory-patch:no-throttle-topics-write]
+  const list = (Array.isArray(words) ? words : [])
+    .map((w) => String(w || '').trim())
+    .filter(Boolean);
+  if (!list.length) return 0;`);
+
+// ⑥v routes.js：记忆列表 / 详情带上归档计数（记忆页要看得到「归档」这一维）
+patch('no-throttle-routes-import', 'src/routes.js',
+`import { listGroupEntries, appendGroupEntry, replaceGroupEntries, removeGroupEntry, groupMemoryStats } from './group-memory.js';`,
+`import { listGroupEntries, appendGroupEntry, replaceGroupEntries, removeGroupEntry, groupMemoryStats, listArchivedGroupEntries } from './group-memory.js';`);
+
+patch('no-throttle-routes-list', 'src/routes.js',
+`            groupCount: groupStats.count,`,
+`            groupCount: groupStats.count,
+            // 归档计数（记忆不节流：现行池之外还有多少）——[qqagent-memory-patch:no-throttle-routes-list]
+            groupArchived: groupStats.archived || 0,
+            memberArchived: memory.memberArchiveStats(chatKey)?.count || 0,`);
+
+patch('no-throttle-routes-detail', 'src/routes.js',
+`        return json(res, 200, { ...memory.query(chatKey), members: memory.members(chatKey), group: listGroupEntries(chatKey) });   // [qqagent-memory-patch:routes-detail]`,
+`        // 详情带上归档（记忆页可切「现行 / 归档」查看）——[qqagent-memory-patch:no-throttle-routes-detail]
+        return json(res, 200, {
+          ...memory.query(chatKey),
+          members: memory.members(chatKey),
+          group: listGroupEntries(chatKey),
+          groupArchived: listArchivedGroupEntries(chatKey, { limit: 500 }),
+          archiveStats: {
+            group: groupMemoryStats(chatKey).archived || 0,
+            member: memory.memberArchiveStats(chatKey)?.count || 0
+          }
+        });   // [qqagent-memory-patch:routes-detail]`);
+
+// ⑥w 记忆页：列表项显示归档数
+patch('no-throttle-ui-list', 'ui/app/05-memory-settings.js',
+`      : (f.memberCount || f.groupCount
+        ? \`\${f.memberCount} 位群友 · \${f.impressionCount} 条印象 · 群记 \${f.groupCount || 0} 条\`
+        : '暂无群友印象');`,
+`      : (f.memberCount || f.groupCount || f.groupArchived
+        // 归档计数也进摘要（记忆不节流：现行池之外还有多少）——[qqagent-memory-patch:no-throttle-ui-list]
+        ? \`\${f.memberCount} 位群友 · \${f.impressionCount} 条印象 · 群记 \${f.groupCount || 0} 条\`
+          + ((f.groupArchived || f.memberArchived) ? \` · 归档 \${(f.groupArchived || 0) + (f.memberArchived || 0)} 条\` : '')
+        : '暂无群友印象');`);
+
+// ⑥x 记忆页：群记标题行显示归档数
+patch('no-throttle-ui-group-head', 'ui/app/05-memory-settings.js',
+`      + '<div class="list-head muted"><span>群记（本群长期事实 · ' + groupEntries.length + ' 条）</span>'`,
+`      + '<div class="list-head muted"><span>群记（本群长期事实 · ' + groupEntries.length + ' 条'
+      + ((mem.archiveStats && mem.archiveStats.group) ? ' · 归档 ' + mem.archiveStats.group + ' 条' : '') + '）</span>'`);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 结果

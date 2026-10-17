@@ -298,10 +298,30 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string} text 条目正文（业务面按 200 字符截断）
    * @returns {Promise<boolean>} 是否写入成功
    */
-  async function sedimentVoyage(chat, text) {
+  /**
+   * 领航场次沉淀进群记 —— 只写「有实绩」的场次（2026-10-16 修）。
+   *
+   * 为什么加判据：原来每次关闭都写一条 kind=project 群记，0 分 0 秒、0 指令、
+   * 0 截图的空场次照写 —— 689942975 的群记被 28 条场次记录灌满（其中约 10 条
+   * 是 0 秒空场），真实群知识（lore / rule / relation）被顺序挤出。群记是
+   * 「下次进这个群还用得上」的地方，不是会话日志。
+   *
+   * 有实绩 = 任一成立：持续 ≥ 60 秒 · 下过指令 · 发过回复截图 · 发过进度播报 ·
+   * 有开场巡检。空场不写，活动流留一行 trace（不静默吞）。
+   */
+  async function sedimentVoyage(chat, text, stats = {}) {
     const id = String(chat ?? '').replace(/^group:/, '').trim();
     if (!/^\d+$/.test(id)) {
       record('error', `群记沉淀跳过：群号不可用（${chat ?? '空'}）`);
+      return false;
+    }
+    const real = Number(stats.durationMs) >= 60000
+      || Number(stats.commands) > 0
+      || Number(stats.replies) > 0
+      || Number(stats.progress) > 0
+      || Number(stats.tours) > 0;
+    if (!real) {
+      record('memory', `领航场次无实绩，不入群记（group:${id}）`);
       return false;
     }
     const base = loadBizPort();
@@ -2305,7 +2325,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     } catch (error) {
       record('error', `领航记录归档失败（${error?.message ?? error}）`);
     }
-    return { text, file, brief };
+    return { text, file, brief, stats: { durationMs: ms, commands: cmds.length, replies: voyageStats.replies, progress: voyageStats.progress, tours: voyageStats.tours } };
   }
 
   /**
@@ -2333,7 +2353,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     if (target) await say(target, voyage.text);
     // 场次小结进群记——「退出领航员是体面退出」：R喵 要知道自己在这段时间做过什么。
     // 手动退出与空闲自关都走这里（两条关闭路径共用一处沉淀）。
-    if (before.activeChat) await sedimentVoyage(before.activeChat, voyage.brief);
+    if (before.activeChat) await sedimentVoyage(before.activeChat, voyage.brief, voyage.stats);
     return next;
   }
 

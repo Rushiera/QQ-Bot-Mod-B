@@ -184,18 +184,24 @@ app.whenReady().then(async () => {
       fs.writeFileSync(file, image.toPNG());
       return file;
     };
-    // 壳层能力：领航员截图——离屏窗口加载渲染好的对话卡 HTML，按内容实际高度整页截图。
-    // 「截全」口径（2026-10-14）：窗口高度贴合内容（上限 SHOT_MAX_HEIGHT），配合
-    // app.disableHardwareAcceleration() 解除 GPU 16384 纹理上限——超长会话不再截尾。
+    // 壳层能力：领航员截图——离屏窗口加载渲染好的对话卡 HTML，按内容实际高度截图。
+    // 两条口径（Rushiera 2026-10-16「长会话要适配」）：
+    //   · 单张（segmentHeight 缺省 / 内容不超段高）：窗口高度贴合内容（上限 SHOT_MAX_HEIGHT）——
+    //     v0.66 口径，短会话一张装全。
+    //   · 分段（segmentHeight > 0 且内容更高）：窗口取段高、逐段滚动截取（`-01.png` / `-02.png` …）——
+    //     长会话不再撞高度上限，每段体积与可读性都受控。
+    // 配合 app.disableHardwareAcceleration() 解除 GPU 16384 纹理上限（软件合成实测可截 40000px+）。
     // 🔴 不走 CDP Page.captureScreenshot：本机 Electron 44 上该调用（带不带
     // captureBeyondViewport）会卡死并拖垮渲染进程（实测），整页截图用原生 capturePage。
-    core.hooks.shot = async (htmlFile, outFile) => {
+    core.hooks.shot = async (htmlFile, outFile, options = {}) => {
+      const segmentHeight = Math.max(0, Number(options?.segmentHeight) || 0);
       const win = new BrowserWindow({
         width: 800,
         height: 900,
         show: false,
         backgroundColor: '#141414', // 与 CH4 会话页底同色（--ch-bg-page）
-        webPreferences: { contextIsolation: true, nodeIntegration: false }
+        // 隐藏窗口默认节流渲染——分段要滚动后重绘，关掉节流保证每段取到的是当前视口
+        webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
       });
       try {
         await win.loadFile(htmlFile);
@@ -204,14 +210,35 @@ app.whenReady().then(async () => {
         const natural = await win.webContents.executeJavaScript(
           'Math.ceil(document.body.getBoundingClientRect().height)'
         );
-        const target = Math.min(Math.max(Number(natural) || 600, 200), SHOT_MAX_HEIGHT);
-        bootLog(`截图 ${path.basename(outFile)}：内容高 ${natural}px → 取 ${target}px`);
-        win.setContentSize(800, target);
-        await new Promise((resolve) => setTimeout(resolve, 400));
-        const image = await win.webContents.capturePage();
-        fs.mkdirSync(path.dirname(outFile), { recursive: true });
-        fs.writeFileSync(outFile, image.toPNG());
-        return outFile;
+        const total = Math.max(Number(natural) || 600, 200);
+        const height = segmentHeight > 0 ? Math.min(segmentHeight, SHOT_MAX_HEIGHT) : SHOT_MAX_HEIGHT;
+        // 单张口径——内容不超段高（或未启用分段）：一次截全
+        if (segmentHeight <= 0 || total <= height) {
+          const target = Math.min(total, SHOT_MAX_HEIGHT);
+          bootLog(`截图 ${path.basename(outFile)}：内容高 ${natural}px → 取 ${target}px`);
+          win.setContentSize(800, target);
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          const image = await win.webContents.capturePage();
+          fs.mkdirSync(path.dirname(outFile), { recursive: true });
+          fs.writeFileSync(outFile, image.toPNG());
+          return { files: [outFile], total, height: target, count: 1 };
+        }
+        // 分段口径——窗口逐段取高 + 滚动，每段单独出图（长会话不再截尾）
+        const count = Math.ceil(total / height);
+        bootLog(`分段截图 ${path.basename(outFile)}：内容高 ${total}px → ${count} 段 × ${height}px`);
+        const files = [];
+        for (let i = 0; i < count; i += 1) {
+          const offset = i * height;
+          win.setContentSize(800, Math.max(200, Math.min(height, total - offset)));
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          await win.webContents.executeJavaScript(`window.scrollTo(0, ${offset})`);
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          const image = await win.webContents.capturePage();
+          const file = outFile.replace(/\.png$/i, `-${String(i + 1).padStart(2, '0')}.png`);
+          fs.writeFileSync(file, image.toPNG());
+          files.push(file);
+        }
+        return { files, total, height, count };
       } finally {
         try { win.destroy(); } catch { /* 已销毁 */ }
       }

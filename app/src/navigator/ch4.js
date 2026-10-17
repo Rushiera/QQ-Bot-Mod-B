@@ -180,13 +180,15 @@ export function createCh4Client({ log, mainPort = DEFAULT_MAIN_PORT }) {
    * 拉某猫的会话关键信息（对话端口专属）——加载报告 / user 消息 / 正式回复 / 轮结算。
    *
    * @param {string} key 猫寻址
-   * @param {number} [max] 取末尾条数
+   * @param {number} [max] 取末尾条数（≤0 = 全量）
    * @returns {Promise<object>} { ok, count, items }
    */
   async function keyinfo(key, max = 12) {
     const resolved = await resolveKey(key);
     const port = resolved === 'majordomo' ? await majorPort() : await catPort(resolved);
-    return request(`http://127.0.0.1:${port}/api/v1/keyinfo?max=${Number(max) || 12}`);
+    // max ≤ 0 = 全量（端点缺省/0 即全量回传）——长会话取全，不按固定条数截头
+    const query = Number(max) > 0 ? `?max=${Number(max)}` : '?max=0';
+    return request(`http://127.0.0.1:${port}/api/v1/keyinfo${query}`);
   }
 
   /**

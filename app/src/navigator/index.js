@@ -803,12 +803,16 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * 用途：群里 @ 说「截一下 X 的会话」时，产出**会话卡截图**（CH4 会话页同款对话气泡卡），
    * 不是浏览器开网页截的图。只读——只画会话，**不给猫发消息、不改它的前文**。
    *
+   * 「截全」口径（Rushiera 2026-10-16）：会话**取全量**（`shotKeyinfoMax=0`，不再按 80 条截头）；
+   * 内容高超过 `shotSegmentHeight` 时**按段截、按序发多张**（`1/N`…`N/N`，解读挂最后一段）——
+   * 长会话不再撞单图高度上限。段数上限 `shotSegmentMax` 是安全阀（超出只发尾部，首张标注）。
+   *
    * @param {object} options 选项
    * @param {string} [options.key] 猫 key
    * @param {string|number|null} [options.chat] 回报群（空 = 按新鲜 VIP 群消息解析）
    * @param {Array<object>|null} [options.blocks] 显式块（测试用；空 = 拉该猫会话）
    * @param {boolean} [options.send] 是否发群（false = 只出图，返回路径）
-   * @returns {Promise<object>} { ok, file?, blockCount?, insight?, sent?, error? }
+   * @returns {Promise<object>} { ok, file?, files?, segments?, blockCount?, insight?, sent?, error? }
    */
   async function shotSession({ key = 'majordomo', chat = null, blocks = null, send = false } = {}) {
     let resolved = String(key || 'majordomo').trim() || 'majordomo';
@@ -819,7 +823,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     let useBlocks = Array.isArray(blocks) && blocks.length ? blocks : null;
     if (!useBlocks) {
       try {
-        const info = await ch4.keyinfo(resolved, Math.max(20, Number(navConfig.shotKeyinfoMax) || 80));
+        // 条数上限 0 = 全量（长会话取全，不按固定条数截头）
+        const info = await ch4.keyinfo(resolved, Math.max(0, Number(navConfig.shotKeyinfoMax) || 0));
         useBlocks = itemsToBlocks(Array.isArray(info?.items) ? info.items : [], 0);
       } catch (error) {
         record('error', `会话截图（${resolved}）：拉会话失败（${error?.message ?? error}）`);
@@ -829,26 +834,53 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     if (!useBlocks || useBlocks.length === 0) {
       return { ok: false, error: `${catName} 的会话是空的——没有可截的内容` };
     }
-    let png;
+    const segmentHeight = Math.max(0, Number(navConfig.shotSegmentHeight) || 0);
+    let captured;
     try {
-      png = await shot.shoot({ catName, blocks: useBlocks, at: new Date().toLocaleString('zh-CN', { hour12: false }) });
+      captured = await shot.shootSegments(
+        { catName, blocks: useBlocks, at: new Date().toLocaleString('zh-CN', { hour12: false }) },
+        segmentHeight
+      );
     } catch (error) {
       record('error', `会话截图（${resolved}）：渲染失败（${error?.message ?? error}）`);
       return { ok: false, error: `渲染截图失败：${error?.message ?? error}` };
     }
-    const result = { ok: true, file: png, blockCount: useBlocks.length };
+    // 段数安全阀——超出只发尾部（最近的），并在首张标注更早的段未发（不静默丢）
+    const maxSegments = Math.max(1, Number(navConfig.shotSegmentMax) || 0);
+    const dropped = Math.max(0, captured.files.length - maxSegments);
+    const files = dropped > 0 ? captured.files.slice(-maxSegments) : captured.files;
+    if (dropped > 0) {
+      record('watch', `会话截图（${resolved}）：共 ${captured.files.length} 段，超上限 ${maxSegments}——只发最后 ${maxSegments} 段`);
+    }
+    const result = {
+      ok: true,
+      file: files[files.length - 1],
+      files,
+      segments: files.length,
+      blockCount: useBlocks.length
+    };
     if (send) {
       const target = resolveChat(chat);
-      if (!target) return { ok: false, error: '没有回消息群——先在群里说一句', file: png };
-      const insight = await shot.analyze(png);
+      if (!target) return { ok: false, error: '没有回消息群——先在群里说一句', file: result.file, files };
+      // 解读只做最后一段（最新内容）——长会话整幅解读没有意义
+      const insight = await shot.analyze(result.file);
       result.insight = insight;
-      const caption = insight ? `${catName} 的会话：\n${insight}` : `${catName} 的会话`;
-      const sent = await sayImage(target, png, caption);
-      result.sent = sent.ok;
-      record(sent.ok ? 'send' : 'error', sent.ok
-        ? `会话截图已发群 ${target}（${catName}）`
-        : `会话截图发送失败（${sent.error}）`);
-      if (!sent.ok) result.error = sent.error;
+      let sentAll = true;
+      for (let i = 0; i < files.length; i += 1) {
+        const head = files.length === 1
+          ? `${catName} 的会话`
+          : `${catName} 的会话（${i + 1}/${files.length}${i === 0 && dropped > 0 ? `，更早 ${dropped} 段未发` : ''}）`;
+        const caption = i === files.length - 1 && insight ? `${head}：\n${insight}` : head;
+        const sent = await sayImage(target, files[i], caption);
+        if (!sent.ok) {
+          sentAll = false;
+          result.error = sent.error;
+        }
+        record(sent.ok ? 'send' : 'error', sent.ok
+          ? `会话截图已发群 ${target}（${catName}${files.length > 1 ? ` ${i + 1}/${files.length}` : ''}）`
+          : `会话截图发送失败（${sent.error}）`);
+      }
+      result.sent = sentAll;
     }
     return result;
   }

@@ -2190,3 +2190,70 @@ R喵喵：交接摘要已注入，等待确认
 |:--:|:--|:--|
 | 1 | 真链路验收（选一个非在用的群，`intervalMs` 临时调小如 60000） | 待 Rushiera 指定测试群 |
 | 2 | 群侧：Rushiera 群里曾说「一会R喵喵做完了就给你开安静模式」——需她指认目标群 | 待确认 |
+
+---
+
+## 六十一、会话截图「截全」适配长会话（2026-10-16 · Rushiera 定 · v0.72）
+
+> 触发：Rushiera 2026-10-16 23:18 开工指令——「我让群bot截图的时候感觉还是截不全，你看一下majordomo的会话现在很长了，我希望能适配」。
+> 前情：v0.66（§五十六）已做过一轮「截全」（块数 40→300 · 条数 20→80 · 去 4000px 硬墙改原生整页 + 关硬件加速）；本轮是**会话规模又上一个量级**之后的第二次。
+
+**一、诊断（两处硬截 · 实测数据）**
+
+| # | 卡点 | 实况 |
+|:--:|:--|:--|
+| 1 | **条数**：`shotKeyinfoMax = 80` | majordomo 当前 keyinfo **236 条**（`GET /api/v1/keyinfo?max=1` → `count=236`）——只取末尾 80 条，**头部 156 条被丢**（截图首条 = 第 157 条「继续把，另外我希望有些内容能记下来…」） |
+| 2 | **高度**：`SHOT_MAX_HEIGHT = 30000` | 80 条 = 19,635–20,198px；**全量 236 条 = 63,496px**（实测）——就算放开条数，单图也必被截尾 |
+| 3 | 体积 | 80 条单张 PNG = **3.5MB**；全量单张 ≈ 10MB 级——超长单图 QQ 会压、手机上不可读 |
+
+> 触发那一下的实况：23:02 群里 @「截一下majordomo的会话」→ 23:04 出图 3.5MB，她回「怎么没截全」「这已经是打完之后的会话了」。
+
+**二、口径（截全）**
+
+| 项 | 内容 |
+|:--|:--|
+| 条数 | **全量**——`navigator.shotKeyinfoMax` 80 → **0**（0 = 不限；端点 `?max=0` 即全量回传） |
+| 高度 | 超过 `navigator.shotSegmentHeight`（默认 **12000px**）→ **按段截、按序发多张**（`1/N`…`N/N`）——长会话不再撞单图上限 |
+| 段数安全阀 | `navigator.shotSegmentMax`（默认 **12**）——超出只发**尾部** N 段，首张标注「更早 N 段未发」（不静默丢，活动流留痕） |
+| 解读 | 只对**最后一段**做视觉解读（最新内容）——长会话整幅解读没有意义 |
+| 短会话 | 不变——内容不超段高仍**一张**（`segments=1`）；轮结束截图 / 开场巡检 / 轻通道一律走单张口径 |
+| 块数上限 | `MAX_BLOCKS` 300 → **1000**（高度已由分段兜底，块数只作最后一道网） |
+
+**三、实现**
+
+| 文件 | 改动 |
+|:--|:--|
+| `app/main.js` | `core.hooks.shot(htmlFile, outFile, { segmentHeight })` 两态：①单张（缺省 / 内容不超段高）——v0.66 口径不变 ②分段——窗口逐段取高 + `window.scrollTo` 滚动截取，逐段写 `-01.png` / `-02.png`…；回执改对象 `{ files, total, height, count }`（原为裸路径串）；`webPreferences.backgroundThrottling: false`（隐藏窗口默认节流渲染——滚动后必须重绘） |
+| `app/src/navigator/shot.js` | 新增 `capture(options, segmentHeight)`（渲染 → 交壳层 → 归一结果，兼容裸串回执）+ `shootSegments()`；`shoot()` 改为 `capture(…, 0).files[0]`（调用面不变）；`MAX_BLOCKS` 300 → 1000 |
+| `app/src/navigator/index.js` | `shotSession`：keyinfo 取全量 · 走 `shootSegments` · 段数安全阀取尾部 · 按序发多张（`（k/N）`，解读挂最后一段）· 回执增 `files` / `segments` |
+| `app/src/navigator/ch4.js` | `keyinfo(key, max)`：`max ≤ 0` → `?max=0`（全量）——原实现 `Number(max) \|\| 12` 会把 0 当 12 |
+| `app/src/config.js` | `shotKeyinfoMax` 80 → **0** · 新增 `shotSegmentHeight = 12000` · `shotSegmentMax = 12` |
+| `tools/navigator/nav-tools.js` | `nav_shot` 工具描述改「会话卡截图（**长会话自动分段、按序发多张**，标注 `1/N…N/N`）」——与实况对齐 |
+| `tools/apply-qqagent-config.mjs` | 领航员教材 `nav_shot` 行同步（「画成一张卡」→「画成卡截图…长会话自动分成多张按序发」）；`--roletext-only` 重跑，`roleTextChars` 95412 → **96236**（差额含源码侧先前未落盘的增量） |
+| `tools/verify-navigator.mjs` | 替身回执改对象；新增「分段（多张按序带出 + 段数安全阀取尾部）」「分段口径源码在位」两条断言；源文件在位断言随发群分支改写 → **57/57** |
+
+**四、验证**
+
+| 面 | 结果 |
+|:--|:--|
+| 语法 | `node --check` 五文件 0 错（`main.js` / `navigator/shot.js` / `navigator/index.js` / `navigator/ch4.js` / `config.js`） |
+| 自测 | `node tools/verify-navigator.mjs` **57/57**（+2 断言） |
+| 真链路（全量·分段） | `POST /api/nav/shot {key:majordomo}`（send:false）→ **内容高 63,496px → 6 段 × 12000px**，产物 `nav-shot-…-01.png` ~ `-06.png` 六张在位（旧口径同场只出 1 张 19,635px） |
+| 真链路（分段切的是对应切片） | 合成 552 块长卡（每块带 `FILLER-n` 标号）→ 2 段；第 2 段 OCR 到底部 = `FILLER-491…FILLER-550` + `TAIL-MARK-END`——**证明逐段截取取到的是对应切片**（无重复首段 / 无陈旧帧） |
+| 真链路（短会话不回归） | 2 块小卡 → `segments=1`，单张 200px（与 v0.66 行为一致） |
+| 生效 | 应用已重启（`启动QQBotB.bat` 一键全流程 · 16:52）；`boot.log` 分段日志在位 |
+
+**五、边界（不做）**
+
+- 不动**轮结束截图 / 开场巡检 / 轻通道**的口径——那三处是「单轮回复」「每猫概览」，仍走单张；本轮只改群内显式「截一下 X 的会话」
+- 不启用 CDP 分段拼接（`Page.captureScreenshot` 在本机 Electron 44 卡死，v0.66 已否决）——分段用原生 `setContentSize` + `scrollTo` + `capturePage`
+- 不引入图片压缩 / 缩放（分段后每段体积已在 1MB 级，无需再压）
+
+**遗留 / 待确认：**
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 群内真发群（`nav_shot` send:true → 六张按序回群 + 解读）——需群内 @ 触发（自测与本地取证都不打扰真群） | 待群内实测 |
+| 2 | 段高 12000px / 上限 12 段是初值——若手机上看着太长或太糊，调 `navigator.shotSegmentHeight` 即可（0 = 退回单张） | 待体感反馈 |
+| 3 | 开场巡检（`tourKeyinfoMax=80`）仍是「概览口径」——按群逐猫一张，未跟进全量分段（防刷屏） | 设计如此，可按需改 |
+| 4 | 工具描述与教材已落盘（`patch-qqagent-navigator.mjs` 已同步 `_unpack` 侧 `nav-tools.js`；`apply-qqagent-config.mjs --roletext-only` 已写配置）——**生效需业务面重启 / 新会话**（本轮未再重启：避免打断群内正在进行的对话） | 待下次重启 |

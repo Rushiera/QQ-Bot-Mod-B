@@ -54,8 +54,14 @@ const DEFAULTS = {
     tourLimit: 0,
     // 「截全」口径：开场巡检 / 手动截图取会话的条数上限（keyinfo max）——取够，不截尾
     tourKeyinfoMax: 80,
-    // 「截全」口径：群内「截一下 X 的会话」取会话的条数上限（keyinfo max）
-    shotKeyinfoMax: 80,
+    // 「截全」口径：群内「截一下 X 的会话」取会话的条数上限（keyinfo max）——**0 = 全量**
+    // （Rushiera 2026-10-16：majordomo 会话涨到 200+ 条，固定 80 条会把头截掉）
+    shotKeyinfoMax: 0,
+    // 长会话分段（Rushiera 2026-10-16）：会话卡内容高超过本值 → 按段截、按序发多张（1/N…N/N）；
+    // 0 = 不分段（单张，撞 SHOT_MAX_HEIGHT 就截尾）。段高越小越清楚、张数越多。
+    shotSegmentHeight: 12000,
+    // 分段张数上限（安全阀）——超出只发最后 N 段，首张标注「更早 N 段未发」（不静默丢）
+    shotSegmentMax: 12,
     // 前文整理重启：注入新会话的原文轨迹条数（0 = 不限）——「少量缩减」口径，保留近期原文
     resetTraceLimit: 100,
     // 抢救模式（design §六b）：代读目标猫完整前文（fullctx 全条目）的字符上限——超出保留头 30% + 尾 70%

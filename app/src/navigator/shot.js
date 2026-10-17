@@ -26,8 +26,8 @@ const CARD_CSS = fs
   .readFileSync(path.join(moduleDir, 'chat-card.css'), 'utf8')
   .replace('../fonts/SarasaMonoSC-Regular.ttf', FONT_HREF);
 
-/** 单张卡最多渲染的块数（防超长）——「截全」口径：上限放到远高于常规会话，正常会话不再截尾。 */
-const MAX_BLOCKS = 300;
+/** 单张卡最多渲染的块数（防超长）——「截全」口径：上限放到远高于常规会话；高度由分段口径兜底。 */
+const MAX_BLOCKS = 1000;
 
 /** 视觉调用超时（毫秒）。 */
 const VISION_TIMEOUT_MS = 90000;
@@ -166,12 +166,16 @@ ${CARD_CSS}
   }
 
   /**
-   * 渲染并截图，返回 PNG 路径。
+   * 渲染对话卡 → 交壳层截图（单张 / 分段两条口径）。
+   *
+   * 壳层 `hooks.shot(htmlFile, outFile, { segmentHeight })` 回 `{ files, total, height, count }`；
+   * 兼容旧壳层返回裸路径串（自测替身）——统一归一成结果对象。
    *
    * @param {object} options 选项（同 renderCard）
-   * @returns {Promise<string>} PNG 绝对路径
+   * @param {number} [segmentHeight] 分段高度（px；0 = 单张口径）
+   * @returns {Promise<{files: Array<string>, total: number, height: number, count: number}>} 出图结果
    */
-  async function shoot(options) {
+  async function capture(options, segmentHeight = 0) {
     if (typeof hooks?.shot !== 'function') throw new Error('截图能力未注册（非 Electron 运行环境）');
     const html = renderCard(options);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -179,10 +183,41 @@ ${CARD_CSS}
     const pngFile = path.join(dataDir, `nav-shot-${stamp}.png`);
     fs.mkdirSync(dataDir, { recursive: true });
     fs.writeFileSync(htmlFile, html, 'utf8');
-    const out = await hooks.shot(htmlFile, pngFile);
+    const out = await hooks.shot(htmlFile, pngFile, { segmentHeight: Number(segmentHeight) || 0 });
     try { fs.unlinkSync(htmlFile); } catch { /* 中介文件清理失败不阻断 */ }
-    log.info('navigator', `截图完成：${out}`);
-    return out;
+    const files = Array.isArray(out?.files) ? out.files : (typeof out === 'string' ? [out] : []);
+    log.info('navigator', `截图完成：${files.join('，')}${files.length > 1 ? `（共 ${files.length} 段）` : ''}`);
+    return {
+      files,
+      total: Number(out?.total) || 0,
+      height: Number(out?.height) || 0,
+      count: Number(out?.count) || files.length
+    };
+  }
+
+  /**
+   * 渲染并截图，返回 PNG 路径（单张口径——轮结束截图 / 开场巡检 / 轻通道用）。
+   *
+   * @param {object} options 选项（同 renderCard）
+   * @returns {Promise<string>} PNG 绝对路径
+   */
+  async function shoot(options) {
+    const result = await capture(options, 0);
+    return result.files[0];
+  }
+
+  /**
+   * 渲染并分段截图（长会话口径——群内「截一下 X 的会话」用）。
+   *
+   * 内容不超段高时仍只出一张；超出则按段出多张（`-01.png` / `-02.png` …），
+   * 由调用方按序发群（Rushiera 2026-10-16：长会话不再撞单图高度上限）。
+   *
+   * @param {object} options 选项（同 renderCard）
+   * @param {number} [segmentHeight] 段高（px；0 = 不分段）
+   * @returns {Promise<{files: Array<string>, total: number, height: number, count: number}>} 出图结果
+   */
+  async function shootSegments(options, segmentHeight = 0) {
+    return capture(options, segmentHeight);
   }
 
   /**
@@ -281,5 +316,5 @@ ${CARD_CSS}
     }
   }
 
-  return { renderCard, shoot, analyze, summarize };
+  return { renderCard, shoot, shootSegments, analyze, summarize };
 }

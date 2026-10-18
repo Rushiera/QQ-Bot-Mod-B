@@ -55,6 +55,9 @@
 | 术语 | 说明 |
 |:--|:--|
 | `记忆两轴三分` | 人（群友印象 · `<QQ>.json`）/ 群（群记 · `_group.json`）/ 轮（会话要点 · `_session.json`）——记忆以 chatKey 分目录，群与群互不串味 |
+| `已读窗口下界` | `session-state.json` 的 `readFloorTs`（2026-10-18 B22）——普通轮的【已读信息】只带此界之后的详细消息；此界之前的旧已读由【前情提要】承载。收工轮不套它（仍按会话起点 / 记忆回溯点全量取材），`readMaxChars=0` 时忽略它 |
+| `前情提要` | 已读信息分段摘要段（2026-10-18 B22）——较早的已读消息被压成摘要后注入【已读信息】之前，原文退出提示词但留在存档（`get_recent_messages` 可翻）；活跃段 `_readlog.json`，轮转时整批转 `archive/readlog-*.jsonl` |
+| `已读压缩` | 【已读信息】超 `session.readMaxChars` 时的异步收缩动作——压最旧前缀到保留线 `readKeepChars`，分块（`readCompactChunkChars`）交记忆模型摘要；失败一律保留原文、不推进下界 |
 | `群记` | 群级记忆——`data/memory/<chat>/_group.json`，条目带 `kind`：`lore` 梗/黑话 · `rule` 群规约定 · `relation` 关系角色 · `project` 长期项目 · `topic` 在聊什么。回答「这个群是什么群、最近在聊什么」 |
 | `群会话` | 会话页一级单位——每 chatKey 一行（群名 / 会话起点 / 前文规模 / 轮转次数 / 记录数 / 未读），点开是该群的运行记录；**不同群视为不同会话** |
 | ~~`话题词`~~ | **已并入群记**（`kind=topic` 条目）——`_topics.json` 退役，解析器 `extractTopicWords` 仍用于收工轮产出 |

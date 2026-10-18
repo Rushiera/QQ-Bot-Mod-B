@@ -115,3 +115,59 @@
 | 2 | 展开某群只看到该群的运行记录 |
 | 3 | 群会话头部显示该群当前的会话起点与前文规模（= 该群独立会话的实锤） |
 | 4 | 新群开跑后 `data/messages/`、`data/memory/`、`session-state.json` 三处各自出现该群条目，互不串味 |
+
+---
+
+## 九、已读信息分段摘要（B22 · 2026-10-18）
+
+**问题（`ref-prompt-baseline.md` 实测）：** 会话窗口模式下【已读信息】= 会话起点之后的**全部消息**，是 prompt 里唯一随天数线性增长的段。最大群 10-17 13:13 实测 **156,825 字符 ≈ 10.4 万 tok，占整个 prompt 59.7%**；记忆整理（consolidate）只处理群友印象 / 群记，**不碰已读**；已读只靠收工轮轮转收缩（`session.maxContextTokens` 160,000 tok），单会话能吃到 16 万 tok 才收工。
+
+**目标：** 同群稳态下【已读信息】≤ `session.readMaxChars`（默认 60,000 字符）；较早的已读压缩成【前情提要】摘要段，原文退出提示词但保留在存档（`get_recent_messages` 可翻），摘要可被 `memory_search`（`category=history`）检索——跨天事实不丢。
+
+### 9.1 结构
+
+| 面 | 设计 |
+|:--|:--|
+| 窗口起点 | `session-state.json` 每 chat 增 `readFloorTs`（0 = 未压缩）。普通轮【已读信息】取 `max(会话起点, readFloorTs)` 之后的全部消息；**收工轮不套 readFloor**（仍按会话起点 / 记忆回溯点取全量，保证记忆沉淀能吃到原文）。 |
+| 摘要载体 | `data/memory/<chat>/_readlog.json`：`{ chatKey, segments: [{ id, fromTs, toTs, messageCount, chars, summary, createdAt }], updatedAt }`。单段摘要 ≤2,000 字符；活跃段软上限 200，超出转归档。 |
+| 归档 | `data/memory/<chat>/archive/readlog-<yyyyMMdd>.jsonl`（append-only，按天分卷）；收工轮把活跃段整批归档并清空，`readFloorTs` 随 `resetSession` 归零。 |
+| 压缩触发 | 每轮**普通运行成功结束后**异步检查（不阻塞聊天）：详细已读字符 > `readMaxChars` → 取最旧前缀，直到剩余 ≤ `readKeepChars`（默认 40,000）；按 `readCompactChunkChars`（默认 50,000）分块交**摘要模型**（`readSummaryModel`，必须快档）压成 3~8 条短句；逐块 `appendReadSegment`，全部成功后 `readFloorTs = 最后一条摘要消息 ts + 1`。任一块失败 → 不推进 floor（原文保留），下一轮再试（失败后 10 分钟退避）。 |
+| 前缀缓存 | 压缩成功后清掉该 chat 的 `promptAnchors`（窗口起点变了，旧锚点必然失效）；下一轮按新窗口重新锚定。未压缩时锚点机制原样不动。 |
+| 提示段落 | 【前情提要】插在【记忆】之后、【已读信息】之前（同一会话内稳定，不打断缓存前缀）：只展开最近若干段（总字符 ≤ `readDigestMaxChars`，默认 8,000），段尾明示更早段数 + `memory_search category=history` / `get_recent_messages` 取法。 |
+| 检索 | `memory_search` 增 `category=history`：搜活跃摘要段 + 归档摘要段 + 历次会话要点（`_session.json` 现行 + `archive/session-*.jsonl` 归档）。`all` 也带 history。 |
+| 轮转 | `#completeRollover`：先把上一份 `_session.json` 归档，再写新要点；再把 `_readlog.json` 活跃段整批归档；最后 `archiveAndClear` + `resetSession`（`readFloorTs=0`）。归档失败只留痕，不阻断轮转。 |
+
+### 9.2 配置
+
+```js
+session: {
+  enabled: true,
+  maxContextTokens: 160000,      // 收工轮阈值（现行运行值；代码默认仍 300000）
+  readMaxChars: 60000,           // 详细已读字符预算；0 = 关闭本功能（回到会话全量）
+  readKeepChars: 40000,          // 压缩后保留的详细字符数
+  readCompactChunkChars: 50000,  // 单次摘要调用最多吃多少字符
+  readDigestMaxChars: 8000,      // 【前情提要】注入总字符上限
+  readSummaryModel: 'deepseek-v4.1-flash',   // 摘要模型（必须快档）
+  readSummaryMaxTokens: 4000
+}
+```
+
+**🔴 摘要模型必须选快档。** 主模型 `hy4-preview-f` 是推理模型：纯文本压缩请求会先产数百到数千 token 推理，`max_tokens` 被推理链吃光后 `content` 恒空（2026-10-18 实测：3,729 字素材 + `max_tokens=3000` → `finish=length`、reasoning 10,118 字符、content **0** 字符、耗时 42.9 秒）。快档 `deepseek-v4.1-flash` 同样素材 **10.6 秒**出稿、content 156 字符。空模型时回落记忆整理模型（`memory.useChatModel`）。
+
+### 9.3 判据（验收）
+
+| # | 判据 |
+|:--:|:--|
+| 1 | 同群稳态下【已读信息】字符数 ≤ `readMaxChars`（压缩后含【前情提要】仍 ≤ `readMaxChars + readDigestMaxChars`） |
+| 2 | 压缩后旧消息不再出现在【已读信息】，但【前情提要】能看到其摘要；`get_recent_messages` 仍能翻到原文 |
+| 3 | `memory_search category=history` 能按关键词搜到活跃摘要段与归档摘要段；轮转后旧摘要仍可搜 |
+| 4 | 收工轮仍按全量窗口取材（不因 readFloor 截断记忆沉淀） |
+| 5 | `readMaxChars=0` 时行为与今日完全一致（会话全量 + 原锚点机制） |
+| 6 | 摘要调用失败时原文保留、`readFloorTs` 不变、下一轮可重试 |
+
+### 9.4 边界（不做）
+
+- 不做向量化 / 语义检索——仍走关键词（与 v0.73 记忆检索同口径）。
+- 不改 `tier=4` 的「全量」语义：全量的是**当前详细窗口**；窗口外的旧段由摘要段承载。`readMaxChars=0` 即回到今日的「会话全量」。
+- 不改 `session.maxContextTokens` 的收工轮判据、不改消息存档格式、不改发送链。
+- 摘要段只增不改；原文永不删除（只在轮转时随存档归档）。

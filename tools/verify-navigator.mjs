@@ -91,6 +91,10 @@ const report = await nav.health();
 check('健康检查·CH4 在听', report.ch4.ok === true, report.ch4.error || '');
 check('健康检查·猫群条目', report.cats.length > 0, `${report.cats.length} 只 / 工作 ${report.working.length}`);
 check('健康检查·外部服务', report.services.length > 0, report.services.map((s) => `${s.name}:${s.detail}`).join(' | '));
+// apisite 取数口径（2026-10-18 判例）：回执要真读到用量，且不能把「刚采完的空站点」当当前在用
+const apiSvc = report.services.find((s) => s.key === 'ApiSiteAnalyzer');
+check('健康检查·apisite 读到用量', !!apiSvc && /次请求|暂无采集记录|统计未读到/.test(apiSvc.detail), apiSvc?.detail ?? '无');
+check('健康检查·apisite 不挑空站点', !/^在线（过去 24 小时 0 次请求 \/ 0 token/.test(apiSvc?.detail ?? ''), apiSvc?.detail ?? '无');
 
 const receipt = nav.renderReceipt(report);
 check('回执·含首行', receipt.startsWith('命令已收到，'));

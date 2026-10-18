@@ -56,11 +56,12 @@
 | B20 | 重启业务面使回应参数生效 | `src/*` 改动需重启 `QQ Agent.exe`（`startHealLoop` 挂启动流程、`adjust_rapport` 进工具池）。重启后核验三项：`/api/rapport/group_<群号>` 可达 · 工具面出现 `adjust_rapport` · 日志出现 `[rapport]` 自愈行（来源：`design-qqbotb_log.md` §六十三 遗留 1） |
 | B21 | 真实链路验收：回应参数 | 让 bot 对某个无视它的人调一次 `adjust_rapport`，确认 `_rapport.json` 落盘 + 记忆页徽标变化 + 下一轮对同人发送被限速拦下（来源：`design-qqbotb_log.md` §六十三 遗留 2） |
 
-## 九、前文瘦身（Rushiera 2026-10-18 口述规格 · B22 已读信息）
+## 九、前文瘦身（Rushiera 2026-10-18 口述规格）——✅ 两项已核销
 
-> 读数基线（实测数字 / 组装链路 / 两条收缩链路）→ `ref-prompt-baseline.md`。开工前先读它，别重跑侦察。
-> B23 角色设定上工式已核销（2026-10-18 · 见 CHANGELOG v0.76）；本表只剩 B22。
+> B23 角色设定上工式 → v0.76 兑现（`roleText` 95,432 → 4,779 字符；`read_file` / `list_dir` 补齐执行面）。
+> B22 已读信息分段摘要 → v0.78 兑现（`readFloorTs` + 摘要段 + 【前情提要】+ `memory_search category=history`；真链路群 361820329 prompt 80,438 → 60,867 字符）。
+> 读数基线（实测数字 / 组装链路 / 两条收缩链路）→ `ref-prompt-baseline.md`；明细 → `design-qqbotb_log.md` §六十四（B23）/ §六十六（B22）。
 
 | # | 项 | 说明 |
 |:--:|:--|:--|
-| B22 | **已读信息块**：从「会话全量」改成可裁剪 / 分段 / 摘要化 | 现状（group:689942975 · 10-17 13:13）：已读 **156,825 字符 ≈ 10.4 万 tok**，1,989 条跨 7 天，占整个 prompt **59.7%**，且是唯一随天数线性增长的部分。根因：记忆整理（consolidate）只处理群友印象/群记，**不碰已读**；已读只靠收工轮轮转收缩，判据 `shouldRollover` = 上轮 `prompt_tokens` + 本批字符/1.5 > `session.maxContextTokens`（现行 **160,000**，`_unpack/data/config.json:163`）——单会话能吃到 16 万 tok 才收工。候选方向（未定，开工时先出方案）：① 降阈值 ② 分档窗口（近 N 条细读 + 更早只留摘要/索引）③ 旧段交给记忆沉淀后出窗。约束：`tier=4` 全量口径与锚点前缀复用（`prompt.js:806-821`）不能顺手打断。验收：同群稳态下已读段 ≤ 目标字符，跨天事实仍能从【记忆】/`memory_search` 取回 |
+| B22 | ✅ 已兑现（v0.78）**已读信息块**：从「会话全量」改成可裁剪 / 分段 / 摘要化 | 落地：`readFloorTs` 窗口下界（收工轮不套）· `src/readlog.js` 摘要段 + 归档 · 【前情提要】注入段 · `memory_search category=history` · 轮转双归档 · `POST /api/session/compact` 运维入口 · 摘要模型必须快档（`session.readSummaryModel`）· 补丁 `patch-qqagent-readcompact.mjs`（30 点）+ 自测 **25/25** · 真链路群 361820329 已读 61,692 → **40,194 字符**（prompt 80,438 → 60,867）· 详见 `design-qqbotb_log.md` §六十六 / 设计 §九 |

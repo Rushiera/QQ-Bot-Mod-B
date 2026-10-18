@@ -2473,3 +2473,134 @@ R喵喵：交接摘要已注入，等待确认
 |:--:|:--|:--|
 | 1 | ~~重启业务面~~ **已完成（2026-10-18 18:33）** | 启动器一键重启；启动会话 roleTextChars=4,779；工具面 `/api/tools` 已含 `read_file` / `list_dir` |
 | 2 | 真链路验收 | 新会话零读取答「我是谁 / 能干什么 / 边界在哪」；群里问 CCBP / 领航员细节时，模型主动 `read_file` 取件（看日志工具调用） |
+
+---
+
+## 六十五、领航员回执 apisite 取数纠偏（v0.77 · 2026-10-18）
+
+**一、判例（Rushiera 2026-10-18 19:17 群 361820329）**
+
+> 「领航员模式启动的应用指令层似乎没有正确的读取到 apis 的数据」→ 紧接一句「看来 apis 挂了」。
+
+19:17:07 群内 @ 开启领航员，19:17:08 开工回执发群；回执里 `ApiSiteAnalyzer` 那行没给出可信用量，用户据此判断「apis 挂了」。而 ApiSiteAnalyzer 本体全程在线（`/api/sites` 200，采集周期 59 秒，各站 `lastFetchAt` 一直在推进）。
+
+**二、根因（`app/src/navigator/index.js` `probeService` 的 apisite 分支）**
+
+| 项 | 原实现 | 问题 |
+|:--|:--|:--|
+| 选站 | 取 `/api/sites` 的 `sites[]`，按 **`lastFetchAt`（最近采集时刻）** 倒序取第一条，当作「当前在用」 | 采集时刻与**用量**无关：空站点（`rows=0`，如「知序空间2」）同样每轮被采集。谁刚采完谁就赢 → 回执有一半几率落到空站点 |
+| 结果 | 用该站的 `overview.last24h` 报「过去 24 小时 `<n>` 次请求 / `<m>` token」 | 挑中空站点即报 **0 次请求 / 0 token** → 看着像服务挂了（本次现场：`buddy2` rows=0 且 `lastFetchAt` 每轮刷新） |
+| 失败面 | `analysis` 取不到时回落 `在线` / `在线（24 小时统计未读到）` | 不说明是谁的数、也不说明为什么没有——无从判断是「没量」还是「没读到」 |
+
+**三、修法（现口径）**
+
+| 面 | 改法 |
+|:--|:--|
+| 主路 | `GET /api/analysis?site=__all` 的**跨站合计**——`overview.last24h` 的 `count` / `promptTokens+completionTokens`；这才是「apis 过去 24 小时用量」 |
+| 「当前在用」 | 取 `recent[0].siteName`（**最近一条真实请求**所属站点），附在括号尾：`· 当前在用 知序空间` |
+| 回落 | `__all` 取不到 → 单站口径，但**只从 `rows > 0` 的站点里挑**（空站点没有用量可言）；再取不到 → `在线（暂无采集记录）` / `在线（<站名> 统计未读到）` |
+| 落点 | 抽出 `apisiteDetail(base, sites)`（同文件，`createNavigator` 内，随 `renderReceipt` 一并导出供自测） |
+
+**四、验证**
+
+| 面 | 结果 |
+|:--|:--|
+| 端点实测 | `/api/sites` 67ms / `/api/analysis?site=__all` **837ms** / 单站 51ms——`PROBE_TIMEOUT_MS`（6 秒）够用 |
+| 取数实证 | 改前按 `lastFetchAt` 会选中 `buddy2`（rows=0）；改后 `__all` 合计 8,256 次 / 1,686,194,325 token · 当前在用 知序空间 |
+| 自测 | `tools/verify-navigator.mjs` 57 → **59/59**（+2：`apisite 读到用量` / `apisite 不挑空站点`） |
+| 回执样例 | `ApiSiteAnalyzer   在线（过去 24 小时 8,256 次请求 / 1,686,194,325 token · 当前在用 知序空间）` |
+
+**五、边界（不做）**
+
+- 不改 ApiSiteAnalyzer 本体：只用它的既有端点（`/api/sites` / `/api/analysis?site=__all|<id>`）
+- 不做站点白名单 / 手工指定「当前在用」：`recent[0]` 是事实口径，不靠配置猜
+- 不改回执其余行（`应用指令层 --OK` 仍是进程内恒真；`Mau链接状态` 仍探 `/api/v1/snapshot`）
+
+**六、遗留**
+
+| # | 项 | 说明 |
+|:--:|:--|:--|
+| 1 | **重启应用** | `app/src/*` 改动需重启自研单体才生效；重启后群内 @ 开一次领航员核验回执那行带用量数字 |
+| 2 | 多站口径 | 现报跨站合计（真·总用量）。若日后要「只看某一站」，加配置项 `services[].site` 指定即可（本轮不做） |
+
+---
+
+## 六十六、已读信息分段摘要（B22 · v0.78 · 2026-10-18）
+
+**一、规格（Rushiera 2026-10-18 点名 B22）**
+
+> 已读信息块：从「会话全量」改成可裁剪 / 分段 / 摘要化。
+
+读数基线（`ref-prompt-baseline.md`）：最大群 10-17 13:13 实测【已读信息】**156,825 字符 ≈ 10.4 万 tok / 占整个 prompt 59.7%**，是唯一随天数线性增长的段；记忆整理（consolidate）只处理群友印象与群记、**不碰已读**；已读只靠收工轮轮转收缩（`session.maxContextTokens` = 160,000 tok）。
+
+**二、方案（三候选 → 合并采用 ①+②）**
+
+| 候选 | 取舍 | 理由 |
+|:--|:--|:--|
+| ① 降收工轮阈值 | **不采用** | 阈值降到几万 tok 会让群聊每几小时就「失忆」一次；收工代价 = 一次全量沉淀 LLM 调用 + 存档归档，频率过高不划算 |
+| ② 分档窗口（近 N 条细读 + 更早只留摘要） | **采用** | 直接作用于唯一线性增长的段；原文不出存档，只出提示词 |
+| ③ 旧段交给记忆沉淀后出窗 | **部分采用** | 摘要段在轮转时整批归档、可 `memory_search category=history` 检索——事实不丢，但不等「到点」才收缩 |
+
+**设计落点（详规 → `design-qqbotb-session.md` §九）**
+
+| 面 | 实现 |
+|:--|:--|
+| 窗口下界 | `session-state.json` 每 chat 新增 `readFloorTs`；普通轮【已读信息】取 `max(会话起点, readFloorTs)` 之后的消息；**收工轮不套 floor**（记忆沉淀仍吃全量原文）；`readMaxChars=0` 时完全忽略 floor（回到今日的会话全量） |
+| 摘要载体 | `data/memory/<chat>/_readlog.json`（活跃段）+ `archive/readlog-<yyyyMMdd>.jsonl`（append-only） |
+| 压缩时机 | 每轮**普通运行成功结束后**异步检查（不阻塞聊天、失败保原文、10 分钟退避） |
+| 分块 | 按 `readCompactChunkChars`（50k 字符）切块，逐块压成 3~8 条短句；逐块 `appendReadSegment`，全部成功才推进 floor |
+| 提示段 | 【前情提要】插在【记忆】之后、【已读信息】之前（稳定前缀）；只展开最近若干段（≤ `readDigestMaxChars`），段尾明示更早段数 + 取法 |
+| 检索 | `memory_search` 新增 `category=history`——跨活跃摘要段 + 归档摘要段 + 历次会话要点；`archive` 回执增 `history` 计数 |
+| 轮转 | `#completeRollover` 先归档上一份 `_session.json` → 写新要点 → 归档 `_readlog.json` 活跃段 → `archiveAndClear` + `resetSession`（floor 归零） |
+| 观测 | `/api/sessions` 的 `chats[]` 增 `readFloorTs` / `readSegments` / `readArchived`；会话页群行显示「前情 N 段 / 归档 M」；`POST /api/session/compact` 手动压缩（`force=false` 只在超预算时动） |
+
+**🔴 三、根因（本轮最大收获）：摘要模型必须选快档**
+
+首版直接用记忆整理模型（`memory.useChatModel=true` → 主模型 `hy4-preview-f`），真链路两轮全部「前情摘要为空」：
+
+| 模型 | max_tokens | 耗时 | finish | reasoning | content |
+|:--|--:|--:|:--|--:|--:|
+| `hy4-preview-f` | 3000 | 42.9 s | `length` | 10,118 字符 | **0 字符** |
+| `deepseek-v4.1-flash` | 4000 | **10.6 s** | `stop` | 953 字符 | 156 字符 |
+
+主模型是推理模型：纯文本压缩请求会先产数百到数千 token 推理，`max_tokens` 被推理链吃光后 `content` 恒空。**修法**：新增 `session.readSummaryModel`（默认 `deepseek-v4.1-flash`）+ `readSummaryMaxTokens`（4000），摘要走独立 `chatCompletion` + `overrides`（复用主端点 baseUrl / key，只换模型）；空模型时回落记忆整理模型。空内容时日志输出 `finish` 与模型名（原为静默返回空串）。
+
+**四、实现（补丁 30 点 + 1 个新模块）**
+
+| 文件 | 改动 |
+|:--|:--|
+| `src/readlog.js`（新） | 摘要段存储 / 注入渲染 / 检索 / 归档 / 统计：`listReadSegments` · `appendReadSegment` · `archiveReadSegments` · `listArchivedReadSegments` · `readLogStats` · `formatReadLogForPrompt` · `searchReadSegments` · `formatMessagesForSummary` |
+| `src/session-state.js` | `readFloorTs` 字段 + `getReadFloorTs` / `setReadFloor`；`resetSession` 归零 floor；`archiveSessionSummary` / `listArchivedSessionSummaries` / `searchSessionSummaries`（会话要点也进归档可检索） |
+| `src/config.js` | `session.*` 六个新键（readMaxChars / readKeepChars / readCompactChunkChars / readDigestMaxChars / readSummaryModel / readSummaryMaxTokens） |
+| `src/prompt.js` | 已读窗口下界（含 `readMaxChars=0` 忽略 floor）；【前情提要】段；`buildPastState` 返回值增 `chars` / `lineChars`；session 回写 `readChars` / `readFloorTs` |
+| `src/orchestrator.js` | `#maybeCompactRead`（异步钩子）· `compactReadWindow`（分块压缩 + floor 推进 + 锚点清理）· `#summarizeReadChunk`（快档摘要）+ `#memoryChat` 增 `maxTokens` · `#runAgent` 传 `readFloorTs` · `#completeRollover` 双归档 |
+| `src/tools.js` | `memory_search` 增 `category=history`（摘要段 + 会话要点）+ `archive.history` 计数 |
+| `src/routes.js` | `POST /api/session/compact`；`/api/sessions` 的 `chats[]` 增三个观测字段 |
+| `ui/app/02-sse-sessions.js` | 会话页群行显示「前情 N 段 / 归档 M」 |
+| `tools/patch-qqagent-readcompact.mjs`（新） | 30 补丁点 · 幂等（标记检测 + 替换体首尾行兜底 + 替换体内标记检测） |
+| `tools/verify-qqagent-readcompact.mjs`（新） | 25 项端到端自测 |
+
+**五、验证**
+
+| 面 | 结果 |
+|:--|:--|
+| 语法 | `node --check` 八文件 0 错（readlog / session-state / config / prompt / orchestrator / tools / routes / 02-sse-sessions） |
+| 自测 | `verify-qqagent-readcompact.mjs` **25/25**（压缩 / 窗口下界 / 前情提要 / 检索 / 失败保原文 / 关闭开关 / 收工轮全量 + 双归档 / 补丁幂等） |
+| 回归 | session **20/20** · memory **43/43** · memory-reach **13/13** · engage **27/27** · import-integrity **ALL PASS**（63 文件 / 346 符号）· readcompact 补丁二次执行 **30/30 skipped** |
+| 真链路 | 群 **361820329**：`POST /api/session/compact` → 已读 61,692 → **40,194 字符**（压缩 321 条 / 1 段）；其后真实运行（20:11:46）prompt 里【已读信息】61,706 → **40,047**、总 prompt 80,438 → **60,867**，【前情提要】段 **3,393 字符**确实进了提示词。群 **785638698**：61,496 → **56,027** 字符（压缩 370 条 / 1 段）——已低于预算，无需再压 |
+| 观测面 | `/api/sessions` 回执 `chats[]` 实测带 `readFloorTs` / `readSegments` / `readArchived` |
+| 生效 | 应用已重启 ×3（`启动QQBotB.bat` 一键全流程）；`/api/session/compact` 可达、工具面 56 件含 `memory_search category=history` |
+
+**六、边界（不做）**
+
+- 不做向量化 / 语义检索——仍关键词（与 v0.73 记忆检索同口径）
+- 不改 `session.maxContextTokens` 的收工轮判据；不改消息存档格式；不改发送链
+- 拆块只按字符数（不按话题边界）——真出现「摘要切断话题」判例再引入语义切分
+- 摘要段只增不改；原文永不删除（轮转时随存档归档，`get_recent_messages` 可翻）
+
+**七、遗留**
+
+| # | 项 | 说明 |
+|:--:|:--|:--|
+| 1 | 稳态观测 | 目标「同群稳态下【已读信息】≤ `readMaxChars`」已由真链路证明可达成；待一两天的自然运行观察压缩频率是否合适（现每轮结束检查一次，失败 10 分钟退避） |
+| 2 | B23（角色设定块）未动 | 角色设定仍 95,432 字符整段注入（占 36.3%），属另一块攻坚 |

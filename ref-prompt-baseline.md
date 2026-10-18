@@ -81,3 +81,14 @@
 ## 四、已排除
 
 - **缓存命中率与本结构无关**（2026-10-18 实测）：同 chatKey 相邻会话 userPrompt 公共前缀 9.7 万~10.9 万字符，顶部无动态段；同一字节请求连发 10 次命中 3/10 → 属上游缓存不稳定（`tools/cache-diag.mjs` 可复跑）。
+
+---
+
+## 五、B23 实施后读数（2026-10-18）
+
+- `persona.roleText`：**4,779 字符**（≈3.2k tok）——从 95,432 字符（≈63.2k tok）砍 **95.0%**；占原 262,646 字符总 prompt 的 1.8%。
+- 结构：IDENTITY / CCBP_PRIMER / TOOLS_MAP / ROUTE_INDEX / BLOCKED_RULES / NAV_QUICK（六段）。
+- 按需文件：`workspace:QQBotB/role/nav-rules.md`（4,779 字符）· `role/blocked-rules.md`（954 字符）。
+- 执行面：业务面工具 `read_file` / `list_dir`（受控根 workspace + ccbp，只读）；工具总数 54 → 56。
+- 复跑：`tools/verify-qqagent-fileread.mjs`（20/20）；roleText 由 `tools/apply-qqagent-config.mjs --roletext-only` 生成。
+- 注：B22（已读信息）未动；本文件 §二 的 95,432 是 B23 前基线，保留作对照。

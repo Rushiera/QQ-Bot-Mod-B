@@ -1,6 +1,6 @@
 ﻿# QQBot mod B — 项目档案
 
-> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v0.75 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
+> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v0.76 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
 > Git：GitHub `Rushiera/QQ-Bot-Mod-B`（单远程 · 收工推送）
 > 创建：2026-09-26
 > 缘起：模式 A（QQ 官方 Bot 开放平台通道）受「每条用户消息最多 4 次被动回复」约束，无法支撑「猫的会话内容随时推送到 QQ」。模式 B 改为专用 QQ 号 + OneBot 11 协议端，自主收发、无被动预算。
@@ -75,6 +75,7 @@ QQBotB/
 ├── 启动QQAgent-仅业务面.bat / .vbs  回落路径（只起业务面——单体起不来时用）· 同上生成
 ├── project.md / todo.md / CHANGELOG.md / glossary.md
 ├── design-qqbotb*.md          设计（总纲 + 模块：session / engage / memory）· design-status.md
+├── role/                      角色设定按需文件（nav-rules.md / blocked-rules.md）——B23 上工式
 ├── design-qqbotb_log.md       兑现明细（唯一证据承载处）
 ├── ref-qqagent.md             外部参考拆解（qq-agent v0.4.0）
 ├── ref-qqagent-features.md    功能清单与实现落点（编号 → 源码行号）

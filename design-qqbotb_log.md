@@ -2401,3 +2401,75 @@ R喵喵：交接摘要已注入，等待确认
 |:--:|:--|:--|
 | 1 | **重启业务面** | `src/*` 改动需要重启 `QQ Agent.exe` 才生效（`startHealLoop` 挂在启动流程；新工具 `adjust_rapport` 也随重启进工具池）。重启后核验：①`/api/rapport/group_<群号>` 可达 ②工具面出现 `adjust_rapport` ③日志出现 `[rapport]` 自愈行（5 分钟后） |
 | 2 | 真链路验收 | 在真实群让 bot 对某个无视它的人调一次 `adjust_rapport`，确认 `_rapport.json` 落盘 + 记忆页徽标变化 + 下一轮发送被限速（拦在出站口，不是发出去才后悔） |
+
+---
+
+## 六十四、前文瘦身 B23：角色设定上工式（v0.76 · 2026-10-18）
+
+**一、规格（Rushiera 2026-10-18 点名）**
+
+> B23 角色设定块：从「静态整段注入」改成上工式（侦察 → 按需取件）。
+
+**取舍（开工时定）：** B16（静态压缩到 25–30k）**不先行**，直接做 B23——B23 是结构改成按需加载，B16 的压缩目标被 B23 覆盖；先补执行面（文件读取工具），再改 roleText 结构。
+
+**二、现状 → 目标**
+
+| 项 | 改前 | 改后 |
+|:--|--:|--:|
+| `persona.roleText` | 95,432 字符（≈6.3 万 tok · 占 prompt 36.3%） | **4,779 字符（-95.0%）** |
+| 注入方式 | CCBP 注入集整段拼接（L0/L1/L2 全量） | 身份 + CCBP 速览 + 工具面总览 + 路由索引 + 遇阻处置 + 领航员速查 |
+| 文件读取工具 | 无 | `read_file` / `list_dir`（受控根只读） |
+
+**三、设计要点**
+
+| 面 | 设计 |
+|:--|:--|
+| 身份段（IDENTITY） | 我是谁 / 四条底线 / 群聊口径（人格要点保留，完整 SOUL/AGENTS/USER 按需读） |
+| CCBP 速览（CCBP_PRIMER） | 知识网络 L0–L3 / Worker+Job / 猫 / 受控根 / Project——只讲是什么，不抄用法 |
+| 工具面总览（TOOLS_MAP） | 自己的工具（send / memory / web / browser / image / nav / read_file / adjust_rapport…）+ CH4 侧工具归 majordomo（text-* / cs-* / mau-* / file-* / config-* / majordomo-* / pack / Note） |
+| 路由索引（ROUTE_INDEX） | 按文件给「什么时候读」：SOUL / Discipline / GLOSSARY / Tree / TOOL-REF / Chat 四件 / Majordomo 四件 / CatHome 三件 / Browser 三件 / role/nav-rules.md / role/blocked-rules.md / 项目文档 |
+| 按需文件 | `role/nav-rules.md`（领航员完整教材）· `role/blocked-rules.md`（遇阻处置完整版）——落 workspace 根，由 `apply-qqagent-config.mjs` 生成 |
+| 人格不动 | systemPrompt（lean 1069 字符）原样；Chat 四件完整可读；身份段保留其要点，不改写人格内容 |
+
+**四、实现**
+
+| 文件 | 改动 |
+|:--|:--|
+| `src/file-tools.js`（新） | `fileRoots` / `resolveReadPath` / `readTextFile` / `listDirectory` / `registerFileTools`——受控根只读面 |
+| `src/config.js` | `tools.fileRead` 默认段（roots = workspace + ccbp · maxBytes 2MB · maxCharsPerRead 60k） |
+| `src/tools.js` | import + `registerFileTools()`（工具 54 → 56 件） |
+| `tools/apply-qqagent-config.mjs` | 六段短 roleText 生成 + role/ 按需文件落盘；`--roletext-only` 保留 |
+| `tools/patch-qqagent-fileread.mjs`（新） | 4 补丁点（模块 / import / register / config）· 链尾 · 幂等 |
+| `tools/verify-qqagent-fileread.mjs`（新） | 20 项自测 |
+| `role/nav-rules.md` / `role/blocked-rules.md`（新） | 按需文件（4,779 / 954 字符） |
+
+**五、验证**
+
+| 面 | 结果 |
+|:--|:--|
+| 语法 | `node --check` 四文件 0 错（file-tools / patch / apply / verify） |
+| 自测 | `verify-qqagent-fileread.mjs` **20/20**——受控根 / 寻址 / 越界拒绝（相对路径 / `..` / 根外绝对路径）/ 分段读取 / 目录 / 工具注册 / 补丁标记 / roleText ≤12k + 关键词 / 旧注入退出 / 按需文件可读 |
+| 工具全链 | `tools.js` 真实入口 `buildToolDefs()` → 56 件，含 `read_file` / `list_dir` |
+| 回归 | cattools **64/64** · import-integrity **ALL PASS（62 文件 / 332 符号）** |
+| 补丁重放 | 二次执行 4/4 skipped（幂等实锤） |
+| 生效 | **应用已重启（2026-10-18 18:33）**——启动会话 roleTextChars=4,779；`/api/tools` 已含 read_file / list_dir；新会话即读短前文 |
+
+**架构变更三段式（保留·扬弃·新增）**
+
+- **保留**：人格底座与群聊口径（systemPrompt 原样；身份段保留 Chat 要点）；遇阻处置 6 条；领航员操作速查；CCBP 知识网络全部原文件（按需可达）。
+- **扬弃**：roleText 的「CCBP 注入集整段拼接」装配方式——L0/L1/L2 全量不再每轮重发。
+- **新增**：受控根只读文件面（`read_file` / `list_dir`，workspace + ccbp）；`ROUTE_INDEX` 路由索引；`role/nav-rules.md` / `role/blocked-rules.md` 按需文件；B23 自测与补丁。
+
+**六、边界（不做）**
+
+- 不删 CCBP 原文件：按需文件就是原文件，路由索引指过去
+- 不放开 `data` 根（密钥面）/ `mau` / `mauout`——默认只给 workspace + ccbp（与 CH4 猫 enabledRoots 一致）
+- 不做写面：read_file / list_dir 只读，不提供写 / 删 / 移动
+- 不改 systemPrompt / 人格：只改 roleText 装配结构
+
+**七、遗留**
+
+| # | 项 | 说明 |
+|:--:|:--|:--|
+| 1 | ~~重启业务面~~ **已完成（2026-10-18 18:33）** | 启动器一键重启；启动会话 roleTextChars=4,779；工具面 `/api/tools` 已含 `read_file` / `list_dir` |
+| 2 | 真链路验收 | 新会话零读取答「我是谁 / 能干什么 / 边界在哪」；群里问 CCBP / 领航员细节时，模型主动 `read_file` 取件（看日志工具调用） |

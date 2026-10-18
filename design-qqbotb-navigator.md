@@ -426,7 +426,7 @@ Mau 链接状态 --OK
 | 面 | 内容 | 生成源 | 现状 |
 |:--|:--|:--|--:|
 | `systemPrompt` | 群友人设（「你是 R喵，混在群里的普通群友…」lean 精简档） | 业务面配置 `_unpack/data/config.json` 的 `persona.systemPrompt`（行为准则段开关 `patch-qqagent-nosys.mjs`） | 1069 字符 |
-| `roleText`（前文主体） | CCBP 注入集 + 遇阻处置 6 条 + 领航员教材 | **`tools/apply-qqagent-config.mjs`**（`INJECT` / `BLOCKED_RULES` / `NAV_RULES`） | **93628 字符** |
+| `roleText`（前文主体） | 身份 + CCBP 速览 + 工具面总览 + 路由索引 + 遇阻处置 6 条 + 领航员速查（B23 上工式） | **`tools/apply-qqagent-config.mjs`**（`IDENTITY` / `CCBP_PRIMER` / `TOOLS_MAP` / `ROUTE_INDEX` / `BLOCKED_RULES` / `NAV_QUICK`） | **4,779 字符**（2026-10-18 · B23） |
 | 本次输入 | 触发消息 + 本群 JSON 存档（**零对话历史，每次全量重发**） | 业务面运行时自组装 | ~111k 字符/次 |
 
 **二、改法与刷法**
@@ -435,6 +435,8 @@ Mau 链接状态 --OK
 2. 刷：`node tools/apply-qqagent-config.mjs --roletext-only`（只刷 `roleText`，不动 api / snowluma / allow）——回执给 `roleTextChars`；
 3. 读回复核：`text-grep` `_unpack/data/config.json` 查改动关键字。
    **生效面**：教材 / 前文改动要**业务面开新会话**才读得到。
+
+**按需文件（B23 · 2026-10-18）**：`role/nav-rules.md`（领航员完整教材）· `role/blocked-rules.md`（遇阻处置完整版）——roleText 只留路由索引，模型用 `read_file` / `list_dir` 取件。读取面 = 业务面 `src/file-tools.js`（受控根 workspace + ccbp，只读；口径对齐 CH4 受控根）。
 
 **三、整理口径（Rushiera 2026-10-11 定）**
 
@@ -456,7 +458,7 @@ Mau 链接状态 --OK
 
 **预期：93628 → 约 25–30k（砍 65–70%），CCBP 认知与派活能力不丢。**
 
-**四、待办指针** → `todo.md` §六 B16。
+**四、待办指针** → B16 未实施（B23 已用结构改造替代，见 `design-qqbotb_log.md` §六十四）；`todo.md` §九 只剩 B22。
 
 ---
 

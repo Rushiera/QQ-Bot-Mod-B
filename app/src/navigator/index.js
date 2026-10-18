@@ -485,39 +485,21 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   // ── 健康检查 ──────────────────────────────────────────────────────────────
 
   /**
-   * ApiSiteAnalyzer 的用量取数（回执里那一行的正文）。
+   * ApiSiteAnalyzer 用量行的正文（纯格式化——取数在 probeService）。
    *
-   * **判例（2026-10-18 · Rushiera「看来 apis 挂了」）**：原实现按 `lastFetchAt`（最近采集时刻）
-   * 挑站点，把「刚采完的那个」当「当前在用」——采集时刻与用量无关：空站点（`rows=0`）同样每轮
-   * 被采集，谁刚采完谁就赢，于是回执有几率报「过去 24 小时 0 次请求 / 0 token」，看着像服务挂了。
-   * 现口径：主走 `site=__all` 的跨站合计（真正的「apis 过去 24 小时用量」），并用最近一条真实
-   * 请求所属站点标「当前在用」；总览取不到才回落单站，且**跳过零记录站点**。
+   * **口径（Rushiera 2026-10-18 定）**：直接吃它内置总览接口的合并数据（`site=__all` 已跨站合计），
+   * 不自己挑站点、不自己合并。判例：原实现按 `lastFetchAt`（最近采集时刻）挑站点当「当前在用」——
+   * 采集时刻与用量无关，空站点（`rows=0`）同样每轮被采集，谁刚采完谁就赢，回执有几率报
+   * 「过去 24 小时 0 次请求 / 0 token」，看着像服务挂了（Rushiera「看来 apis 挂了」）。
    *
-   * @param {string} base 服务根地址（`services[].url` 去掉 `/api/sites` 之后的部分）
-   * @param {object} sites `/api/sites` 的响应体（回落口径用）
-   * @returns {Promise<string>} 回执正文
+   * @param {object} all `/api/analysis?site=__all` 的响应体
+   * @returns {string} 回执正文（如「在线（过去 24 小时 8,383 次请求 / 1,728,811,821 token）」）
    */
-  async function apisiteDetail(base, sites) {
-    const all = await fetchJson(`${base}/api/analysis?site=__all`);
+  function apisiteDetail(all) {
     const day = all?.overview?.last24h;
-    if (day) {
-      const tokens = Number(day.promptTokens || 0) + Number(day.completionTokens || 0);
-      const active = Array.isArray(all?.recent) ? all.recent[0] : null;
-      const who = String(active?.siteName ?? '').trim();
-      return `在线（过去 24 小时 ${group(day.count)} 次请求 / ${group(tokens)} token${who ? ` · 当前在用 ${who}` : ''}）`;
-    }
-    // 回落：单站口径——零记录站点没有用量可言，按采集时刻挑会挑中它（判例见上）
-    const list = Array.isArray(sites?.sites) ? [...sites.sites] : [];
-    const usable = list.filter((row) => Number(row?.rows ?? 0) > 0);
-    usable.sort((a, b) => String(b?.lastFetchAt ?? '').localeCompare(String(a?.lastFetchAt ?? '')));
-    const site = usable[0] ?? null;
-    if (!site?.id) return list.length > 0 ? '在线（暂无采集记录）' : '在线（24 小时统计未读到）';
-    const name = String(site.displayName ?? site.id);
-    const analysis = await fetchJson(`${base}/api/analysis?site=${encodeURIComponent(site.id)}`);
-    const single = analysis?.overview?.last24h;
-    if (!single) return `在线（${name} 统计未读到）`;
-    const tokens = Number(single.promptTokens || 0) + Number(single.completionTokens || 0);
-    return `在线（过去 24 小时 ${group(single.count)} 次请求 / ${group(tokens)} token · 当前在用 ${name}）`;
+    if (!day) return '在线（总览统计未读到）';
+    const tokens = Number(day.promptTokens || 0) + Number(day.completionTokens || 0);
+    return `在线（过去 24 小时 ${group(day.count)} 次请求 / ${group(tokens)} token）`;
   }
 
   /**
@@ -528,6 +510,13 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    */
   async function probeService(svc) {
     if (!svc?.url) return { key: svc?.key, name: svc?.name ?? svc?.key, online: false, detail: '未接入' };
+    // apisite 直接走内置总览接口（一次请求：成不成 = 在不在线，数 = 跨站合并后的内置数据）
+    if (svc.kind === 'apisite') {
+      const base = String(svc.url).replace(/\/api\/sites.*$/, '');
+      const all = await fetchJson(`${base}/api/analysis?site=__all`);
+      if (!all) return { key: svc.key, name: svc.name ?? svc.key, online: false, detail: '离线' };
+      return { key: svc.key, name: svc.name ?? svc.key, online: true, detail: apisiteDetail(all) };
+    }
     const data = await fetchJson(svc.url);
     if (!data) return { key: svc.key, name: svc.name ?? svc.key, online: false, detail: '离线' };
     let detail = '在线';
@@ -537,10 +526,6 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       const minutes = Number(data.resetInMinutes ?? 0);
       const when = minutes > 0 ? `重置在 ${minutes} 分钟后` : '重置时刻已过';
       detail = `在线（合计剩余 ${group(remain)} · ${when}）`;
-    }
-    if (svc.kind === 'apisite') {
-      // 用量口径见 apisiteDetail（跨站合计 + 当前在用站点——不按采集时刻挑站点）
-      detail = await apisiteDetail(String(svc.url).replace(/\/api\/sites.*$/, ''), data);
     }
     return { key: svc.key, name: svc.name ?? svc.key, online: true, detail };
   }

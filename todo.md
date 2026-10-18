@@ -6,7 +6,7 @@
 
 ---
 
-## 一、M2 卫星形态（下一步——M1 已通过 2026-10-09）
+## 一、M2 卫星形态（M1 已通过 2026-10-09）
 
 - **B6** 发送面按连接类型分流（A/B）——改动归 CH4 项目记录
 - **B7** 账号槽位配置面（A / C 切换）
@@ -19,13 +19,12 @@
 
 | # | 项 | 说明 |
 |:--:|:--|:--|
-| B11 | 会话页 UI 对齐 CH4 形态（上下文窗口 v0.8 已兑现） | 现状用 qq-agent 面板（会话页）过渡 |
+| B11 | 会话页 UI 对齐 CH4 形态 | 现状用 qq-agent 面板（会话页）过渡 |
 
 ## 四、多群扩展（Rushiera 2026-10-10 口述规格）
 
 | # | 项 | 说明 |
 |:--:|:--|:--|
-| B15 | 真实链路验收：收工轮 → 群记 topic | 群里聊到超阈值触发收工轮后，确认 `_group.json` 的 topic 条目被刷新（来源：`design-qqbotb_log.md` §十一 遗留 1） |
 | B17 | 安静模式真链路验收 | 选一个非在用的群加入 `engage.quiet.chats`，`intervalMs` 临时调小（如 60000）观察：①普通消息不触发发言 ②@ 能回 ③到点出「安静整理轮」（不发言 + 写群记 / 印象 + 归档）④存档与记忆照常（来源：`design-qqbotb_log.md` §六十 遗留 1） |
 
 ## 五、领航员模式（Rushiera 2026-10-11 口述规格 · `design-qqbotb-navigator.md`）
@@ -35,33 +34,15 @@
 | N6 | 迁移：指令判断器与话术收进自研单体（终态） | 待排期（`design-qqbotb-navigator.md` §十二 迁移路径） |
 | N7 | 断点续跑 `nav_resume`——摘要已产出而流程中止时，跳过收工直接清前文 + 注入现成摘要 | 当前不做（Rushiera 2026-10-11：日后不排除会要，先记） |
 
-
-## 六、业务面前文整理（Rushiera 2026-10-11 口述规格）
-
-| # | 项 | 说明 |
-|:--:|:--|:--|
-| B16 | 业务面前文整理——**改口径 + 精简**（不全去） | 现状 `roleText` **96236 字符** + `systemPrompt` 1069 字符，每次运行全量重发（零对话历史）。口径：领航员要懂 CCBP 是什么、要知道特权工具（`config-*` / `majordomo-*` / `cs-*` / `mau-*` / `text-*`）归 majordomo——**领航员 = MAU 的另一个入口**。方案与改法 → `design-qqbotb-navigator.md` **§十七**（口径含「**人格不动**」——群友人设与 Chat 四件原样保留，新增段用陈述句、不写制度腔） |
-
-## 七、记忆不节流（Rushiera 2026-10-17 口述规格）
+## 六、记忆与回应参数（真实链路验收）
 
 | # | 项 | 说明 |
 |:--:|:--|:--|
-| B18 | 真实链路验收：沉淀拍触发 | 等某群「无未读 + 距上次沉淀 ≥12h」到点，确认日志出现 `记忆沉淀拍：…走「只整理不发言」的整理轮`，且该群 `_session.json` 的 `createdAt` 被刷新（来源：`design-qqbotb_log.md` §六十二） |
-| B19 | 真实链路验收：归档检索 | 群里 @ 让 bot 搜一条已归档的旧印象（`memory_search`），确认回执带 `groupArchived` / 归档命中（当前 689942975 有 18 条归档可搜） |
+| B19 | 归档检索的群内真触发 | 群里 @ 让 bot 用 `memory_search` 搜一条已归档的旧印象，确认回执带 `groupArchived` / 归档命中。侧证已备（2026-10-18）：`group_689942975/archive/group-20261017.jsonl` 18 条可检索、工具已注册含 `category` 三轴；缺的是群内真触发 |
+| B21 | 回应参数真链路验收 | 让 bot 对某个无视它的人调一次 `adjust_rapport`，确认 `_rapport.json` 落盘 + 记忆页徽标变化 + 下一轮对同人发送被限速拦下（来源：`design-qqbotb_log.md` §六十三 遗留 2） |
 
-## 八、回应参数（Rushiera 2026-10-18 口述规格）
-
-| # | 项 | 说明 |
-|:--:|:--|:--|
-| B20 | 重启业务面使回应参数生效 | `src/*` 改动需重启 `QQ Agent.exe`（`startHealLoop` 挂启动流程、`adjust_rapport` 进工具池）。重启后核验三项：`/api/rapport/group_<群号>` 可达 · 工具面出现 `adjust_rapport` · 日志出现 `[rapport]` 自愈行（来源：`design-qqbotb_log.md` §六十三 遗留 1） |
-| B21 | 真实链路验收：回应参数 | 让 bot 对某个无视它的人调一次 `adjust_rapport`，确认 `_rapport.json` 落盘 + 记忆页徽标变化 + 下一轮对同人发送被限速拦下（来源：`design-qqbotb_log.md` §六十三 遗留 2） |
-
-## 九、前文瘦身（Rushiera 2026-10-18 口述规格）——✅ 两项已核销
-
-> B23 角色设定上工式 → v0.76 兑现（`roleText` 95,432 → 4,779 字符；`read_file` / `list_dir` 补齐执行面）。
-> B22 已读信息分段摘要 → v0.78 兑现（`readFloorTs` + 摘要段 + 【前情提要】+ `memory_search category=history`；真链路群 361820329 prompt 80,438 → 60,867 字符）。
-> 读数基线（实测数字 / 组装链路 / 两条收缩链路）→ `ref-prompt-baseline.md`；明细 → `design-qqbotb_log.md` §六十四（B23）/ §六十六（B22）。
+## 七、B22 稳态观测（v0.78 遗留）
 
 | # | 项 | 说明 |
 |:--:|:--|:--|
-| B22 | ✅ 已兑现（v0.78）**已读信息块**：从「会话全量」改成可裁剪 / 分段 / 摘要化 | 落地：`readFloorTs` 窗口下界（收工轮不套）· `src/readlog.js` 摘要段 + 归档 · 【前情提要】注入段 · `memory_search category=history` · 轮转双归档 · `POST /api/session/compact` 运维入口 · 摘要模型必须快档（`session.readSummaryModel`）· 补丁 `patch-qqagent-readcompact.mjs`（30 点）+ 自测 **25/25** · 真链路群 361820329 已读 61,692 → **40,194 字符**（prompt 80,438 → 60,867）· 详见 `design-qqbotb_log.md` §六十六 / 设计 §九 |
+| B24 | 观察已读压缩频率是否合适 | 现每轮普通运行成功后检查一次、失败 10 分钟退避、阈值 `session.readMaxChars`=60,000 / 保留 `readKeepChars`=40,000。跑一两天后看日志 `已读前情压缩：…` 行数与摘要段增长是否合理（来源：`design-qqbotb_log.md` §六十六 遗留 1） |

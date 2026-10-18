@@ -2490,30 +2490,30 @@ R喵喵：交接摘要已注入，等待确认
 |:--|:--|:--|
 | 选站 | 取 `/api/sites` 的 `sites[]`，按 **`lastFetchAt`（最近采集时刻）** 倒序取第一条，当作「当前在用」 | 采集时刻与**用量**无关：空站点（`rows=0`，如「知序空间2」）同样每轮被采集。谁刚采完谁就赢 → 回执有一半几率落到空站点 |
 | 结果 | 用该站的 `overview.last24h` 报「过去 24 小时 `<n>` 次请求 / `<m>` token」 | 挑中空站点即报 **0 次请求 / 0 token** → 看着像服务挂了（本次现场：`buddy2` rows=0 且 `lastFetchAt` 每轮刷新） |
-| 失败面 | `analysis` 取不到时回落 `在线` / `在线（24 小时统计未读到）` | 不说明是谁的数、也不说明为什么没有——无从判断是「没量」还是「没读到」 |
+| 失败面 | 取不到时回落 `在线` / `在线（24 小时统计未读到）` | 不说明是谁的数、也不说明为什么没有——无从判断是「没量」还是「没读到」 |
 
-**三、修法（现口径）**
+**三、修法（Rushiera 定：直接吃内置参数接口，多站点合并）**
 
 | 面 | 改法 |
 |:--|:--|
-| 主路 | `GET /api/analysis?site=__all` 的**跨站合计**——`overview.last24h` 的 `count` / `promptTokens+completionTokens`；这才是「apis 过去 24 小时用量」 |
-| 「当前在用」 | 取 `recent[0].siteName`（**最近一条真实请求**所属站点），附在括号尾：`· 当前在用 知序空间` |
-| 回落 | `__all` 取不到 → 单站口径，但**只从 `rows > 0` 的站点里挑**（空站点没有用量可言）；再取不到 → `在线（暂无采集记录）` / `在线（<站名> 统计未读到）` |
-| 落点 | 抽出 `apisiteDetail(base, sites)`（同文件，`createNavigator` 内，随 `renderReceipt` 一并导出供自测） |
+| 取数 | `GET /api/analysis?site=__all`——ApiSiteAnalyzer **内置的总览口径**（跨站已合并），一次请求：成不成 = 在不在线，数 = 合并后的 24 小时用量 |
+| 判定 | 该请求失败即判 `离线`（不再先探 `/api/sites` 再探单站——两跳变一跳） |
+| 格式化 | 抽成纯函数 `apisiteDetail(payload)`：`count` / `promptTokens+completionTokens`；统计缺失时给明确文案「总览统计未读到」 |
+| 不做 | 不挑站点、不自己合并、不标「当前在用」——口径与数据全部归 ApiSiteAnalyzer 自己 |
 
 **四、验证**
 
 | 面 | 结果 |
 |:--|:--|
-| 端点实测 | `/api/sites` 67ms / `/api/analysis?site=__all` **837ms** / 单站 51ms——`PROBE_TIMEOUT_MS`（6 秒）够用 |
-| 取数实证 | 改前按 `lastFetchAt` 会选中 `buddy2`（rows=0）；改后 `__all` 合计 8,256 次 / 1,686,194,325 token · 当前在用 知序空间 |
-| 自测 | `tools/verify-navigator.mjs` 57 → **59/59**（+2：`apisite 读到用量` / `apisite 不挑空站点`） |
-| 回执样例 | `ApiSiteAnalyzer   在线（过去 24 小时 8,256 次请求 / 1,686,194,325 token · 当前在用 知序空间）` |
+| 端点实测 | `/api/sites` 67ms · `/api/analysis?site=__all` **837ms** · 单站 51ms——`PROBE_TIMEOUT_MS`（6 秒）够用 |
+| 取数实证 | 内置合并口径 8,661 次 / 1,833,200,461 token（4 站合计：xyjun 3,831 + newapi47 51,481 + buddy 3,205 + buddy2 0） |
+| 自测 | `tools/verify-navigator.mjs` 57 → **60/60**（+3：`读到合并用量`（真链路）/ `合并口径格式化`（假 payload 断言 8,182 次 / 1,500 token）/ `统计缺失给明确文案`） |
+| 回执样例 | `ApiSiteAnalyzer   在线（过去 24 小时 8,661 次请求 / 1,833,200,461 token）` |
 
 **五、边界（不做）**
 
-- 不改 ApiSiteAnalyzer 本体：只用它的既有端点（`/api/sites` / `/api/analysis?site=__all|<id>`）
-- 不做站点白名单 / 手工指定「当前在用」：`recent[0]` 是事实口径，不靠配置猜
+- 不改 ApiSiteAnalyzer 本体：只用它的既有端点 `/api/analysis?site=__all`
+- 不做站点白名单 / 手工指定「当前在用」：合并口径不认单站
 - 不改回执其余行（`应用指令层 --OK` 仍是进程内恒真；`Mau链接状态` 仍探 `/api/v1/snapshot`）
 
 **六、遗留**
@@ -2521,7 +2521,7 @@ R喵喵：交接摘要已注入，等待确认
 | # | 项 | 说明 |
 |:--:|:--|:--|
 | 1 | **重启应用** | `app/src/*` 改动需重启自研单体才生效；重启后群内 @ 开一次领航员核验回执那行带用量数字 |
-| 2 | 多站口径 | 现报跨站合计（真·总用量）。若日后要「只看某一站」，加配置项 `services[].site` 指定即可（本轮不做） |
+| 2 | 多站口径 | 现报跨站合并（内置总览）。若日后要「只看某一站」，加配置项 `services[].site` 指定即可（本轮不做） |
 
 ---
 

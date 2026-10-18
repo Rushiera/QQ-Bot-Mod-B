@@ -48,3 +48,10 @@
 |:--:|:--|:--|
 | B18 | 真实链路验收：沉淀拍触发 | 等某群「无未读 + 距上次沉淀 ≥12h」到点，确认日志出现 `记忆沉淀拍：…走「只整理不发言」的整理轮`，且该群 `_session.json` 的 `createdAt` 被刷新（来源：`design-qqbotb_log.md` §六十二） |
 | B19 | 真实链路验收：归档检索 | 群里 @ 让 bot 搜一条已归档的旧印象（`memory_search`），确认回执带 `groupArchived` / 归档命中（当前 689942975 有 18 条归档可搜） |
+
+## 八、回应参数（Rushiera 2026-10-18 口述规格）
+
+| # | 项 | 说明 |
+|:--:|:--|:--|
+| B20 | 重启业务面使回应参数生效 | `src/*` 改动需重启 `QQ Agent.exe`（`startHealLoop` 挂启动流程、`adjust_rapport` 进工具池）。重启后核验三项：`/api/rapport/group_<群号>` 可达 · 工具面出现 `adjust_rapport` · 日志出现 `[rapport]` 自愈行（来源：`design-qqbotb_log.md` §六十三 遗留 1） |
+| B21 | 真实链路验收：回应参数 | 让 bot 对某个无视它的人调一次 `adjust_rapport`，确认 `_rapport.json` 落盘 + 记忆页徽标变化 + 下一轮对同人发送被限速拦下（来源：`design-qqbotb_log.md` §六十三 遗留 2） |

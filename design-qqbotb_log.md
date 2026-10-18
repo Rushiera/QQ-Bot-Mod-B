@@ -2318,3 +2318,86 @@ R喵喵：交接摘要已注入，等待确认
 - 不做向量化 / 语义检索——本轮只做「关键词 + 归档」，向量库等真出现「关键词搜不到」的判例再上（`勿增实体`）
 - 不改注入段的段落顺序（前缀缓存）——预算只减条数，不动结构
 - 不动群隔离铁律：归档与索引同样以 chatKey 为键，禁止跨群读取
+
+---
+
+## 六十三、回应参数（每个群友 0~100 分 · v0.74 · 2026-10-18）
+
+**一、规格（Rushiera 2026-10-18 口述）**
+
+> 群 bot 回消息有点读不懂空气。设计一个回应参数：所有群友初始 100，如果群友自顾自说完全没有理你，这个数字要降低；映射到对这位群友回复的硬限制速率上——回应参数为 0 的群友，每 20 分钟最多回他 1 次。识别出危险信号（有人觉得你烦 / 让你安静 / 其他侵略性表述）也要降。忽视也要降（群友在说一个话题、你给了回应，但他完全不参考你的发言，你的内容对下一个沟通构不成影响）。但他在问你、哪怕就是敷衍话术（嗯嗯好好），或者他下一句明显参考了你说过的内容（尤其是带上了你的结论），这种就不降——需要分清"不想跟你聊一直在转移话题"与"相同话题继续"。先简单写一些提示词加进前文并完成回应参数适配，可以让群 bot 自己调；对群里的群友个体进行，加到记忆里，要能看到一个群友的回应参数。自愈机制始终开着，软件自动加分、不带 LLM，每隔一段时间给所有不足 100 的加分。
+
+**语义拆解：**
+
+| 面 | 落点 |
+|:--|:--|
+| 分数 | 每人 0~100，初始 100；按**群友个人**记（每会话一份） |
+| 映射 | 线性：`cooldown = (100 − score)/100 × maxCooldownMs`（默认 1200000ms = 20 分钟） |
+| 判定 | 交模型（工具 `adjust_rapport` + 系统提示教程）——不写本地内容规则 |
+| 闸门 | 出站口（系统硬限速）——模型克制不住"回太勤"，必须系统兜底 |
+| 自愈 | 纯本地定时器加分（不带 LLM） |
+| 可见性 | 记忆页 + `GET /api/rapport/<chat>` + `_rapport.json` |
+
+**二、设计要点**
+
+| 面 | 设计 |
+|:--|:--|
+| 载体 | `data/memory/<chat>/_rapport.json`——`{ chatKey, members: { <QQ>: { score, name, updatedAt, lastDeltaAt, lastReason, log[] } }, updatedAt }`；**只存 `score<100` 的条目，回满即删**（默认态不占盘） |
+| 状态机 | 内存缓存 `Map(chatKey → Map(QQ → entry))`；变更即整份落盘（原子写：`tmp` + `rename`） |
+| 闸门顺序 | bot 指定限频（§七）→ **回应参数（本节）** → 发言硬限（§八）→ 发言配额（§四）→ 分钟 / 小时技术限频。被本节拦下的发送抛错在记账之前，不消耗后面任何额度 |
+| 判定"回谁" | 显式点名（`atUserId` / 拍一拍目标）优先；否则本轮运行目标（触发批最后一条的发送者）；**不限名单**（所有人都有回应参数，与 botGuard 的名单制不同） |
+| 记账粒度 | 一次回复 = 一轮运行（`setRunRapportTarget` / `clearRunRapportTarget` 划界）；本轮第一笔发送放行后不再重复判定；记账在 `#markSent`（发送成功之后） |
+| 提示面 | ①系统提示【回应参数：看人下菜碟】教程段（lean + full 都带，约 700 字符）；②每轮用户消息末尾【回应参数】段（与配额同段，只列本轮相关且 <100 的群友：分数 + 系统硬限 + 上次理由） |
+| 自愈 | `startHealLoop()` 在宿主启动时起一次（`app.js` 启动流程，紧跟 `startBrowseLoop`）；每 `healIntervalMs`（默认 300000ms）`healAll()`：扫 `memory/` 下全部 `group_*/private_*` 目录（冷群也回升），给不足 100 的 +`healPerTick`（默认 2），回满删条目；**只打一行 `logger.info`，不调 LLM** |
+| 回退 | `engage.rapport.enabled=false` → 闸门与自愈都关（分数保留） |
+| 提示段纪律 | 工具回执明写「不要向群里说"我调了你的回应参数"」——与 bot 的群友身份一致 |
+
+**三、降 / 不降判据（教程原文骨架，落 `prompt.js`）**
+
+| 该降 | 不降 |
+|:--|:--|
+| 你回了话，他完全不接、继续自说自话 | 他下一句明显参考了你说过的话（尤其带上了你结论里的词） |
+| 你的话对他的下一句没有任何影响 | 他直接问你、点名你 |
+| 他说"不用你说话""安静点""太吵了"、明显不耐烦或阴阳你 | 他回你"嗯嗯""好""草"这类敷衍——**敷衍也是在听** |
+
+**分清两件事：** 同一话题继续往下讲、只是没接你那句 → 小降或不降；**一句一个话题地跳开、每次都绕开你 → 那是转移话题，降**。
+
+**四、实现（补丁 28 点 + 1 个新模块）**
+
+| 文件 | 改动 |
+|:--|:--|
+| `src/rapport.js`（新） | 存储（`_rapport.json` + 内存缓存 + 原子写）/ `cooldownForScore` / `getRapport` / `adjustRapport` / `setRapport` / `listRapport` / `formatRapportHint` / `healAll` / `startHealLoop` / `stopHealLoop` |
+| `src/config.js` | `engage.rapport` 默认段（enabled / maxCooldownMs / healPerTick / healIntervalMs） |
+| `src/sender.js` | import + 两张表（`rapportReplyTimes` / `rapportRuns`）+ `#checkRapport` 第二道闸门 + `setRunRapportTarget` / `clearRunRapportTarget` / `rapportWindow` / `#markRapportReply` + `#markSent` 记账 |
+| `src/orchestrator.js` | import + 每轮设置"在回谁"（含 finally 清理）+ 每轮【回应参数】提示段 |
+| `src/tools.js` | import + 新工具 `adjust_rapport`（userId / delta / reason；回执 before / after / cooldownMinutes） |
+| `src/prompt.js` | `rapportRules()` 教程段 + lean 与 full 两处挂载 |
+| `src/routes.js` | import + 记忆详情回执带 `rapport` + 新路由 `GET /api/rapport/<chat>` |
+| `src/app.js` | import + 启动流程起自愈定时器 |
+| `ui/app/05-memory-settings.js` | 群友印象卡徽标（「回应 68」）+ 群成员表「回应」列（<80 标红）+ 详情页取 `mem.rapport` + 成员表取 `/api/rapport/…` |
+| `tools/patch-qqagent-rapport.mjs`（新） | 28 补丁点 · 链尾 · 幂等可重放 |
+| `tools/verify-qqagent-rapport.mjs`（新） | 40 项自测 |
+
+**五、验证**
+
+| 面 | 结果 |
+|:--|:--|
+| 语法 | `node --check` 八文件 0 错（rapport / sender / orchestrator / tools / prompt / routes / app / 05-memory-settings） |
+| 自测 | `verify-qqagent-rapport.mjs` **41/41**——含映射（0/50/90 分）、闸门（放行 / 同轮不重复 / 下一轮被拒且没发出去 / 显式 @ 与拍一拍走同一闸 / 冷却过期重放 / **私聊不被拦**）、记账（失败不占冷却）、自愈（+2 / 回满删条目 / 文件消失）、持久化、提示段（低分才出现 / 全满分不占 token）、clamp、工具面（注册 / 60→45 / 非法 userId 报错退出）、教程段（lean + full 都带 / 三判据 / 点名工具）、回退、补丁标记 |
+| 回归 | botguard 17/17 · talkstyle 22/22 · hardlimit 11/11 · quiet 24/24 · browse 49/49 · session 20/20 · memory 43/43 · **engage 27/27**（本轮修好长期假红：自测配置只重写了 `engage` 三键，硬限默认开启后把"配额拒绝"搅成"硬限拒绝"——改为只覆盖 quota、显式关掉 hardLimit / botGuard / rapport；两处标记断言改指产物特征，防下游补丁改写标记后永久假红）· import-integrity ALL PASS（61 文件 / 329 符号） |
+| 补丁重放 | 二次执行全跳过（28/28 skipped · 幂等实锤） |
+| 生效 | **需重启业务面**（`src/*` 改动；`startHealLoop` 在启动流程里挂） |
+
+**六、边界（不做）**
+
+- 不做内容判定（"这句算不算敷衍"不写本地规则）——判定权归模型，系统只做限速与自愈
+- 不做永久黑名单——自愈保证一定回升（分数只影响回复间隔，不切断关系）
+- 不改安全边界 / 发言配额 / 硬限 / bot 指定限频：本节是并列的第四道闸，串联在其间
+- 不自动改写历史分数：存量群友一律从 100 起，没有回填
+
+**七、遗留**
+
+| # | 项 | 说明 |
+|:--:|:--|:--|
+| 1 | **重启业务面** | `src/*` 改动需要重启 `QQ Agent.exe` 才生效（`startHealLoop` 挂在启动流程；新工具 `adjust_rapport` 也随重启进工具池）。重启后核验：①`/api/rapport/group_<群号>` 可达 ②工具面出现 `adjust_rapport` ③日志出现 `[rapport]` 自愈行（5 分钟后） |
+| 2 | 真链路验收 | 在真实群让 bot 对某个无视它的人调一次 `adjust_rapport`，确认 `_rapport.json` 落盘 + 记忆页徽标变化 + 下一轮发送被限速（拦在出站口，不是发出去才后悔） |

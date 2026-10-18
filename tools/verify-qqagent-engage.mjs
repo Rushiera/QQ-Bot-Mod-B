@@ -27,11 +27,19 @@ fs.rmSync(DATA, { recursive: true, force: true });
 fs.mkdirSync(DATA, { recursive: true });
 if (fs.existsSync(SRC_CFG)) fs.copyFileSync(SRC_CFG, path.join(DATA, 'config.json'));
 
-// 自测用配置：把发送间隔压到最小（不然 5 条要等 15 秒），配额按生产值 120s/5 条
+// 自测用配置：把发送间隔压到最小（不然 5 条要等 15 秒），配额按生产值 120s/5 条。
+// 硬限 / bot 指定 / 回应参数一律关掉——它们是并列的其他闸门，混在一起会把
+// "配额拒绝"和"硬限拒绝"搅成同一个错误（判例：hardLimit 默认开启后本自测长期假红）。
 const CFG_PATH = path.join(DATA, 'config.json');
 const cfg = JSON.parse(fs.readFileSync(CFG_PATH, 'utf8'));
 cfg.send = { ...cfg.send, minGapMs: 1, maxGapMs: 2, byLengthMs: 0, dedupeWindowMs: 0, hardSplitAt: 0 };
-cfg.engage = { quota: { enabled: true, windowMs: 120000, maxPerWindow: 5 }, topicWords: { enabled: true } };
+cfg.engage = {
+  quota: { enabled: true, windowMs: 120000, maxPerWindow: 5 },
+  topicWords: { enabled: true },
+  hardLimit: { enabled: false },
+  botGuard: { enabled: false, members: [] },
+  rapport: { enabled: false }
+};
 cfg.store = { ...cfg.store, contextTier: 4 };
 fs.writeFileSync(CFG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
 
@@ -101,11 +109,11 @@ function check(name, ok, detail) {
 
   // 关闭配额 → 回到旧行为
   const cfgLive = getConfig();
-  cfgLive.engage = { quota: { enabled: false }, topicWords: { enabled: true } };
+  cfgLive.engage = { ...(cfgLive.engage || {}), quota: { enabled: false } };
   let okAfterOff = 0;
   try { await sender.sendTextBatch(key, ['关配额后第 6 条']); okAfterOff = 1; } catch { /* 计数 */ }
   check('配额关闭时不拦（可回退）', okAfterOff === 1, '发出 ' + okAfterOff + ' 条');
-  cfgLive.engage = { quota: { enabled: true, windowMs: 120000, maxPerWindow: 5 }, topicWords: { enabled: true } };
+  cfgLive.engage = { ...(cfgLive.engage || {}), quota: { enabled: true, windowMs: 120000, maxPerWindow: 5 } };
 }
 
 // ── 5~6. 话题词全链 ──────────────────────────────────────────────────────────
@@ -192,18 +200,22 @@ function check(name, ok, detail) {
 
 // ── 8. 补丁落盘检查 ──────────────────────────────────────────────────────────
 {
+  // 这两处标记已被下游补丁（memory）接管改写——断言改指产物特征，不追标记文本
+  // （判例：标记断言与下游补丁抢同一行 → 断言永久假红）
   const marks = [
     ['config.js', '[qqagent-engage-patch:config-engage]'],
     ['sender.js', '[qqagent-engage-patch:sender-quota]'],
     ['sender.js', '[qqagent-engage-patch:sender-quota-state]'],
     ['orchestrator.js', '[qqagent-engage-patch:orchestrator-quota-def]'],
-    ['orchestrator.js', '[qqagent-engage-patch:orchestrator-rollover-write]'],
-    ['prompt.js', '[qqagent-engage-patch:prompt-topic-words]'],
     ['chatter.js', '[qqagent-engage-patch:chatter]'],
     ['orchestrator.js', '[qqagent-engage-patch:orchestrator-chatter-def]']
   ];
   const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(APP, 'src', rel), 'utf8').includes(m));
   check('补丁标记齐全（6 处）', missing.length === 0, missing.map((x) => x.join(':')).join(', ') || '全部命中');
+  const orch = fs.readFileSync(path.join(APP, 'src', 'orchestrator.js'), 'utf8');
+  const prompt = fs.readFileSync(path.join(APP, 'src', 'prompt.js'), 'utf8');
+  check('话题词落进群记（产物特征：setGroupTopics）', orch.includes('setGroupTopics(chatKey, topicWords)'));
+  check('【记忆】段接入群记（产物特征：formatGroupForPrompt）', prompt.includes('formatGroupForPrompt(ctx.chatKey)'));
   check('话题词模块已落盘', fs.existsSync(path.join(APP, 'src', 'topic-words.js')));
 }
 

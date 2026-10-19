@@ -2651,3 +2651,47 @@ R喵喵：交接摘要已注入，等待确认
 2. **示例提示词是固定角色**：`role/media-rules.md` 的 JSON 以 Professor Niyaniya 为样例；换角色时业务面 LLM 需要自己替换 caption。若后续发现模型照抄角色名，可再补「只把它当骨架」的强调。
 3. **MOSS 结构化 JSON 翻译**：当前走整份 JSON 交 LLM 翻译 + JSON.parse 校验；模型若返回非 JSON 会明确报错（不静默塞中文）。后续可加逐字段翻译兜底。
 4. **TTS 长文**：未做自动分段；工具描述与教材已写「一次一两句话」，超长文本仍会一次合成（耗时可能很久）。
+
+## 六十八、读空气两件：群聊语域 + 回应参数客观结算（v0.80 · 2026-10-19）
+
+> 来源：Rushiera 2026-10-19——「开工qqbotB，你看一下工仔养生水疗中心群里的存档沟通记录，我感觉群友还是觉得群bot有点不读空气了有好办法吗」→ 拍板：**项 1（一轮一条）不改 · 项 2（群聊轮收工具面）不改 · 项 5 / 项 6 不做**，只落 **项 3（群聊语域）** + **项 4（客观结算）**。
+> 设计：`design-qqbotb-engage.md` §十三（客观结算追加）· §十四（群聊语域）。
+
+### A · 存档取证（群 689942975 · 10-19 · id 2755-2911）
+
+| # | 现象 | 证据 |
+|:--:|:--|:--|
+| 1 | 一轮拆多条发 | `2781→2784`（4 条，其中 2783 / 2784 是同一条更正发了两遍）· `2811→2815`（5 条）· `2825→2831`（7 条）· `2887→2890`（4 条） |
+| 2 | 内部机制外泄 | `2811`「生图通道没过——它认「本人近期在本群 @ 我」…被挡回来了」· `2829`「领航员没开着，投递被挡回来了」· `2887-2890` 整段讲闸门 / 计数器 / 打分 |
+| 3 | 点评腔插话 | `2854` / `2856` 别人聊美术，它插技术判断 |
+| 4 | 群友原话 | 中秋「现在这个太人机了」· 莎「你看起来好像是ai再跟你聊」「你发一句他回一两句」「每次都是用户先发消息」· 摸鱼怪「@Shieraru 不许接我的话茬」· 莎「你什么时候才能学会像人一样说话啊」「我感觉降级应对几乎没生效」 |
+
+**回应参数空转实锤**（Rushiera「几乎没生效」的取证）：`data/memory/` 全目录**无任何 `_rapport.json`**；`telemetry-totals.json` 累计 `adjust_rapport` **4 次** vs `send_message` **2440 次**；10-19 日志 `[rapport] 自愈：1 位群友回升 +2（涉及 1 个会话）` 从 18:47 滚到 19:22 —— 全程只有 1 人 1 群掉过分、35 分钟自愈回 100。根因：**打分权在模型手里、闸门在宿主手里**——模型在「我想说」那一刻没有反向信号，每次都觉得自己该说（它自己在 `2889` 也是这么说的）。
+
+### B · 落地内容
+
+| 面 | 落点 | 说明 |
+|:--|:--|:--|
+| 项 3 群聊语域 | `src/prompt.js` —— `chatVoice()` 段 | 三条：后台的事不进群（闸门 / 配额 / 限频 / 投递 / 领航员状态 / 工具回执 / 记忆整理；事情没成就说「这次没成」）· 不点评 / 不做技术判断 / 不总结 / 不给建议（除非有人问）· 一条消息一次说完（不发出去又补、又更正、又打补丁）。**lean + full 都带** |
+| 项 3 补丁 | `tools/patch-qqagent-chatvoice.mjs`（新 · 3 点 · 链尾 · 幂等） | 依赖 `patch-qqagent-talkstyle.mjs`（lean 段由它建立）+ `patch-qqagent-memory.mjs`（锚点落在 lean 里的 `memoryRules()` 上） |
+| 项 4 客观结算 | `src/rapport.js` —— `noteRapportOutbound` / `settleRapportWatch` / `pointsAtMe` / `clearRapportWatch` | 宿主侧客观信号：**我发了话，下一批消息里有没有人 @ 我 / 引用我 / 拍我** —— 有 → `+hitDelta`（6）；没有 → `-missDelta`（12）。判定只看客观事实、不看内容；结算完即清，同一批只判一次 |
+| 项 4 编排 | `src/orchestrator.js` | 每轮**开轮时结算上一轮**（`settleRapportWatch`）+ **轮末记账**（`noteRapportOutbound`）；被点名的那一轮不记（那是人家要的回复）· 收工轮 / 整理轮不记（不发言） |
+| 项 4 配置 | `src/config.js` —— `engage.rapport.watch` | `enabled: true` · `missDelta: 12` · `hitDelta: 6` · `exemptUsers: ['569145850']`（主人豁免——他 @ 是点名，不回不代表不想聊，与「VIP 不受配额与硬限约束」同口径） |
+| 项 4 补丁 | `tools/patch-qqagent-rapport.mjs`（补 4 点 → 32 点 · 幂等） | `module`（rapport.js 重写，含 watch 模块）· `config-watch` · `orchestrator-import-watch` · `orchestrator-watch` · `orchestrator-watch-note` |
+| 自测 | `tools/verify-qqagent-chatvoice.mjs`（新）· `tools/verify-qqagent-rapport.mjs`（扩） | chatvoice **19/19**；rapport **41 → 52/52**（新增 18a-18h：降分 / 加分 / 引用 / 拍我 / 主人豁免 / 只结算一次 / 可回退 / 降分后出站真被拦 / 标记齐备） |
+
+### C · 实测
+
+- `node tools/patch-qqagent-chatvoice.mjs` → applied 3 / skipped 0；`node --check prompt.js` 0 错。
+- `node tools/patch-qqagent-rapport.mjs` → applied 5 / skipped 27；`node --check` rapport.js / orchestrator.js / config.js 三文件 0 错。
+- `node tools/verify-qqagent-chatvoice.mjs`：**19/19**。
+- `node tools/verify-qqagent-rapport.mjs`：**52/52**（含 18g —— 客观结算降下来的分在出站口真的被拦，错误含「回应参数」）。
+- 回归：`verify-import-integrity` ALL PASS（63 文件 / **349 符号** = 原 346 + 新 3 导出）· talkstyle 22/22（lean 体积 2048 字符，1~3KB 断言仍过）· memory 43/43 · session 20/20 · engage 27/27 · quiet 24/24 · browse 49/49 · readcompact 25/25。
+- 回读：`prompt.js:133` chatVoice 定义 / `:332` lean 接入 / `:358` full 接入；`rapport.js:344` 正则 `/拍了拍\s*我/` 形态正确；`orchestrator.js:50` 导入 · `:738-760` 结算块 · `:808-813` 记账块。
+
+### D · 遗留
+
+1. **业务面需重启才生效**——`Start-Process` 被引擎拦（`PS_START_FORBIDDEN`），本会话无通道起进程；待 Rushiera 双击 `启动QQBotB.vbs`（或 `启动QQBotB.bat`）后生效。
+2. **真链路验收待触发**：重启后在群里发一条话（非 @ 触发的那一轮），等下一批消息到来，看日志 `[rapport] 客观结算：没人接话 → -12（…）` 行 + `data/memory/<chat>/_rapport.json` 落盘；再在群里 @ 它一次，看 `有人接话 → +6`。
+3. **lean 提示词体积**：chatVoice 让 lean 从约 1769 → **2048 字符**（talkstyle 自测的 1~3KB 断言仍过）。后续再加段需重新审视这条断言。
+4. **未采纳项**（Rushiera 2026-10-19 拍板不改，留档防重新引入）：①一轮一条（合并 / 拒发第 2 条起）②群聊轮收工具面（非点名轮只留 send / 记忆 / 表情）⑤口语正反例文件 ⑥单条长度软闸。

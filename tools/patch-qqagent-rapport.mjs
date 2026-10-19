@@ -209,7 +209,19 @@ export function rapportRule() {
     maxCooldownMs: Math.max(60000, Number(r.maxCooldownMs) || 1200000),
     // 自愈：每隔 healIntervalMs 给所有不足 100 的群友 +healPerTick 分
     healPerTick: Math.max(1, Number(r.healPerTick) || 2),
-    healIntervalMs: Math.max(60000, Number(r.healIntervalMs) || 300000)
+    healIntervalMs: Math.max(60000, Number(r.healIntervalMs) || 300000),
+    // 客观结算（[qqagent-rapport-patch:watch-rule]）—— 宿主侧看"我发了话有没有人接"。
+    //   missDelta：没人接 → 自动降这么多分（模型手调的补充）；hitDelta：有人接 → 加这么多。
+    //   exemptUsers：不做客观结算的 QQ（默认主人 569145850——他 @ 你是点名，他不回
+    //   不代表不想聊，可能是忙 / 在测试；与「VIP 通道不受配额与硬限约束」同口径）。
+    watch: {
+      enabled: r.watch?.enabled !== false,
+      missDelta: Math.max(0, Number(r.watch?.missDelta) || 12),
+      hitDelta: Math.max(0, Number(r.watch?.hitDelta) || 6),
+      exemptUsers: Array.isArray(r.watch?.exemptUsers)
+        ? r.watch.exemptUsers.map((v) => String(v ?? '').trim()).filter(Boolean)
+        : ['569145850']
+    }
   };
 }
 
@@ -375,6 +387,64 @@ export function stopHealLoop() {
 }
 
 /** 清内存缓存（自测用；生产不需要）。 */
+// ── 客观结算（[qqagent-rapport-patch:watch] · 2026-10-19）────────────────────
+// 为什么要有它：分数由模型自己调（adjust_rapport），但实测 4 次调用 / 2440 次发言——
+// 模型在"我想说"那一刻没有反向信号，每次都觉得自己该说，分数永远降不下去，
+// 闸门就成了装饰。这里补的是**宿主侧的客观信号**：我发了话，下一批消息里有没有人
+// @ 我 / 引用我 / 拍我 —— 有就是话落地了，没有就是没人要听。
+// 判定只看客观事实（不看内容），幅度小、可自愈，是模型手调的补充而不是替代。
+const watch = new Map();   // chatKey -> { userId, name, sent, at }
+
+/** 记录"我刚回了谁"（一轮结束、确有发言时调；被点名的那一轮不记）。 */
+export function noteRapportOutbound(chatKey, userId, { name = '', sent = 0 } = {}) {
+  const id = String(userId ?? '').trim();
+  if (!id) return null;
+  const rule = rapportRule();
+  if (!rule.enabled || !rule.watch.enabled) return null;
+  if (rule.watch.exemptUsers.includes(id)) return null;
+  const rec = { userId: id, name: String(name || ''), sent: Number(sent) || 0, at: Date.now() };
+  watch.set(chatKey, rec);
+  return rec;
+}
+
+/**
+ * 结算上一次发言：这一批消息里有没有人理我？
+ * 有（@ / 引用 / 拍我）→ +hitDelta；没有 → -missDelta。结算完即清，同一批只判一次。
+ * @returns {{settled:boolean, hit:boolean, userId:string, delta:number, score:number|null}|null}
+ */
+export function settleRapportWatch(chatKey, entries, ctx = {}) {
+  const rec = watch.get(chatKey);
+  if (!rec) return null;
+  watch.delete(chatKey);
+  const rule = rapportRule();
+  if (!rule.enabled || !rule.watch.enabled) return null;
+  const hit = (entries || []).some((m) => pointsAtMe(m, ctx));
+  const delta = hit ? rule.watch.hitDelta : -rule.watch.missDelta;
+  const why = (hit ? '我发了话，下一批有人接（@/引用/拍）' : '我发了话，下一批没人接')
+    + (rec.sent > 1 ? '（我发了 ' + rec.sent + ' 条）' : '');
+  const r = delta ? adjustRapport(chatKey, rec.userId, delta, { name: rec.name, reason: why }) : null;
+  return { settled: true, hit, userId: rec.userId, delta: r ? r.delta : 0, score: r ? r.after : null };
+}
+
+/** 这批消息里有没有人明确指向我（@ / 引用 / 拍一拍）。 */
+function pointsAtMe(m, { selfId = '', selfNickname = '', botName = '' } = {}) {
+  if (!m || m.self) return false;
+  if (m.atMe === true) return true;
+  if (m.isPoke && /拍了拍\\s*我/.test(String(m.text ?? ''))) return true;
+  const r = m.reply;
+  if (r && selfId && String(r.sender ?? '') === String(selfId)) return true;
+  const t = String(m.text ?? '');
+  if (selfId && t.includes('(QQ:' + selfId + ')')) return true;
+  if (selfNickname && t.includes('[引用 ' + selfNickname)) return true;
+  if (botName && t.includes('[引用 ' + botName)) return true;
+  return false;
+}
+
+/** 清客观结算内存（自测用）。 */
+export function clearRapportWatch() {
+  watch.clear();
+}
+
 export function clearRapportCache() {
   cache.clear();
 }
@@ -860,6 +930,78 @@ patch('ui-members-score-cell', UIAPP, '05-memory-settings.js',
             <td style="text-align:right\${rpScore < 80 ? ';color:#c0392b' : ''}" title="\${esc(rpTitle)}">\${rpScore}</td>`,
 1,
 `\${rpScore}</td>`);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 补丁 29-32：客观结算（2026-10-19 · Rushiera 点名"降级应对几乎没生效"）
+//   为什么单列：分数由模型自己调（adjust_rapport），但实测累计 4 次调用 / 2440 次发言——
+//   模型在"我想说"那一刻没有反向信号，每次都觉得自己该说，分数永远降不下去，
+//   闸门形同装饰。这里补的是**宿主侧客观信号**：我发了话，下一批有没有人接。
+// ─────────────────────────────────────────────────────────────────────────────
+patch('config-watch', SRC, 'config.js',
+`      healIntervalMs: 300000`,
+`      healIntervalMs: 300000,
+      // 客观结算（[qqagent-rapport-patch:config-watch] · 2026-10-19）——
+      // 宿主侧看"我发了话，下一批有没有人 @ / 引用 / 拍我"：没人接就自动降 missDelta 分，
+      // 有人接就加 hitDelta 分。模型手调（adjust_rapport）与自愈照常。
+      //   exemptUsers：不做客观结算的 QQ（默认主人 569145850——他 @ 是点名，
+      //   不回不代表不想聊，可能是忙 / 在测试；与「VIP 不受配额与硬限约束」同口径）。
+      //   enabled=false 只关客观结算。
+      watch: {
+        enabled: true,
+        missDelta: 12,
+        hitDelta: 6,
+        exemptUsers: ['569145850']
+      }`,
+1,
+`[qqagent-rapport-patch:config-watch]`);
+
+patch('orchestrator-import-watch', SRC, 'orchestrator.js',
+`import { formatRapportHint } from './rapport.js';`,
+`// 客观结算（我发了话有没有人接）——[qqagent-rapport-patch:orchestrator-import-watch]
+import { formatRapportHint, noteRapportOutbound, settleRapportWatch } from './rapport.js';`,
+1,
+`[qqagent-rapport-patch:orchestrator-import-watch]`);
+
+patch('orchestrator-watch', SRC, 'orchestrator.js',
+`    const botRunTarget = botLast && botMembers.includes(String(botLast.senderId)) ? String(botLast.senderId) : null;`,
+`    const botRunTarget = botLast && botMembers.includes(String(botLast.senderId)) ? String(botLast.senderId) : null;
+    // ── 回应参数 · 客观结算（[qqagent-rapport-patch:watch-orchestrator] · 2026-10-19）──
+    // ① 结算上一次发言：这批消息里有没有人 @ 我 / 引用我 / 拍我 —— 有就是话落地了，
+    //    没有就自动给上次的回复对象降分（宿主侧客观信号，不看内容、幅度小、可自愈）。
+    // ② 记下本轮"回了谁"，留给下一批结算；被点名的那一轮不记（那是人家要的回复）。
+    const rapportSelfId = this.onebot && this.onebot.selfId ? String(this.onebot.selfId) : '';
+    const rapportPersona = getConfig().persona || {};
+    const rapportWatchCtx = {
+      selfId: rapportSelfId,
+      selfNickname: String(rapportPersona.selfNickname || rapportPersona.botName || ''),
+      botName: String(rapportPersona.botName || '')
+    };
+    const atMeThisRound = (triggerEntries || []).some((m) => m
+      && (m.atMe === true || (m.isPoke && /拍了拍\\s*我/.test(String(m.text ?? '')))));
+    const rapportTargetName = botLast ? String(botLast.senderName || '') : '';
+    try {
+      const settled = settleRapportWatch(chatKey, triggerEntries, rapportWatchCtx);
+      if (settled && settled.settled && settled.delta) {
+        logger.info('rapport', '客观结算：' + (settled.hit ? '有人接话 → +' : '没人接话 → ')
+          + Math.abs(settled.delta) + '（' + (settled.userId || '') + ' · 现 ' + settled.score + '）');
+      }
+    } catch (e) {
+      logger.warn('rapport', '客观结算出错：' + (e && e.message ? e.message : e));
+    }`,
+1,
+`[qqagent-rapport-patch:watch-orchestrator]`);
+
+patch('orchestrator-watch-note', SRC, 'orchestrator.js',
+`      if (!lastError && isRollover) await this.#completeRollover(chatKey, session);`,
+`      if (!lastError && isRollover) await this.#completeRollover(chatKey, session);
+      // 客观结算 · 记账（[qqagent-rapport-patch:watch-note]）——
+      // 本轮真发了话才记；被点名的那一轮不记（那是人家要的回复）；收工轮 / 整理轮不记（不发言）。
+      if (!lastError && !isRollover && !quietOrganize && rapportTarget
+          && (session.sent || []).length > 0 && !atMeThisRound) {
+        noteRapportOutbound(chatKey, rapportTarget, { name: rapportTargetName, sent: (session.sent || []).length });
+      }`,
+1,
+`[qqagent-rapport-patch:watch-note]`);
 
 console.log(JSON.stringify({
   ok: true,

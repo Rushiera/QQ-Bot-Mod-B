@@ -14,6 +14,9 @@
 //  10 教程段进系统提示（lean + full 都带）· 工具 adjust_rapport 已注册
 //  11 enabled=false → 闸门关闭（可回退）
 //  12 补丁落盘：八个文件的改动标记齐全（幂等可重放）
+//  13 客观结算（2026-10-19）：我发了话，下一批没人 @ / 引用 / 拍我 → 自动降分（-12）；
+//     有人接 → 加分（+6）· 主人豁免（exemptUsers）· 同一批只结算一次 · watch.enabled=false
+//     可回退 · 降下来的分在出站口真的会被拦（不是只写进文件）
 //
 // 隔离：QQ_AGENT_DATA_DIR 指向独立副本（runtime/.rapport-selftest），
 //       不碰正在运行实例的数据目录，也不抢单实例锁。
@@ -320,6 +323,84 @@ async function trySend(text, options = {}) {
   // 两处渲染点没有独立标记（落在模板串里），按产物片段核验
   check('记忆页两处渲染点都在（印象卡 + 群成员表）',
     ui.includes('${rapportBadge(String(m.userId))}') && ui.includes('${rpScore}</td>'));
+}
+
+// ── 18. 客观结算（2026-10-19 · Rushiera 点名"降级应对几乎没生效"）────────────
+// 为什么单测：分数由模型自己调，但实测累计 4 次调用 / 2440 次发言 —— 模型在"我想说"
+// 那一刻没有反向信号，分数永远降不下去。这一段补的是宿主侧客观信号：
+// 我发了话，下一批有没有人 @ / 引用 / 拍我。
+{
+  const { noteRapportOutbound, settleRapportWatch, clearRapportWatch } = await import(mod('rapport.js'));
+  const T = '20003';
+  const VIP = '569145850';
+  const ctx = { selfId: '10000', selfNickname: 'R喵', botName: 'R喵' };
+
+  // 18a 没人接 → 降 missDelta
+  clearRapportWatch();
+  setRapport(KEY, T, 100);
+  noteRapportOutbound(KEY, T, { name: '甲', sent: 1 });
+  const miss = settleRapportWatch(KEY, [{ self: false, senderId: '20002', text: '在聊别的' }], ctx);
+  check('18a 没人接 → 自动降分（-12）', miss && miss.settled === true && miss.hit === false && miss.delta === -12,
+    miss ? JSON.stringify(miss) : 'null');
+  check('18a 降分后分数 = 88', getScore(KEY, T) === 88, String(getScore(KEY, T)));
+
+  // 18b 有人 @ 我 → 加分
+  clearRapportWatch();
+  noteRapportOutbound(KEY, T, { name: '甲', sent: 1 });
+  const hit = settleRapportWatch(KEY, [{ self: false, senderId: '20002', text: '@R喵 在吗', atMe: true }], ctx);
+  check('18b 有人 @ 我 → 加分（+6）', hit && hit.hit === true && hit.delta === 6, hit ? JSON.stringify(hit) : 'null');
+  check('18b 加分后分数 = 94', getScore(KEY, T) === 94, String(getScore(KEY, T)));
+
+  // 18c 引用我 / 拍我 也算接话
+  clearRapportWatch();
+  noteRapportOutbound(KEY, T, {});
+  const quoted = settleRapportWatch(KEY, [{ self: false, senderId: '20002', text: '[引用 R喵：[图片]] 哈哈' }], ctx);
+  check('18c 引用我 → 算接话', quoted && quoted.hit === true, JSON.stringify(quoted));
+  clearRapportWatch();
+  noteRapportOutbound(KEY, T, {});
+  const poked = settleRapportWatch(KEY, [{ self: false, senderId: '20002', text: '[拍一拍] 甲 拍了拍 我', isPoke: true }], ctx);
+  check('18c 拍我 → 算接话', poked && poked.hit === true, JSON.stringify(poked));
+
+  // 18d 主人豁免（watch.exemptUsers）：记不进去、也不结算
+  clearRapportWatch();
+  const vipRec = noteRapportOutbound(KEY, VIP, { name: '莎' });
+  const vipSettle = settleRapportWatch(KEY, [], ctx);
+  check('18d 主人豁免（不记 pending、不结算）', vipRec === null && vipSettle === null, String(vipRec));
+
+  // 18e 同一批只结算一次（不重复扣）
+  clearRapportWatch();
+  noteRapportOutbound(KEY, T, {});
+  const first = settleRapportWatch(KEY, [], ctx);
+  const again = settleRapportWatch(KEY, [], ctx);
+  check('18e 同一批只结算一次', !!first && again === null, String(again));
+
+  // 18f watch.enabled=false → 客观结算关（模型手调与自愈照常）
+  setRapportCfg({ watch: { enabled: false } });
+  clearRapportWatch();
+  const offRec = noteRapportOutbound(KEY, T, {});
+  const offSettle = settleRapportWatch(KEY, [], ctx);
+  check('18f watch.enabled=false → 不记不结算（可回退）', offRec === null && offSettle === null);
+  setRapportCfg({ watch: { enabled: true, missDelta: 12, hitDelta: 6, exemptUsers: [VIP] } });
+
+  // 18g 客观结算降下来的分，出站闸门真的会拦（不是只写进文件）
+  clearRapportWatch();
+  setRapport(KEY, T, 0);
+  sender.rapportReplyTimes.set(KEY + '::' + T, [Date.now()]);
+  sender.setRunRapportTarget(KEY, T);
+  const blocked = await trySend('客观结算降分后应当被限速');
+  sender.clearRunRapportTarget(KEY);
+  check('18g 客观结算降分 → 出站真的被拦', !blocked.ok, blocked.error || '（竟然放行了）');
+
+  // 18h 补丁标记（本轮新增四点）
+  const newMarks = [
+    ['rapport.js', '[qqagent-rapport-patch:watch]'],
+    ['config.js', '[qqagent-rapport-patch:config-watch]'],
+    ['orchestrator.js', '[qqagent-rapport-patch:orchestrator-import-watch]'],
+    ['orchestrator.js', '[qqagent-rapport-patch:watch-orchestrator]'],
+    ['orchestrator.js', '[qqagent-rapport-patch:watch-note]']
+  ];
+  const missMarks = newMarks.filter(([rel, m]) => !fs.readFileSync(path.join(APP, 'src', rel), 'utf8').includes(m));
+  check('18h 客观结算补丁标记齐全（五点）', missMarks.length === 0, missMarks.map((x) => x.join(':')).join(', ') || '全部命中');
 }
 
 // 收尾：清掉自测数据目录（不留在 runtime 里）

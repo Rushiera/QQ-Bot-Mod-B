@@ -13,6 +13,7 @@
 | 日志时间戳对齐 | 日志页协议端行的外层时间戳为**转发时刻**（同批历史日志挤同一秒）；原始时间在行内——可按原行时间戳对齐 | ⏳ 待定 |
 | 群 361820329 静默不回 | ✅ 已闭合（2026-10-14）——清会话恢复（20:51 实测恢复发言）+ 轮转阈值 300000→160000 + 端点降级守卫（补丁点 `degrade-guard`）；诊断见 §五十二 · 修复见 §五十五 | ✅ 已闭合 |
 | 领航员会话截图群内实测 | v0.66「截全」+ `nav_shot`——自测 51/51 · 业务面 10/10 · 单体真实出图已验（含 24691px 超长卡）；**群内真发群**（R喵 调 `nav_shot` 回群）待群内 @ 触发（§五十六） | ⏳ 待实测 |
+| 群内生成能力真实群触发 | v0.79 MOSS 生图 / IrodoriTTS 语音 / WD Tagger 反推——守门 8/8 + live 三项各 10/10（mock 出站）；**真实群 @ 触发**（业务面判断 → 工具 → 单体 → ComfyDock → 产物回群）待重启后实测（§六十七） | ⏳ 待实测 |
 
 ## 一、运行形态（design §三）
 
@@ -2604,3 +2605,49 @@ R喵喵：交接摘要已注入，等待确认
 |:--:|:--|:--|
 | 1 | 稳态观测 | 目标「同群稳态下【已读信息】≤ `readMaxChars`」已由真链路证明可达成；待一两天的自然运行观察压缩频率是否合适（现每轮结束检查一次，失败 10 分钟退避） |
 | 2 | B23（角色设定块）未动 | 角色设定仍 95,432 字符整段注入（占 36.3%），属另一块攻坚 |
+
+---
+
+## 六十七、群内生成能力：MOSS 生图 / IrodoriTTS 语音 / WD Tagger 反推提示词（v0.79 · 2026-10-19）
+
+> 来源：Rushiera 2026-10-19——「开工qqbot，增加一下群bot的指令：1.（画一张 / 使用生图功能）调用 comfydock 中的 moss，提示词需要能自动翻译，目前先给一个示例提示词……2. 生成语音 / 说话，调用 inodoritts，把用户给的中文自动翻译成日语版本再注入模型 3. 反推提示词，把图片递给 wd 打标。让 llm 找对应，你写好教材」。
+> 设计：`design-qqbotb-navigator.md` §二十。
+
+### A · 落地内容
+
+| 面 | 落点 | 说明 |
+|:--|:--|:--|
+| 单体服务 | `app/src/navigator/media.js`（新模块） | `mossDraw` / `ttsSpeak` / `wdTag` 三条链路——翻译 → 读 ComfyDock 当前配置 → 只覆盖任务参数 → 提交 → 后台轮询 → 产物发群；三个生成器各自单任务闸 |
+| 单体编排 | `app/src/navigator/index.js` | 引入 `createMediaService`；新增 `sayRecord`（OneBot `record` 段）；`mediaGate`（启用 / 回消息群 / VIP 请求者闸，**不要求领航员已开启**）；`mossDraw` / `ttsSpeak` / `wdTag` 包装 + 三个 API 路由；返回面暴露 `media` |
+| 配置 | `app/src/config.js` | `navigator.media`：`enabled` / `endpoint` / `requireVip` / `translate`（`model` 默认 `deepseek-v4.1-flash` · `timeoutMs` 30000 · `maxTokens` 3000 · `maxChars` 12000）/ `moss` / `tts` / `tagger` 各自 `pollMs` + `timeoutMs` |
+| 业务面工具 | `tools/navigator/nav-tools.js` | 工具组 11 → **14 件**：`moss_draw(prompt, size?, seed?)` · `tts_speak(text, caption?)` · `wd_tag(messageId?)`；描述里写清触发语与 `comfy_edit` 分界（无图从零画 = moss_draw；带图改图 = comfy_edit） |
+| 教材 | `tools/apply-qqagent-config.mjs` → `role/media-rules.md`（新）· `role/nav-rules.md`（补生成能力段）· `roleText` 内联速查 | 三能力对照表 + 通用口径 + MOSS 结构化示例（碧蓝档案 Professor Niyaniya 角色参考表：三视图 / 九宫格表情 / 全身姿势九连拍）+ IrodoriTTS 日语口径 + WD Tagger 结果口径；`roleTextChars` 4779 → **5130** |
+| 自测 | `tools/verify-media.mjs`（新） | 守门 8 项（接口面 / 启用开关 / 空入参 / VIP 闸 / 操作者通道）+ live 三项（MOSS / TTS / Tagger） |
+| 自测 | `tools/verify-qqagent-navtools.mjs` | 工具组 11 → 14 件；新增三件定义面 + 空入参执行面；**19/19** |
+
+### B · 关键口径
+
+- **自动翻译**：翻译走业务面同一 LLM 端点（`_unpack/data/config.json` 的 `api`），模型取 `navigator.media.translate.model`（默认快档 `deepseek-v4.1-flash`）——主模型纯文本请求推理链长、易吃光 `max_tokens`。MOSS 中文 → 英文；结构化 JSON 检测到中文时整体交翻译并要求保持 JSON 结构 / 键名 / bbox；IrodoriTTS 中文 → 日语（含假名视为已是日语）；`caption` 同样翻译。翻译失败不静默降级，回执明确「自动翻译失败」。
+- **ComfyDock 配置只覆盖任务参数**：先 `GET /api/moss|tts|tagger` 取当前快照，合并后只改 `prompt` / `text` / `inputPath`（MOSS 另把 `batch` 压到 1），再 `POST /api/*/config` —— 不改模型 / 路径 / 采样配置。判例：`MossConfig` 的 C# 默认值会把缺省字段重置（Steps 50 / Accel false），所以必须整份快照回传。
+- **产物出站**：MOSS `job.images[]` → `/api/moss/image?name=` 下载 → `sayImage`；TTS `job.file` → `/api/tts/audio?name=` 下载 → `sayRecord`；Tagger `job.items[0].generalText` / `characters` → `say`。全部走领航员 OneBot 直发，不经业务面发言闸。
+- **闸门**：`navigator.media.enabled` + ComfyDock 在线 + 群内触发时 VIP 本人近期在本群 @ 过（120 秒窗，与图像编辑同口径）+ 三个单任务闸。**不要求领航员已开启**——生图 / 语音 / 反推是独立能力。
+- **示例提示词**：`role/media-rules.md` 内嵌完整 JSON——左上 1/3 三视图、右上 1/3 九宫格表情、下面两排全身姿势九连拍；白底 + cel-shading；业务面 LLM 按骨架替换角色与英文 caption。
+
+### C · 实测
+
+- `node tools/verify-media.mjs`：**8/8**（守门）。
+- `node tools/verify-media.mjs --live-tagger --image D:\Mau\WorkSpace\ComfyDock\out\moss\1263317781.png`：**10/10**——WD EVA02-Large Tagger v3，6.6 秒，通用标签 42 个，结果发群（mock）。
+- `node tools/verify-media.mjs --live-tts`：**10/10**——中文「你好，我是测试语音。」→ 日语「こんにちは、テスト音声です。」→ IrodoriTTS 合成 → `record` 段发群（mock）。
+- `node tools/verify-media.mjs --live-moss --prompt-file CatTemp\media-moss-prompt.txt`：**10/10**——中文「画一只橘猫坐在窗台上，清晨柔光，动漫风格」→ 英文「A orange tabby cat sitting on a windowsill, soft morning light, anime style」→ MOSS 出图 → `image` 段发群（mock）。
+- `node tools/verify-qqagent-navtools.mjs`：**19/19**（工具组 14 件注册 + 三件定义面 / 执行面）。
+- 真实应用 API 走通一次：`POST http://127.0.0.1:3280/api/nav/moss`（chat=selftest，中文「画一只橘猫坐在窗台上，清晨柔光，动漫风格」）→ 14:00:34 提交 → 14:05:11 出图（约 4.5 分钟；当时 GPU 97% / 7.3GB 被其它进程占用，属环境竞争，非链路问题）→ `app/data/media-out/moss-1792389634222-1.png`（图像识别：橘色虎斑猫坐在窗台、绿眼、窗外城市，画面正常）；发群失败仅因 selftest 不是真实群（retcode=1200），符合预期。
+- ComfyDock 当前 MOSS 配置已恢复为 `role/media-rules.md` 的示例提示词（1,753 字符），供群内直接说「用生图功能画角色参考表」使用。
+- 应用与业务面已重启（2026-10-19 14:27）：`/api/nav/status` 回执含 `mediaBusy`（moss/tts/tagger 均 false）；业务面日志 `工具集已刷新：59 个工具`（原 56 + 3）。
+- ComfyDock 当前环境：`moss.env.canGenerate=true` · `tts.env.canGenerate=true` · `tagger.env.canGenerate=true`（2026-10-19 13:22 探测）。
+
+### D · 遗留
+
+1. **真实群触发待验**：live 自测走 mock OneBot（群号 `selftest`），尚未在真实群 @ 触发一次完整「群消息 → 业务面判断 → 工具 → 单体 → ComfyDock → 产物回群」链路；应用与业务面已重启（14:27），待 Rushiera 在群里各发一次「画一张… / 生成语音… / 反推提示词」验收。
+2. **示例提示词是固定角色**：`role/media-rules.md` 的 JSON 以 Professor Niyaniya 为样例；换角色时业务面 LLM 需要自己替换 caption。若后续发现模型照抄角色名，可再补「只把它当骨架」的强调。
+3. **MOSS 结构化 JSON 翻译**：当前走整份 JSON 交 LLM 翻译 + JSON.parse 校验；模型若返回非 JSON 会明确报错（不静默塞中文）。后续可加逐字段翻译兜底。
+4. **TTS 长文**：未做自动分段；工具描述与教材已写「一次一两句话」，超长文本仍会一次合成（耗时可能很久）。

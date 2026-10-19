@@ -76,3 +76,13 @@
 | `持久观测` | 领航员开启期间对全部运行中猫的常驻 SSE 订阅——任何一轮回复都截图发群；断线由 `ensureWatching` 每 60 秒补订（2026-10-14） |
 | `轻通道` | 领航员**未开启**时的投递通道（2026-10-14）——本人（VIP）群里点名指令照投（投递 + 回复截图回群，**不带投送后分析**）；闸门 = `by:'qq'` + 120 秒 VIP 新鲜窗；回复观测为一次性轮询（`design-qqbotb-navigator.md` §十九） |
 | `现场拉取` | 会话分析的主路素材源（2026-10-14）——分析时一次性连猫的 SSE 取整幅视图（think / 工具卡 / 旁白 / 直播态），不依赖常驻订阅健康；失败回落常驻环 |
+
+## 七、群内生成能力（2026-10-19）
+
+| 术语 | 说明 |
+|:--|:--|
+| `MOSS-Image` | ComfyDock 的本地文生图生成器（OpenMOSS MOSS-Image）——支持普通英文提示词与 `summary + items + bbox` 的结构化多格排版提示词；模型住本机 ComfyUI，软件只带依赖索引与出图面板。群内工具 `moss_draw` |
+| `IrodoriTTS` | ComfyDock 的本地日语 TTS 生成器（Irodori-TTS · RF-DiT · 依田芳乃音色）——常驻 worker 只加载一次模型；群内工具 `tts_speak`，中文台词自动翻日语后合成 |
+| `WD Tagger` | ComfyDock 的本地图片反推打标生成器（WD EVA02-Large Tagger v3）——输出 Danbooru 风格通用标签 / 角色标签 / 分级；群内工具 `wd_tag` |
+| `提示词自动翻译` | 群内生成能力的翻译层（`navigator.media.translate`）——MOSS 中文提示词 → 英文；IrodoriTTS 中文台词 → 日语；结构化 JSON 提示词只翻中文字段、保持结构 / 键名 / bbox |
+| `反推提示词` | 用户口语：把一张图交给 WD Tagger 产出可复用的提示词标签；对应工具 `wd_tag(messageId?)` |

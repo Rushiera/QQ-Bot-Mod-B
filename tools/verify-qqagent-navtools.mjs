@@ -3,7 +3,7 @@
 // 用法：node verify-qqagent-navtools.mjs
 // 判据：
 //   1 补丁落盘：标记齐全 + nav-tools.js 在位
-//   2 工具注册：领航员工具组 11 件经 tools.js 真实入口（buildToolDefs）进 registry
+//   2 工具注册：领航员工具组 14 件经 tools.js 真实入口（buildToolDefs）进 registry
 //   3 comfy_edit 定义面：参数面（prompt 必填 / messageId 可选）+ 描述含前置两条
 //   4 comfy_edit 执行面：空提示词 / 本群没有带图消息 → 报错退出（不触网）
 //
@@ -45,7 +45,8 @@ function check(name, ok, detail = '') {
 
 const NAV_TOOL_IDS = [
   'nav_status', 'nav_open', 'nav_close', 'nav_send', 'nav_detail',
-  'nav_health', 'nav_analyze', 'nav_shot', 'nav_new', 'nav_reset', 'comfy_edit'
+  'nav_health', 'nav_analyze', 'nav_shot', 'nav_new', 'nav_reset', 'comfy_edit',
+  'moss_draw', 'tts_speak', 'wd_tag'
 ];
 
 // ── 0 补丁落盘 ──────────────────────────────────────────────────────────────
@@ -68,6 +69,31 @@ check('comfy_edit·参数面（prompt 必填 / messageId 可选）',
   def ? JSON.stringify(def.parameters.required) : '未注册');
 check('comfy_edit·描述含前置两条',
   !!def && def.description.includes('领航员已开启') && def.description.includes('ComfyDock 在线'));
+
+// ── 2a 生成能力三件定义面（v0.79）──────────────────────────────────────────
+const mossDef = getTool('moss_draw');
+check('moss_draw·参数面（prompt 必填 / size+seed 可选）',
+  !!mossDef && Array.isArray(mossDef.parameters?.required) && mossDef.parameters.required.includes('prompt')
+  && !!mossDef.parameters?.properties?.size && !!mossDef.parameters?.properties?.seed,
+  mossDef ? JSON.stringify(mossDef.parameters.required) : '未注册');
+check('moss_draw·描述含触发词与分界',
+  !!mossDef && mossDef.description.includes('画一张') && mossDef.description.includes('comfy_edit'));
+
+const ttsDef = getTool('tts_speak');
+check('tts_speak·参数面（text 必填 / caption 可选）',
+  !!ttsDef && Array.isArray(ttsDef.parameters?.required) && ttsDef.parameters.required.includes('text')
+  && !!ttsDef.parameters?.properties?.caption,
+  ttsDef ? JSON.stringify(ttsDef.parameters.required) : '未注册');
+check('tts_speak·描述含自动翻日语',
+  !!ttsDef && ttsDef.description.includes('自动翻译成日语'));
+
+const wdDef = getTool('wd_tag');
+check('wd_tag·参数面（messageId 可选）',
+  !!wdDef && Array.isArray(wdDef.parameters?.required) && wdDef.parameters.required.length === 0
+  && !!wdDef.parameters?.properties?.messageId,
+  wdDef ? JSON.stringify(wdDef.parameters.required) : '未注册');
+check('wd_tag·描述含反推提示词',
+  !!wdDef && wdDef.description.includes('反推提示词'));
 
 // ── 2b nav_reset 定义面：抢救模式参数（Rushiera 2026-10-14）──────────────────
 const resetDef = getTool('nav_reset');
@@ -94,6 +120,17 @@ check('comfy_edit·空提示词报错退出', noPrompt.isError === true && Strin
 const noImage = await def.execute(ctx, { prompt: '把这张图做成三视图' });
 check('comfy_edit·本群无带图消息即出声',
   noImage.isError === true && String(noImage.content).includes('带图的消息'), String(noImage.content));
+
+// ── 4 生成能力三件执行面（不触网）──────────────────────────────────────────
+const mossNoPrompt = await mossDef.execute(ctx, {});
+check('moss_draw·空提示词报错退出',
+  mossNoPrompt.isError === true && String(mossNoPrompt.content).includes('prompt'), String(mossNoPrompt.content));
+const ttsNoText = await ttsDef.execute(ctx, {});
+check('tts_speak·空台词报错退出',
+  ttsNoText.isError === true && String(ttsNoText.content).includes('text'), String(ttsNoText.content));
+const wdNoImage = await wdDef.execute(ctx, {});
+check('wd_tag·本群无带图消息即出声',
+  wdNoImage.isError === true && String(wdNoImage.content).includes('带图的消息'), String(wdNoImage.content));
 
 const passed = results.filter((r) => r.ok).length;
 console.log(`\n结果：${passed}/${results.length} 通过`);

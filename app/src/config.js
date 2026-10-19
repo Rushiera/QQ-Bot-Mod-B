@@ -94,6 +94,26 @@ const DEFAULTS = {
       timeoutMs: 15 * 60 * 1000,
       // 请求者闸——先收成只有 VIP 本人能用（Rushiera 2026-10-11）；白名单以后做
       requireVip: true
+    },
+    // 群内生成能力（design-qqbotb-navigator.md §二十）——MOSS 生图 / IrodoriTTS 语音 /
+    // WD Tagger 反推提示词。三者都走 ComfyDock 的本地生成器，产物由领航员直发回群。
+    media: {
+      enabled: true,
+      endpoint: 'http://127.0.0.1:8971',
+      // 请求者闸——先收成只有 VIP 本人能用（与图像编辑同口径）
+      requireVip: true,
+      // 提示词 / 台词自动翻译：中文 → 英文（MOSS）/ 日语（IrodoriTTS）。
+      // 模型必须选快档：主模型对纯文本请求会先产数千 token 推理（见 navigator.summary 注释）。
+      translate: {
+        enabled: true,
+        model: 'deepseek-v4.1-flash',
+        timeoutMs: 30000,
+        maxTokens: 3000,
+        maxChars: 12000
+      },
+      moss: { pollMs: 2500, timeoutMs: 10 * 60 * 1000 },
+      tts: { pollMs: 2500, timeoutMs: 10 * 60 * 1000 },
+      tagger: { pollMs: 1500, timeoutMs: 3 * 60 * 1000 }
     }
   }
 };

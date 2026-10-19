@@ -520,3 +520,51 @@ Mau 链接状态 --OK
 **并入与撤除：** 领航员开启时清空轻观测（回复由持久观测接管，防重发）；应用停止时清空。
 
 **落点：** `app/src/navigator/index.js`（`send` 闸门 + `armLightWatch` / `lightTick`）· 业务面 `nav_send` 传 `by:'qq'` · 教材「VIP 通道」段与「指令 / 闲聊」段同步（未开启时点名指令照投、没点名不投）。
+
+---
+
+## 二十、群内生成能力（MOSS 生图 / IrodoriTTS 语音 / WD Tagger 反推提示词 · 2026-10-19）
+
+> 来源：Rushiera 2026-10-19——「开工qqbot，增加一下群bot的指令：1.（画一张 / 使用生图功能）调用 comfydock 中的 moss，提示词需要能自动翻译，目前先给一个示例提示词……2. 生成语音 / 说话，调用 inodoritts，把用户给的中文自动翻译成日语版本再注入模型 3. 反推提示词，把图片递给 wd 打标。让 llm 找对应，你写好教材」。
+
+**语义：** 群里的自然语言请求直接落到 ComfyDock 的三个本地生成器，产物由领航员自己的出站直发回群——不要求领航员已开启（生图 / 语音 / 反推是独立能力），但只对 VIP 本人开放（与图像编辑同口径）。
+
+| 能力 | 用户触发语 | 业务面工具 | 单体 API | ComfyDock 落点 |
+|:--|:--|:--|:--|:--|
+| 生图 | 「画一张…」「帮我画…」「生成一张…」「用生图功能…」 | `moss_draw(prompt, size?, seed?)` | `POST /api/nav/moss` | `POST /api/moss/config` → `POST /api/moss/generate` → `/api/moss/live` 轮询 → `/api/moss/image` 取图 |
+| 语音 | 「生成语音…」「说一句…」「念一下…」 | `tts_speak(text, caption?)` | `POST /api/nav/tts` | `POST /api/tts/config` → `POST /api/tts/generate` → `/api/tts/live` 轮询 → `/api/tts/audio` 取音频 |
+| 反推提示词 | 「反推提示词」「打标」「看看这张图的 tag」 | `wd_tag(messageId?)` | `POST /api/nav/tagger` | `POST /api/tagger/config` → `POST /api/tagger/generate` → `/api/tagger/live` 轮询 → 结果 `items[].generalText` |
+
+**链路：**
+
+```
+群消息 @ 我
+  └→ 业务面 R喵 判断是哪一类生成请求（教材 role/media-rules.md + 工具描述）
+       └→ 工具带 chat / prompt / file / url 调自研单体
+            └→ app/src/navigator/media.js
+                 ├→ 自动翻译（中文 → 英文 / 日语；结构化 JSON 只翻中文字段）
+                 ├→ 读 ComfyDock 当前配置 → 只覆盖任务参数（prompt / text / inputPath）→ 提交
+                 └→ 后台轮询到收口 → sayImage / sayRecord / say 直发回群
+```
+
+**自动翻译（Rushiera 2026-10-19 定）：**
+- 翻译走业务面同一 LLM 端点（`_unpack/data/config.json` 的 `api`），模型取 `navigator.media.translate.model`（默认快档 `deepseek-v4.1-flash`）——主模型对纯文本请求推理链长、易吃光 `max_tokens`，不适合这种高频短调用。
+- MOSS：中文 → 英文提示词；结构化 JSON 提示词检测到中文时整体交翻译并要求保持 JSON 结构 / 键名 / bbox 不变。
+- IrodoriTTS：中文 → 日语台词（含假名视为已是日语，原样传）；`caption` 风格描述同样翻译。
+- 翻译失败**不静默降级**——回执明确说「自动翻译失败」，不把中文硬塞给模型。
+
+**前置与闸门：**
+| 项 | 判据 | 不受理回执 |
+|:--|:--|:--|
+| 生成能力已启用 | `navigator.media.enabled !== false` | 「生图 / 语音生成 / 反推提示词未启用」 |
+| ComfyDock 在线 | `GET /api/summary` 探通 | 「ComfyDock 离线（<原因>）」 |
+| 请求者（群内触发） | 最近一次 VIP（`569145850`）在**本群** @ 我（120 秒窗口） | 「目前只对 569145850 开放——需要本人近期在**本群** @ 我」 |
+| 单任务闸 | `mossBusy` / `ttsBusy` / `taggerBusy` | 「已有一张图在跑」「上一句还在跑」「上一张还在打标」 |
+
+**产物与出站：** MOSS 出图逐张 `sayImage`；IrodoriTTS 音频 `sayRecord`（OneBot `record` 段，`file:///` 本地路径）；WD Tagger 标签文本 `say`。全部走领航员自己的 OneBot 连接，不经业务面发言闸。
+
+**配置（`app/data/config.json` 的 `navigator.media`）：** `enabled` · `endpoint`（默认 `http://127.0.0.1:8971`）· `requireVip` · `translate`（`model` / `timeoutMs` / `maxTokens` / `maxChars`）· `moss` / `tts` / `tagger` 各自的 `pollMs` / `timeoutMs`。
+
+**示例提示词：** 角色参考表（碧蓝档案 Professor Niyaniya · 官方设定集排版）的完整 JSON 示例落 `role/media-rules.md`——三视图 + 九宫格表情 + 全身姿势九连拍，白底 + cel-shading；业务面 LLM 按这个骨架替换角色与 caption。
+
+**不做：** 不改 ComfyDock 的模型 / 路径 / 采样配置（只覆盖任务参数）· 不做多图批量 · 不接管 ComfyDock 的额度与账号 · 不要求领航员已开启 · 不对非 VIP 开放（白名单以后再做）。

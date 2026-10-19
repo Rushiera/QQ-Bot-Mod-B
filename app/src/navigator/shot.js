@@ -286,6 +286,7 @@ ${CARD_CSS}
     const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : SUMMARY_TIMEOUT_MS;
     const maxTokens = Number(options.maxTokens) > 0 ? Number(options.maxTokens) : 400;
     const maxChars = Number(options.maxChars) > 0 ? Number(options.maxChars) : 4000;
+    const label = String(options.label || 'think 摘要');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -305,11 +306,11 @@ ${CARD_CSS}
       if (!content) {
         const finish = data?.choices?.[0]?.finish_reason ?? '?';
         const rlen = String(data?.choices?.[0]?.message?.reasoning_content ?? '').length;
-        log.warn('navigator', `摘要空内容（finish=${finish}，reasoning=${rlen} 字符）——多为 max_tokens 被推理吃光`);
+        log.warn('navigator', `${label}空内容（finish=${finish}，reasoning=${rlen} 字符）——多为 max_tokens 被推理吃光`);
       }
       return content;
     } catch (error) {
-      log.warn('navigator', `think 摘要失败：${error?.message ?? error}`);
+      log.warn('navigator', `${label}失败：${error?.message ?? error}`);
       return '';
     } finally {
       clearTimeout(timer);

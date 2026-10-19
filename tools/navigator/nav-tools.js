@@ -10,6 +10,9 @@
 //   POST /api/nav/send               投递（body { key, text }）
 //   POST /api/nav/new-session        新会话（body { keys: 'a,b,c' }——发布 /new，不清前文交接）
 //   POST /api/nav/comfy              图像编辑（body { chat, prompt, file, url }——送上 ComfyDock 生成工作区，出图自动回群）
+//   POST /api/nav/moss               生图（body { chat, prompt, size, seed }——MOSS 文生图，出图自动回群）
+//   POST /api/nav/tts                语音（body { chat, text, caption }——IrodoriTTS，中文自动翻日语，音频自动回群）
+//   POST /api/nav/tagger             反推提示词（body { chat, file, url }——WD Tagger，标签自动回群）
 //   POST /api/nav/shot               会话截图（body { key, send:true }——把某猫会话画成卡发群；不带 blocks 时拉该猫会话）
 //
 // 「指令 / 闲聊」的语义判断归模型——本模块不做判定，也不替猫编造进度。
@@ -33,11 +36,12 @@ const CAT_HINT = 'majordomo（主干）/ R喵 / R喵喵 / R喵喵喵 / R喵喵�
  *
  * @param {string} pathname 路径（含查询串）
  * @param {object} [options] 选项（method / body）
+ * @param {number} [timeoutMs] 超时毫秒（默认 25 秒；生成类接口传更宽）
  * @returns {Promise<object>} 响应体
  */
-async function call(pathname, options = {}) {
+async function call(pathname, options = {}, timeoutMs = TIMEOUT_MS) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${ENDPOINT}${pathname}`, {
       method: options.method || 'GET',
@@ -71,6 +75,38 @@ function ok(text) {
  */
 function err(text) {
   return { content: String(text), isError: true };
+}
+
+/**
+ * 取当前会话的群号（生成能力只在群里用）。
+ *
+ * @param {object} ctx 工具上下文
+ * @returns {string} 群号（非群会话返回空串）
+ */
+function groupChatOf(ctx) {
+  const chat = String(ctx?.chatKey || '').replace(/^group:/, '');
+  return /^\d+$/.test(chat) ? chat : '';
+}
+
+/**
+ * 取消息里的图片段——指定 messageId 优先，否则取本群最近一条带图消息。
+ *
+ * @param {object} ctx 工具上下文
+ * @param {string|number} [messageId] 消息 #号
+ * @returns {object|null} 图片段（含 file / url）
+ */
+function pickImageOf(ctx, messageId) {
+  const mid = messageId;
+  let entry = (mid === undefined || mid === null || mid === '')
+    ? null
+    : ctx.store.findByMid(ctx.chatKey, mid);
+  if (!entry) {
+    const rows = ctx.store.recent(ctx.chatKey, { limit: 30 });
+    entry = [...rows].reverse()
+      .find((row) => (row.media || []).some((m) => m.kind === 'image' && (m.url || m.file))) ?? null;
+  }
+  if (!entry) return null;
+  return (entry.media || []).find((m) => m.kind === 'image' && (m.url || m.file)) ?? null;
 }
 
 /**
@@ -477,6 +513,132 @@ export function registerNavTools() {
         return ok(`已提交图像编辑（任务 ${data.taskId ?? '?'}）——出图后系统自动发回本群，你不用回话。`);
       } catch (error) {
         return err(`图像编辑失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── moss_draw ───────────────────────────────────────────────────────────
+  registerTool({
+    id: 'moss_draw',
+    name: '生图·MOSS',
+    description: `从零画一张新图（本地 MOSS-Image 文生图），出图自动发回本群。
+用途：群里 @ 我 说「画一张…」「帮我画…」「生成一张…」「用生图功能…」这类**从零画新图**的请求时调本工具。
+- prompt：用户要画的内容——**中文直接填**，工具会自动翻译成英文再送模型；已经是英文也直接填。
+  角色参考表 / 设定集 / 三视图 / 表情九宫格这类多格排版：按 \`workspace:QQBotB/role/media-rules.md\` 里的示例 JSON 结构填（summary + items + bbox，caption 用英文）。
+  用户只说「用生图功能」但没说要画什么 → **先问画什么**，不要拿这句话本身当提示词。
+- size：可选，如 "1024x1024" / "竖图" / "横图"；不填默认 1024×1024。
+- seed：可选，固定种子复现同一张图。
+🔴 与 comfy_edit 的分界：**无图从零画 = 本工具**；**带图改图 / 换姿势 / 换画风 = comfy_edit**。
+🔴 前置：ComfyDock 在线；只对 QQ 569145850 本人开放（其他群友问就说这项暂时只对 TA 开放）。
+🔴 受理即静默：出图约 1~2 分钟，出图或失败由系统自动发回本群——不用回「已提交」、不用催。
+🔴 一次只跑一张：回执说「已有一张图在跑」就等它出图，别连点。`,
+    category: 'system',
+    icon: '🎨',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: '要画的内容（中文直接填，工具自动翻英文；结构化排版用英文 caption）' },
+        size: { type: 'string', description: '尺寸（可选，如 1024x1024 / 竖图 / 横图）' },
+        seed: { type: ['integer', 'string'], description: '种子（可选，固定复现同一张图）' }
+      },
+      required: ['prompt']
+    },
+    async execute(ctx, args) {
+      const prompt = String(args?.prompt || '').trim();
+      if (!prompt) return err('prompt 不能为空——把用户要画的内容填进来。');
+      const chat = groupChatOf(ctx);
+      if (!chat) return err('生图只在群里用——当前会话没有可用的群号。');
+      try {
+        const data = await call('/api/nav/moss', {
+          method: 'POST',
+          body: { by: 'qq', chat, prompt, size: args?.size ?? '', seed: args?.seed ?? null }
+        }, 120000);
+        if (data?.ok !== true) return err(`生图未受理：${data?.error ?? JSON.stringify(data).slice(0, 200)}`);
+        return ok(`已提交生图（提示词已自动翻成英文）——出图后系统自动发回本群，你不用回话。`);
+      } catch (error) {
+        return err(`生图失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── tts_speak ───────────────────────────────────────────────────────────
+  registerTool({
+    id: 'tts_speak',
+    name: '语音·IrodoriTTS',
+    description: `把一段话合成语音发到群里（本地 IrodoriTTS · 依田芳乃音色）。
+用途：群里 @ 我 说「生成语音…」「说一句…」「用语音说…」「念一下…」这类**要听声音**的请求时调本工具。
+- text：要说的内容——**中文直接填**，工具会自动翻译成日语再送模型（IrodoriTTS 是日语 TTS）；已经是日语就直接填。
+- caption：可选，风格描述（如「温柔一点」「慢速」）——中文会一并翻译。
+- 用户只说「生成语音 / 说话」但没给内容 → **先问要说什么**，不要拿空话当台词。
+🔴 前置：ComfyDock 在线；只对 QQ 569145850 本人开放（其他群友问就说这项暂时只对 TA 开放）。
+🔴 一次一两句话，别塞整篇长文（太长会合成很久）。
+🔴 受理即静默：合成约十几秒到一分钟，语音或失败由系统自动发回本群——不用回「已提交」、不用催。`,
+    category: 'system',
+    icon: '🔊',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '要说的内容（中文直接填，工具自动翻日语）' },
+        caption: { type: 'string', description: '风格描述（可选，如 温柔一点 / 慢速）' }
+      },
+      required: ['text']
+    },
+    async execute(ctx, args) {
+      const text = String(args?.text || '').trim();
+      if (!text) return err('text 不能为空——把用户要说的那句话填进来。');
+      const chat = groupChatOf(ctx);
+      if (!chat) return err('语音只在群里用——当前会话没有可用的群号。');
+      try {
+        const data = await call('/api/nav/tts', {
+          method: 'POST',
+          body: { by: 'qq', chat, text, caption: args?.caption ?? '' }
+        }, 120000);
+        if (data?.ok !== true) return err(`语音生成未受理：${data?.error ?? JSON.stringify(data).slice(0, 200)}`);
+        return ok(`已提交语音合成（中文已自动翻成日语）——语音做好后系统自动发回本群，你不用回话。`);
+      } catch (error) {
+        return err(`语音生成失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── wd_tag ──────────────────────────────────────────────────────────────
+  registerTool({
+    id: 'wd_tag',
+    name: '反推提示词·WD Tagger',
+    description: `把群里的一张图反推成 Danbooru 风格提示词标签（本地 WD Tagger / eva02-large）。
+用途：群里 @ 我 说「反推提示词」「反推一下这张图」「打标」「看看这张图的 tag」这类**图片转提示词**的请求时调本工具。
+- messageId：带图那条消息的 #号（可选；不传取本群最近一条带图的消息）。
+- 用户没发图 → 让 TA 先发图，别拿别的消息里的图硬凑。
+🔴 前置：ComfyDock 在线；只对 QQ 569145850 本人开放（其他群友问就说这项暂时只对 TA 开放）。
+🔴 结果（通用标签 / 角色标签 / 分级）由系统直接发回本群，你不用复述；受理后静默。`,
+    category: 'system',
+    icon: '🏷️',
+    parameters: {
+      type: 'object',
+      properties: {
+        messageId: { type: ['integer', 'string'], description: '带图那条消息的 #号（可选；不传取本群最近一条带图的消息）' }
+      },
+      required: []
+    },
+    async execute(ctx, args) {
+      let media = null;
+      try {
+        media = pickImageOf(ctx, args?.messageId);
+      } catch (error) {
+        return err(`取图失败：${error?.message ?? error}`);
+      }
+      if (!media) return err('本群最近没有带图的消息——让用户先发一张图，再 @ 我说反推提示词。');
+      const chat = groupChatOf(ctx);
+      if (!chat) return err('反推提示词只在群里用——当前会话没有可用的群号。');
+      try {
+        const data = await call('/api/nav/tagger', {
+          method: 'POST',
+          body: { by: 'qq', chat, file: media.file || '', url: media.url || '' }
+        }, 120000);
+        if (data?.ok !== true) return err(`反推提示词未受理：${data?.error ?? JSON.stringify(data).slice(0, 200)}`);
+        return ok('已提交反推提示词——标签结果由系统自动发回本群，你不用复述。');
+      } catch (error) {
+        return err(`反推提示词失败（自研单体没在跑？）：${error?.message ?? error}`);
       }
     }
   });

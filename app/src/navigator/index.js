@@ -13,6 +13,7 @@ import { createCh4Client } from './ch4.js';
 import { createCatWatcher } from './watch.js';
 import { createShotService } from './shot.js';
 import { createComfyService } from './comfy.js';
+import { createMediaService } from './media.js';
 import { PROJECT_DIR } from '../config.js';
 
 /** 空闲巡检间隔（毫秒）。 */
@@ -239,6 +240,49 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     sendText: (chat, text) => say(chat, text),
     record
   });
+  // 群内生成能力（design-qqbotb-navigator.md §二十）——MOSS 生图 / IrodoriTTS 语音 / WD Tagger 反推提示词
+  const mediaConf = navConfig.media ?? {};
+  const mediaEnabled = mediaConf.enabled !== false;
+  const mediaRequireVip = mediaConf.requireVip !== false;
+  const translateConf = mediaConf.translate ?? {};
+
+  /**
+   * 翻译出口——提示词 / 台词自动翻译复用业务面同一 LLM 端点。
+   *
+   * @param {string} text 原文
+   * @param {string} target 目标语言（en / ja）
+   * @param {object} [options] 选项（json=true 表示结构化 JSON 翻译）
+   * @returns {Promise<string>} 译文（失败返回空串）
+   */
+  async function translateForMedia(text, target, options = {}) {
+    if (translateConf.enabled === false) return String(text ?? '');
+    const jsonMode = options?.json === true;
+    const prompt = target === 'ja'
+      ? '把下面的文本翻译成自然、口语化的日语。只输出日语译文，不要解释、不要加引号、不要保留中文。这是给日语语音合成用的台词，保留语气词和停顿。'
+      : (jsonMode
+        ? '把下面 JSON 里所有中文文本翻译成英文。只输出翻译后的 JSON，保持键名、结构和 bbox 不变，不要解释、不要加代码围栏。'
+        : '把下面的中文翻译成语法正确、自然的英文。只输出英文译文，不要解释、不要加引号、不要保留中文。这是给图像生成模型用的提示词，保留逗号分隔的 tag 风格，不要扩写。');
+    return summarize(text, {
+      prompt,
+      model: String(translateConf.model || summaryConf.model || '').trim(),
+      timeoutMs: Number(translateConf.timeoutMs) > 0 ? Number(translateConf.timeoutMs) : 30000,
+      maxTokens: Number(translateConf.maxTokens) > 0 ? Number(translateConf.maxTokens) : 3000,
+      maxChars: Number(translateConf.maxChars) > 0 ? Number(translateConf.maxChars) : 12000,
+      label: target === 'ja' ? '日语翻译' : '英文翻译'
+    });
+  }
+
+  const media = createMediaService({
+    log,
+    dataDir,
+    conf: mediaConf,
+    onebot,
+    sendImage: (chat, file, caption) => sayImage(chat, file, caption),
+    sendText: (chat, text) => say(chat, text),
+    sendRecord: (chat, file, caption) => sayRecord(chat, file, caption),
+    record,
+    translate: translateForMedia
+  });
   let watchTimer = null;
   let ticking = false;
 
@@ -454,6 +498,29 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       return { ok: true };
     } catch (error) {
       log.error('navigator', `发图失败（${chat}）：${error?.message ?? error}`);
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  }
+
+  /**
+   * 发一条语音 + 说明到群。
+   *
+   * @param {string|number} chat 群号
+   * @param {string} file WAV 绝对路径
+   * @param {string} [caption] 说明文字
+   * @returns {Promise<object>} 结果
+   */
+  async function sayRecord(chat, file, caption = '') {
+    if (chat === null || chat === undefined || chat === '') return { ok: false, error: '未指定群' };
+    const message = [];
+    if (caption && String(caption).trim()) message.push({ type: 'text', data: { text: String(caption) } });
+    message.push({ type: 'record', data: { file: `file:///${String(file).replace(/\\/g, '/')}` } });
+    try {
+      await onebot.call('send_group_msg', { group_id: Number(chat) || chat, message });
+      log.info('navigator', `已发语音到群 ${chat}：${path.basename(file)}`);
+      return { ok: true };
+    } catch (error) {
+      log.error('navigator', `发语音失败（${chat}）：${error?.message ?? error}`);
       return { ok: false, error: String(error?.message ?? error) };
     }
   }
@@ -2581,6 +2648,95 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
+   * 群内生成能力的公共闸门——回消息群解析 + 启用开关 + 请求者闸。
+   *
+   * 与图像编辑的差别：**不要求领航员已开启**——生图 / 语音 / 反推是独立能力，
+   * 群里本人 @ 就能用；请求者闸与图像编辑同口径（仅 VIP、且须本群近期 @ 过）。
+   *
+   * @param {object} options 选项
+   * @param {string} [options.by] 触发来源（app=操作者通道；qq=群内 @）
+   * @param {string|number} [options.chat] 来源群
+   * @param {string} options.feature 功能名（回执用）
+   * @returns {{ok:boolean, chat?:string, error?:string, vipOnly?:boolean}} 闸门结果
+   */
+  function mediaGate({ by = 'app', chat = null, feature = '生成能力' } = {}) {
+    const target = resolveChat(chat);
+    if (!target) return { ok: false, error: '没有回消息群——先在群里 @ 我说一句' };
+    if (!mediaEnabled) return { ok: false, error: `${feature}未启用（配置 navigator.media.enabled=false）` };
+    if (by === 'qq' && mediaRequireVip && !(vipFresh() && String(vip.chat) === String(target))) {
+      record('error', `${feature}不受理（非 ${vipUser || 'VIP'} 触发 / 非同群）`);
+      return {
+        ok: false,
+        error: `${feature}目前只对 ${vipUser || '指定 QQ'} 开放——需要本人近期在**本群** @ 我`,
+        vipOnly: true
+      };
+    }
+    return { ok: true, chat: target };
+  }
+
+  /**
+   * 生图——从零画一张新图（MOSS 文生图）。
+   *
+   * @param {object} options 选项
+   * @param {string} [options.by] 触发来源
+   * @param {string|number} [options.chat] 来源群
+   * @param {string} options.prompt 提示词（中文自动翻英文）
+   * @param {string} [options.size] 尺寸（如 1024x1024 / 竖图 / 横图）
+   * @param {string|number} [options.seed] 种子
+   * @returns {Promise<object>} { ok, prompt?, message?, error?, vipOnly? }
+   */
+  async function mossDraw({ by = 'app', chat = null, prompt = '', size = '', seed = null } = {}) {
+    const gate = mediaGate({ by, chat, feature: '生图' });
+    if (!gate.ok) return gate;
+    const result = await media.mossDraw({ chat: gate.chat, prompt, size, seed });
+    if (result.ok) {
+      state.noteCommand({ chat: gate.chat, target: '', text: `（生图）${String(prompt).slice(0, 60)}`, result: '已提交' });
+    }
+    return result;
+  }
+
+  /**
+   * 语音——文字转语音（IrodoriTTS，中文自动翻日语）。
+   *
+   * @param {object} options 选项
+   * @param {string} [options.by] 触发来源
+   * @param {string|number} [options.chat] 来源群
+   * @param {string} options.text 要说的内容
+   * @param {string} [options.caption] 风格描述
+   * @returns {Promise<object>} { ok, text?, message?, error?, vipOnly? }
+   */
+  async function ttsSpeak({ by = 'app', chat = null, text = '', caption = '' } = {}) {
+    const gate = mediaGate({ by, chat, feature: '语音生成' });
+    if (!gate.ok) return gate;
+    const result = await media.ttsSpeak({ chat: gate.chat, text, caption });
+    if (result.ok) {
+      state.noteCommand({ chat: gate.chat, target: '', text: `（语音）${String(text).slice(0, 60)}`, result: '已提交' });
+    }
+    return result;
+  }
+
+  /**
+   * 反推提示词——图片 → WD Tagger 标签。
+   *
+   * @param {object} options 选项
+   * @param {string} [options.by] 触发来源
+   * @param {string|number} [options.chat] 来源群
+   * @param {string} [options.image] 本地图片路径
+   * @param {string} [options.file] OneBot 消息段的 file 名
+   * @param {string} [options.url] 图片直链
+   * @returns {Promise<object>} { ok, image?, message?, error?, vipOnly? }
+   */
+  async function wdTag({ by = 'app', chat = null, image = '', file = '', url = '' } = {}) {
+    const gate = mediaGate({ by, chat, feature: '反推提示词' });
+    if (!gate.ok) return gate;
+    const result = await media.wdTag({ chat: gate.chat, image, file, url });
+    if (result.ok) {
+      state.noteCommand({ chat: gate.chat, target: '', text: `（反推提示词）${String(image || file || url).slice(0, 60)}`, result: '已提交' });
+    }
+    return result;
+  }
+
+  /**
    * 状态汇总（界面与业务面工具共用）。
    *
    * @returns {Promise<object>} 状态
@@ -2601,6 +2757,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       vipRecentChat: vipFresh() ? vip.chat : null,
       watching: watcher.list(),
       lightWatches: [...lightWatches.keys()],
+      mediaBusy: media.isBusy(),
       activity: activity.map((item) => ({ ...item })),
       busy: cats.filter((row) => hasSession(row)).map((row) => row.id),
       cats,
@@ -2704,6 +2861,32 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         url: body?.url ?? ''
       })
     }),
+    'POST /api/nav/moss': async ({ body }) => ({
+      body: await mossDraw({
+        by: body?.by === 'qq' ? 'qq' : 'app',
+        chat: body?.chat ?? null,
+        prompt: body?.prompt ?? '',
+        size: body?.size ?? '',
+        seed: body?.seed ?? null
+      })
+    }),
+    'POST /api/nav/tts': async ({ body }) => ({
+      body: await ttsSpeak({
+        by: body?.by === 'qq' ? 'qq' : 'app',
+        chat: body?.chat ?? null,
+        text: body?.text ?? '',
+        caption: body?.caption ?? ''
+      })
+    }),
+    'POST /api/nav/tagger': async ({ body }) => ({
+      body: await wdTag({
+        by: body?.by === 'qq' ? 'qq' : 'app',
+        chat: body?.chat ?? null,
+        image: body?.image ?? '',
+        file: body?.file ?? '',
+        url: body?.url ?? ''
+      })
+    }),
     'POST /api/nav/analyze': async ({ body }) => ({
       body: await analyzeOnce({
         key: body?.key || 'majordomo',
@@ -2738,13 +2921,13 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
 
   return {
     state, ch4, watcher, shot,
-    health, renderReceipt, apisiteDetail, open, close, send, status, say, sayAt, sayImage,
+    health, renderReceipt, apisiteDetail, open, close, send, status, say, sayAt, sayImage, sayRecord,
     armCat, armAll, disarmAll, ensureWatching, resetSession, newSession, waitForReply,
     pickRescueCat, grabCatSource,
     scheduleAnalysis, runAnalysis, analyzeOnce, collectThink, thinkText,
     pullCatView, digestFromView, digestFromSession, composeActivity, composeBrief,
     armLightWatch, cancelLightWatch, clearLightWatches, lightWatches,
-    editImage, comfy,
+    editImage, comfy, mossDraw, ttsSpeak, wdTag, media,
     start, stop, api, idleCloseMs
   };
 }

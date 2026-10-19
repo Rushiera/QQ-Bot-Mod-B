@@ -506,6 +506,9 @@ export function createMediaService({
             record('error', `语音产物下载失败：${error?.message ?? error}`);
             return;
           }
+          // 语音配文（Rushiera 2026-10-19 定）：语音发回前先把「说话内容」原文发一条文字——两条一起到。
+          // 判例：17:52「念一下你是谁」只发了语音、文字一条没有（session mvf2sfsh · sent=[]）。
+          try { await sendText(chat, String(source || '').trim().slice(0, 500)); } catch (error) { record('error', `语音配文发送失败：${error?.message ?? error}`); }
           const sent = await sendRecord(chat, file, `语音 · ${source.slice(0, 40)}`);
           record(sent.ok ? 'tts' : 'error', sent.ok
             ? `语音已发群（${path.basename(file)}）`

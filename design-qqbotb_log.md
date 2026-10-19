@@ -2695,3 +2695,48 @@ R喵喵：交接摘要已注入，等待确认
 2. **真链路验收待触发**：重启后在群里发一条话（非 @ 触发的那一轮），等下一批消息到来，看日志 `[rapport] 客观结算：没人接话 → -12（…）` 行 + `data/memory/<chat>/_rapport.json` 落盘；再在群里 @ 它一次，看 `有人接话 → +6`。
 3. **lean 提示词体积**：chatVoice 让 lean 从约 1769 → **2048 字符**（talkstyle 自测的 1~3KB 断言仍过）。后续再加段需重新审视这条断言。
 4. **未采纳项**（Rushiera 2026-10-19 拍板不改，留档防重新引入）：①一轮一条（合并 / 拒发第 2 条起）②群聊轮收工具面（非点名轮只留 send / 记忆 / 表情）⑤口语正反例文件 ⑥单条长度软闸。
+
+## 六十九、四条群内实测修复：念没念 / 图没图 / 重来去哪 / 语音没字（v0.81 · 2026-10-19）
+
+> 来源：Rushiera 2026-10-19——「你看一下偶像大师灰姑娘女孩mod交流分享群的沟通记录，我有尝试调用 tts 的指令……」（群 785638698 安静模式首日实测）→ 拍板：四条全改，按 ④→①→②→③ 顺序落地。
+> 判例载体：`_unpack/data/sessions/` 四份运行记录 + 群消息存档（`messages/group_785638698.json`）。
+
+### A · 四条判例（事实链）
+
+| # | 现象 | 运行记录 | 根因 |
+|:--:|:--|:--|:--|
+| ① | 20:08「@Shieraru 念一下上面图片里的内容」（图：老实写代码，很枯燥吧）——读图成功、内容也生成了，但群里没动静、也没 TTS | `mvf7nb2a-d8271497` | ①「念」没落到 `tts_speak`（前文内联速查没有触发词）；②答案写在 assistant 正文里 + 同轮调 `finish` → `sent: []`，正文按设计不发群；`reply-rescue.js` 只在「本轮零工具调用」时触发，救不到；且 `skills/` 里没有任何 `reply.*` 能力实现，兜底恒为空转 |
+| ② | 18:41「@Shieraru 念一下上面图片里的内容」（图：[猫想你] gif）——回「图片我没取到，接口连着几次都 404」 | `mvf5ijkq-c47f46e0` | `get_message_images` 只走远程 URL 直连；该 gif 的 `gxh.vip.qq.com/.../raw300.gif` 已实测 **HEAD 404**（资源失效）；协议端本地缓存（消息 `file=d0-…gif`）本可读，但工具没接 `get_image` 回退。旁证：同轮 `get_recent_messages` 返回 10-17 的旧消息——`tools.js:607` 把 `pastStateCount` 叠进了 offset |
+| ③ | 17:58「给上面这个图的角色画一个三视图」→ 出图 → 18:05「不太像」「@Shieraru 重来」→ 回「图像编辑要走领航员模式，现在没开，投不出去」 | `mvf30oh9-ec3bfc5c`（首轮）/ `mvf393v3-666d4c45`（重来） | 首轮走 `moss_draw`（不依赖领航员）成功；「重来」改走 `comfy_edit`（依赖领航员）被挡，且把「开领航员」当结论抛给用户——「重来的是什么」没有任何一处教材 / 工具描述承载 |
+| ④ | 17:52「@Shieraru 念一下你是谁」——只发了语音，文字一条没有 | `mvf2sfsh-798de279` | 只调 `tts_speak`（`sent: []`）；`media.js` 的 `waitTts` 只发音频 + 附件说明。**与安静模式无关**——安静模式只砍非 @ 的闲聊，17:52 是被 @ 的普通轮，照常发言（同群 14:54 / 17:52 两次 TTS，文字有无不一致，说明不能靠模型自觉） |
+
+### B · 落地内容
+
+| 面 | 落点 | 说明 |
+|:--|:--|:--|
+| ② 取图 | `src/tools.js` · `buildImagePayload`（新） + `get_message_images` | 取图链改**协议端缓存优先**（`ctx.onebot.call('get_image', { file })` → 读本地缓存字节 → buildImagePayload）→ 直链兜底；GIF 分叉 / 压缩逻辑与直链共用 |
+| ② 窗口 | `src/tools.js` · `get_recent_messages` | offset 不再叠加 `pastStateCount`（原会一跳跳回一周前） |
+| ① 语义 | `src/nav-tools.js` · `tts_speak` 描述 | 触发语补「念出来 / 读一下」；新增「念一下上面图片里的内容 = 先 get_message_images 读图，再把读到的文字填进 text——读图是手段，念出来才是任务」 |
+| ① 硬规则 | `src/tools.js` · `finish` 描述 | 明写「正文里的内容不会发到 QQ——要对群里说的话必须先调发送工具」 |
+| ④ 配文 | `app/src/navigator/media.js` · `waitTts` | 语音发回前先 `sendText(chat, source)` 发原文——两条一起到，不依赖模型自觉 |
+| ③ 重来 | `src/nav-tools.js` · `comfy_edit` 描述 + `roleText` / `role/media-rules.md` | 「重来 / 再来一次 / 重画」先看上一轮走的哪条路，沿用上一次**成功**的工具与参数；被前置挡住时回退上一次可行路径，别把「要开 X」当结论抛给用户；教材新增「**续接指令**」段 |
+| 补丁 | `tools/patch-qqbotb-fixgroup.mjs`（新 · 6 点 · 幂等） | `image-payload` / `image-cache-first` / `recent-offset` / `finish-desc` / `tts-desc` / `comfy-retry` |
+| 教材源 | `tools/apply-qqagent-config.mjs` | MEDIA_RULES 三处（表格触发语 / 语音段配文与念图口径 / 续接指令段）+ NAV_QUICK 生成能力行；`roleTextChars` 5130 → **5241** |
+| 自测 | `tools/verify-qqbotb-fixgroup.mjs`（新） | **18/18** |
+
+### C · 实测
+
+- `node tools/patch-qqbotb-fixgroup.mjs --dry` → 6 点全命中；正式跑 applied 6 / skipped 0；复跑 skipped 6（幂等）。
+- `node --check`：`tools.js` / `nav-tools.js` / `media.js` / `apply-qqagent-config.mjs` 四文件 0 错。
+  - 🔴 过程中踩到一次：`finish-desc` 的 replacement 写成模板字面量 `\n` → 落进单引号字符串变真实换行 → `SyntaxError`；改为落 `\n` 转义（补丁脚本内写 `\\n`）后修复，脚本已同步修正（重装重跑不会再坏）。
+- `node tools/verify-qqbotb-fixgroup.mjs`：**18/18**。
+- `node tools/verify-qqagent-navtools.mjs`：**19/19**（工具组 14 件）。
+- `node tools/verify-import-integrity.mjs`：ALL PASS（63 文件 / 349 符号）。
+- `node tools/apply-qqagent-config.mjs --roletext-only`：role 三件已刷，`roleTextChars` 5241。
+
+### D · 遗留
+
+1. **业务面 + 单体需重启才生效**——`Start-Process` 被引擎拦（`PS_START_FORBIDDEN`），本会话无通道起进程；待 Rushiera 双击 `启动QQBotB.vbs`（或 `启动QQBotB.bat`）。业务面改动另需**新会话**才会进前文（roleText）。
+2. **真链路验收待触发**（群 785638698）：①发图 +「念一下上面图片里的内容」——期望先文字后语音两条；②发一张图 + 「画三视图」→「重来」——期望沿用 `moss_draw` 重画；③发一张旧表情图 + 「念一下」——期望走协议端缓存读图成功（不再 404）。
+3. **正文兜底（`reply-rescue`）仍是死代码**：`skills/` 无任何 `reply.*` 能力实现，`orchestrator.js` 也只在「零工具调用」时触发。本轮只补了 `finish` 描述硬规则，没动兜底——是否补最小实现（把「正文成稿」抢救成 `send_message`）列为拍板项（风险：判错就是把内心戏发进群）。
+4. **`get_image` 回退依赖 NapCat 缓存**：`D:\QQcache` 在受控根外（业务面读文件不受受控根约束，可读）；若 NapCat 侧未缓存（旧消息 / 清理过），仍会退回直链并可能 404——回执已按「协议端缓存：…」具名报错，不静默。

@@ -129,7 +129,7 @@ const MEDIA_RULES = [
   '|:--|:--|:--|',
   '| 「画一张…」「帮我画…」「生成一张…」「用生图功能…」 | 从零画一张新图（文生图） | `moss_draw(prompt, size?, seed?)` |',
   '| 「把这张图…」「给这张图换个姿势 / 换画风 / 做成三视图」 | 带图改图（图生图 / 云端工作流） | `comfy_edit(prompt, messageId?)` |',
-  '| 「生成语音…」「说一句…」「念一下…」 | 文字转语音 | `tts_speak(text, caption?)` |',
+  '| 「生成语音…」「说一句…」「念一下…」「念出来 / 读一下」 | 文字转语音 | `tts_speak(text, caption?)` |',
   '| 「反推提示词」「打标」「看看这张图的 tag」 | 图片反推标签 | `wd_tag(messageId?)` |',
   '',
   '**通用口径**',
@@ -157,11 +157,18 @@ const MEDIA_RULES = [
   '- 一次一两句话；长文会合成很久，先问用户要不要拆短。',
   '- `caption` 可填风格（温柔 / 慢速 / 兴奋…），中文会一并翻译。',
   '- 产物是语音消息，由系统直接发回本群。',
+  '- 「念一下上面图片里的内容」：先用 `get_message_images` 读图，把读到的文字填进 `text`——读图是手段，念出来才是任务。',
+  '- 语音发回时系统会自动补一条文字（原文）——两条一起到，不用你自己再发 `send_message`。',
   '',
   '**反推提示词（WD Tagger）**',
   '- 用户发图 + 说「反推提示词 / 打标 / tag」→ `wd_tag(messageId?)`；不传 messageId 就取本群最近一条带图消息。',
   '- 结果是 Danbooru 风格标签：通用标签 + 角色标签 + 分级；由系统直接发回本群。',
-  '- 这张图不在群里（只有本地路径）时，让用户先把图发到群里。'
+  '- 这张图不在群里（只有本地路径）时，让用户先把图发到群里。',
+  '',
+  '**续接指令（重来 / 再来一次 / 重画 / 改成）**',
+  '- 先回看上一条任务是什么，重来的是那件事本身：上次画图就重画、上次念就再念、上次查就走同一条链路。',
+  '- 生成类重来沿用上一次**成功**的工具与参数（上次 `moss_draw` 出的图就还用 `moss_draw`）；只改用户这次说的差别。',
+  '- 工具因前置不满足被拒时，回退到上一次可行的路径；别把「要开 X」当结论抛给用户。'
 ].join('\n');
 
 // 领航员速查（roleText 内联版；完整教材见 role/nav-rules.md）
@@ -174,7 +181,7 @@ const NAV_QUICK = [
   '- 清理会话：`nav_new(key)`——清前文 + 重新注入，不收工、不留交接摘要、不继续。',
   '- 前文整理重启：`nav_reset(key=X)`——收工整理 → 新会话 → 注入交接报告 → 自动继续；带新指令用 `nav_reset(key=X, text=Y)`；猫自己跑不动用 `rescue=true`。',
   '- 图像编辑：`comfy_edit(prompt, messageId?)`——领航员已开启 + ComfyDock 在线 + 仅 569145850 本人；受理后静默，出图自动发群。',
-  '- 生成能力：`moss_draw(prompt, size?, seed?)` 从零画图（中文自动翻英文）· `tts_speak(text, caption?)` 文字转语音（中文自动翻日语）· `wd_tag(messageId?)` 图片反推提示词；**带图改图仍用 `comfy_edit`**。完整教材 → `workspace:QQBotB/role/media-rules.md`。',
+  '- 生成能力：`moss_draw(prompt, size?, seed?)` 从零画图（中文自动翻英文）· `tts_speak(text, caption?)` 文字转语音（中文自动翻日语；「念一下」也算——念图里的内容先用 `get_message_images` 读图再填 text）· `wd_tag(messageId?)` 图片反推提示词；**带图改图仍用 `comfy_edit`**。**「重来 / 重画」沿用上一次成功的工具与参数**（上次 `moss_draw` 出的图就还用 `moss_draw`）。完整教材 → `workspace:QQBotB/role/media-rules.md`。',
   '- 场次收尾：退出领航员时 `nav_close` 之后用 `send_message` 发一条一句话的【领航员模式 · 收工报告】——只发一条、只写一句话。',
   '- VIP 通道：569145850 的 @ 必须处理；投递类静默执行；发言配额与硬限对 TA 的回复不生效。',
   '- 详细判例与回话口径 → 读 `workspace:QQBotB/role/nav-rules.md`。'

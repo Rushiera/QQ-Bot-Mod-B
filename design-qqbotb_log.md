@@ -2740,3 +2740,43 @@ R喵喵：交接摘要已注入，等待确认
 2. **真链路验收待触发**（群 785638698）：①发图 +「念一下上面图片里的内容」——期望先文字后语音两条；②发一张图 + 「画三视图」→「重来」——期望沿用 `moss_draw` 重画；③发一张旧表情图 + 「念一下」——期望走协议端缓存读图成功（不再 404）。
 3. **正文兜底（`reply-rescue`）仍是死代码**：`skills/` 无任何 `reply.*` 能力实现，`orchestrator.js` 也只在「零工具调用」时触发。本轮只补了 `finish` 描述硬规则，没动兜底——是否补最小实现（把「正文成稿」抢救成 `send_message`）列为拍板项（风险：判错就是把内心戏发进群）。
 4. **`get_image` 回退依赖 NapCat 缓存**：`D:\QQcache` 在受控根外（业务面读文件不受受控根约束，可读）；若 NapCat 侧未缓存（旧消息 / 清理过），仍会退回直链并可能 404——回执已按「协议端缓存：…」具名报错，不静默。
+
+---
+
+## 七十、LLM 端点换域适配（v0.82 · 2026-10-25）
+
+> 触发：Rushiera「现用的 newapi-47.250 api 站好像换了新的端点前缀，适配一下 `https://time.api.freeshare.tech/v1`」。
+
+### A · 取证（旧端已下线，模型也换了）
+
+| 探测 | 结果 |
+|:--|:--|
+| `GET http://47.250.160.225:8443/v1/models` | **410 Gone** |
+| `POST http://47.250.160.225:8443/v1/chat/completions` | **410 Gone** |
+| `GET https://time.api.freeshare.tech/v1/models`（同密钥） | 200 · 只列 `deepseek-v4.1-flash` |
+| `POST .../chat/completions` · `model=deepseek-v4.1-flash` | 200 · 正常回执（带 `reasoning_content`） |
+| 同上 · `model=hy4-preview-f` | `model_not_found: Model "hy4-preview-f" is not available for this group` |
+| 并发压测（并行数超限） | 429 `CONCURRENCY_LIMIT_EXCEEDED · limit:3` |
+| 视觉通道（真截图 36 614 B，`deepseek-v4.1-flash`） | 200 · `content` 有实际描述（`reasoning_tokens` 935）→ 收图能力在 |
+
+结论：旧站入口撤销、`hy4-preview-f` 不在新站本组，主模型必须改 `deepseek-v4.1-flash`。
+
+### B · 落点（四处）
+
+| 件 | 改动 | 生效 |
+|:--|:--|:--|
+| `_unpack/data/config.json` | `api.baseUrl` → 新端 · `api.model` → `deepseek-v4.1-flash`（`fallbackModels` 原就同款） | 经 `POST /api/config` 热写并落盘，**运行实例即时生效**（回读一致） |
+| `tools/apply-qqagent-config.mjs` | `API` 常量（baseUrl / model）同步 | 下次重跑生成器不会写回旧端 |
+| `runtime/.<名>-selftest/config.json` | 无需手改 | 各 verify 脚本每次从 `_unpack/data/config.json` `copyFileSync` 重建 |
+| `app/src/**` | 无需改 | 领航员 `loadVision()` 本来就读 `_unpack/data/config.json`（同源） |
+
+### C · 实测
+
+- `POST http://127.0.0.1:3210/api/test/api`（业务面真实 `chatCompletion`）→ `{"ok":true,"model":"deepseek-v4.1-flash","reply":"pong"}`，两次分别 3 256 ms / 5 995 ms。
+- `node` 侧无改动 → 未跑 `verify-import-integrity` 等（不动代码面）。
+
+### D · 遗留（跨项目 / 跨面）
+
+1. **CH4 宿主全局 `vision.model` 仍是 `hy4-preview-f`** → 在新端 404，`image-analyze` 直接失败（本轮实测撞上）。`vision.api_config_id`（`6c107132` → 池 `newapi-47.250`）已指新端，只差模型名。归 CH4 配置面（本会话无 `config-*` 工具），已报 Rushiera。
+2. **`Data:config/llm-api.json` 的 `newapi-bak`（`7e5dd46a`）仍指旧端**且 `apiType` / `defaultModel` 都是 `hy4-preview-f`——LLM 池是人工面板专属面，工具面写不进。
+3. **同密钥共享 3 并发**：协商知识库批量轮与本业务面同密钥，同时跑会撞 429（重试池会退让，风险低——业务面单会话串行）。

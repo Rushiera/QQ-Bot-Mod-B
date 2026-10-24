@@ -52,9 +52,9 @@
 
 | 字段 | 值 |
 |:--|:--|
-| 上次同步时间 | 2026-10-19 21:48 |
-| 上次同步 commit | `2f2ba23` v0.81（四条群内实测修复：TTS 配文 / 取图缓存优先 / 重来语义 / finish 硬规则） |
-| 远程状态 | 与 origin 同步（`main`；HEAD 以 `git log -1` 为准） |
+| 上次同步时间 | 2026-10-25 07:11 |
+| 上次同步 commit | `c4f2246` v0.82（LLM 端点换域适配——`_unpack/data/config.json` baseUrl/model 热写 · `tools/apply-qqagent-config.mjs` 常量同步；3 文件 / +4 −2） |
+| 远程状态 | 与 origin 同步（`80daf87..c4f2246`） |
 
 ## 五、项目特有规则
 

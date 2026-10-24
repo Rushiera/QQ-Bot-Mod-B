@@ -244,7 +244,8 @@ const ROUTE_INDEX = [
 ].join('\n');
 
 // newapi-bak（apiConfigId 7e5dd46a-…）——密钥按 id 从密钥面取
-const API = { baseUrl: 'http://47.250.160.225:8443/v1', keyId: '7e5dd46ab9ee431cb016c24f65d1f41e', model: 'hy4-preview-f' };
+// 2026-10-25：站点换到 time.api.freeshare.tech（原 47.250.160.225:8443 已 410）
+const API = { baseUrl: 'https://time.api.freeshare.tech/v1', keyId: '7e5dd46ab9ee431cb016c24f65d1f41e', model: 'deepseek-v4.1-flash' };
 // NapCat（QQBot mod B 协议端 · design-qqbotb_log.md §二）
 const ONEBOT = { wsUrl: 'ws://127.0.0.1:3001', httpUrl: 'http://127.0.0.1:3000', token: 'napcatb2405997337' };
 

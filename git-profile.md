@@ -52,9 +52,9 @@
 
 | 字段 | 值 |
 |:--|:--|
-| 上次同步时间 | 2026-10-25 07:11 |
-| 上次同步 commit | `7fb7363` v0.82（LLM 端点换域适配——`_unpack/data/config.json` baseUrl/model 热写 · `tools/apply-qqagent-config.mjs` 常量同步；代码面 3 文件 / +4 −2，随后补记 `design-qqbotb_log.md` §七十 + 本档案） |
-| 远程状态 | 与 origin 同步（`80daf87..7fb7363`） |
+| 上次同步时间 | 2026-10-25 13:31 |
+| 上次同步 commit | `b3fcc84` v0.83（发言档位五档 + 客观采集——补丁 `patch-qqagent-level.mjs` 13 点 / `patch-qqagent-level-ui.mjs` 8 点 + 自测 `verify-qqagent-level.mjs` 58 条；三份 verify 脚本随降级改写；档案面六件同步） |
+| 远程状态 | 与 origin 同步（`da2c826..b3fcc84`） |
 
 ## 五、项目特有规则
 

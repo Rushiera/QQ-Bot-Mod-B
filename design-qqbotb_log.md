@@ -2947,3 +2947,47 @@ R喵喵：交接摘要已注入，等待确认
 
 1. **生效需重启自研单体**（`启动QQBotB.vbs`）——`main.js` 是 Electron 主进程，热改不生效；`ui/app.js` 是静态文件，重启后刷新页面即加载。
 2. **真链路复验待人工**：重启后点「协议端控制台」应稳定停留（不再被顶回概览）、概览「账号登录」状态位在协议端 Worker 重启期不再抖。判据：`app/data/boot.log` 里不再连续出现「已注入协议端控制台凭据」，只出现一次（首个 frame）。
+
+## 七十三、群名片余额后缀（v0.85 · 2026-10-25）
+
+**需求（Rushiera 口述）：** 记忆里可以指定某个群「打开展示余额」；余额先人工输入、后续留映射接口；默认不开，需要时按群开；开了之后每 30 分钟把本号的**后缀**刷成「@余额xx.xx」。
+
+**拍板三件（Rushiera 2026-10-25，三项均取方案 1）：** ①载体 = **群名片**（不是昵称）②**原名片 + 尾部追加**，旧余额段先剥再拼 ③**启动即同步一次**，之后每 30 分钟一次。
+
+### A · 落点
+
+| 面 | 文件 | 内容 |
+|:--|:--|:--|
+| 配置 | `src/config.js`（engage 尾） | `engage.balance` 默认段：`value:0` · `chats:[]`（默认全关）· `source:'manual'` · `endpoint:''` · `field:'balance'`（映射接口占位）· `marker:'@余额'` · `intervalMs:1800000` |
+| 模块 | `src/balance.js`（新增） | `balanceRule()` / `resolveBalance()`（映射接口单点：现在只认 manual，未知来源**抛错**不回落 0）/ `normalizeAmount()` / `formatAmount()` / `balanceSuffix()` / `stripBalanceSuffix()`（循环剥尾部旧值）/ `composeCard()` / `syncChatCard()` / `syncBalanceCards()` / `startBalanceLoop()`（启动 5 秒首刷 + 定时）/ `stopBalanceLoop()` |
+| 启动链 | `src/app.js` | import + `startBalanceLoop(onebot)`（挂在 `startRapportHeal()` 之后） |
+| 路由 | `src/routes.js` | `POST /api/balance/sync`（body `{chat?}`：给群号只刷该群，空则刷全部开启群）——记忆页开关 / 改值后立即生效，也是验收通道 |
+| UI | `ui/app/05-memory-settings.js` | 记忆页详情头：`💰 余额后缀`开关 + 余额输入框 + `刷新`按钮（仅群聊）；列表徽标 `💰 12.34`；三个写面函数 `toggleBalanceChat` / `setBalanceValue` / `syncBalanceNow` |
+| 自测 | `tools/verify-balance.mjs`（新增） | 30 条判据（纯函数真跑 + 源码断言） |
+| 补丁 | `tools/patch-qqbotb-balance.mjs`（新增）+ `tools/templates/balance-patches.txt`（11 段）+ `tools/templates/balance.js`（模块模板） | 重装重放通道（`_unpack/` 不入 git）；`--audit` 校验段库与磁盘逐字一致 · `--strip` 逆向还原（在副本上验可复现） |
+
+### B · 拼接与幂等规则
+
+| 规则 | 判据 |
+|:--|:--|
+| 剥旧值 | 只认**尾部** `marker + [0-9.]+`；循环剥多层（`R喵@余额12.00@余额13.00` → `R喵`）；名片中间的 `@余额` 不动 |
+| 拼新值 | `基础名 + marker + toFixed(2)`；基础名取「当前名片剥后」，空则退昵称（`selfNickname`），再空则只剩后缀 |
+| 幂等 | 目标 == 现状 → 不发请求（`skipped:true`） |
+| 兜底 | 余额取不到（NaN / 未知来源）→ 本轮不刷 + `balance` 日志告警，**不写 0.00** |
+
+### C · 实测
+
+| 判据 | 结果 |
+|:--|:--|
+| `node --check` × 5 | `balance.js` / `config.js` / `app.js` / `routes.js` / `05-memory-settings.js` 全 0 错 |
+| `node tools/verify-balance.mjs` | **30/30** ALL PASS |
+| 真链路·只读 | `get_login_info` → `user_id=2405997337` / `nickname=Shieraru`；`get_group_member_info(689942975)` → `card=""` · `card_changeable=true` |
+| 真链路·写面 | `set_group_card` 写 `Shieraru@余额88.88` → 读回 **`card:"Shieraru@余额88.88"`**（生效）→ 写回 `""` → 读回 `card:""`（**已恢复原状**） |
+| 真链路·形态 | bot 在群 689942975 没设过名片 → 开后缀后的目标名片 = `Shieraru@余额xx.xx`（昵称兜底） |
+| 补丁可复现 | `--audit` **11 段全 audit-ok**；副本 strip → apply 后 5 个文件 SHA256 与磁盘**逐一相等**（`config.js` / `app.js` / `routes.js` / `05-memory-settings.js` / `balance.js`）· `node --check` 补丁脚本 0 错 |
+
+### D · 遗留
+
+1. **生效需重启业务面**（`启动QQBotB.vbs`）——`Start-Process` 被引擎拦，本会话无通道起进程；UI 改动另需刷新页面（记忆页）。
+2. **功能面真链路待重启后验**：重启 → 记忆页给某群勾上「💰 余额后缀」→ 填值 → 点「刷新」→ 群里看本号名片尾部是否出现「@余额xx.xx」；再等 30 分钟看 `data/logs/qq-agent-*.log` 的 `balance` 行是否按周期出现（值没变应为 `skipped`，不产生写请求）。
+3. **映射接口未接数据源**：`source` 目前只认 `manual`；接自动余额时改 `resolveBalance()` 并填 `endpoint` / `field`。

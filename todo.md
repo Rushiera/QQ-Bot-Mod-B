@@ -71,3 +71,10 @@
 | B31 | 客观信号启用拍板 | `engage.signals.enabled` 现为 false（只采集）。跑 3 天按 `metrics` 分布决定是否开 + `floor` 取多少（默认 0.15） |
 | B32 | 五档目标日发言校准 | 现 `rate` 按 10-19（459 条）/ 10-22（76 条）插值；真跑后按实测校准每档目标 |
 | B33 | 归档 `reply` 字段恒 null | `rapport.pointsAtMe` 的"引用我"分支实际只靠文本前缀匹配（`selfNickname` 空 → 退 `botName`）；`atRate` 信号想算准需先补该字段 |
+
+## 十一、v0.85 群名片余额后缀（待生效 + 待验收）
+
+| # | 项 | 说明 |
+|:--:|:--|:--|
+| B34 | 重启使余额后缀生效 + 功能面真链路验收 | 双击 `启动QQBotB.vbs`（业务面在单体里按需拉起；`Start-Process` 被引擎拦）→ 记忆页给某个群勾「💰 余额后缀」+ 填值 + 点「刷新」→ 群里看本号名片尾部出现「@余额xx.xx」；再等 30 分钟看 `data/logs/qq-agent-*.log` 的 `balance` 行按周期出现（值未变应为 `skipped`、不产生写请求）（来源：`design-qqbotb_log.md` §七十三 遗留 1-2） |
+| B35 | 余额映射接口接入拍板 | `source` 现只认 `manual`；要接自动来源时定数据源（`endpoint` + `field`）并改 `src/balance.js` 的 `resolveBalance()`（来源：§七十三 遗留 3） |

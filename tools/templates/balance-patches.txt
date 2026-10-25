@@ -1,0 +1,183 @@
+@@@ config|replace|src/config.js
+    signals: { enabled: false, floor: 0.15 },
+    // ── 余额后缀（2026-10-25）── [qqbotb-balance:config]
+    // 按群把本号的**群名片**尾部刷成「@余额xx.xx」，每 intervalMs 刷一次（默认 30 分钟）。
+    //   chats：开了后缀的群号清单（记忆页「💰 余额」开关写这里）；空 = 全关（默认不开）。
+    //   value：当前余额——先由人工输入（记忆页输入框；两位小数，只接受 0 及以上）。
+    //   source / endpoint / field：**映射接口占位**——现在只认 'manual'（用 value）；
+    //     将来接自动余额来源时，在 src/balance.js 的 resolveBalance() 里加分派即可，
+    //     配置形状不用再改（endpoint / field 就是给它预留的）。
+    //   marker：后缀前缀（拼成 marker + 两位小数）；同时是**剥旧值**的锚——
+    //     刷新前先剥掉尾部已存在的 marker+数字，保证重复刷不会叠成
+    //     「@余额12.00@余额13.00」。
+    //   intervalMs：刷新间隔；宿主启动即刷一次，之后按此周期（改值后可手动立即刷新）。
+    balance: {
+      value: 0,
+      chats: [],
+      source: 'manual',
+      endpoint: '',
+      field: 'balance',
+      marker: '@余额',
+      intervalMs: 1800000
+    }
+  },
+@@@ app-import|after|src/app.js
+// 余额后缀定时刷新（群名片尾部 @余额xx.xx）——[qqbotb-balance:app-import]
+import { startBalanceLoop } from './balance.js';
+@@@ app-start|after|src/app.js
+    // 余额后缀：按群把「@余额xx.xx」刷到本号群名片尾部（清单空 = 全关，不动任何群）
+    // [qqbotb-balance:app-start]
+    startBalanceLoop(onebot);
+@@@ routes-import|after|src/routes.js
+// 余额后缀（记忆页开关 / 改值后立即刷新群名片）——[qqbotb-balance:routes-import]
+import { syncBalanceCards } from './balance.js';
+@@@ routes-sync|before|src/routes.js
+    {
+      // 手动刷一次群名片余额后缀（记忆页开关 / 改值后即时生效；验收也走这条）
+      // body: { chat? }——给群号只刷那个群，空则刷全部开启的群
+      // [qqbotb-balance:routes-sync]
+      method: 'POST', pattern: '/api/balance/sync',
+      handler: async ({ req, res, json }) => {
+        const body = await bodyOf(req);
+        const chat = String(body?.chat || '').trim();
+        try {
+          const result = await syncBalanceCards(onebot, { chat });
+          return json(res, 200, { ok: result.failed === 0, ...result });
+        } catch (error) {
+          return json(res, 200, { ok: false, error: String(error?.message ?? error) });
+        }
+      }
+    },
+@@@ ui-list-badge|replace|ui/app/05-memory-settings.js
+    })();
+    // 余额后缀标记（[qqbotb-balance:ui-list-badge]）——本群开着就显示当前余额值
+    const balanceHtml = (() => {
+      const id = String(key).split(':')[1] || '';
+      const bal = balanceRuleOf(state.config || {}, id);
+      if (!bal || !bal.on) return '';
+      return `<span class="unread-pill" style="background:var(--green,#2e9e5b)" title="群名片后缀已开：每 ${bal.minutes} 分钟刷「${esc(bal.marker)}${esc(bal.amount)}」到本号群名片">💰 ${esc(bal.amount)}</span>`;
+    })();
+    // [qqagent-memory-patch:ui-list-sub]
+@@@ ui-list-html|after|ui/app/05-memory-settings.js
+          ${balanceHtml}<!-- [qqbotb-balance:ui-list-html] -->
+@@@ ui-detail-head|after|ui/app/05-memory-settings.js
+    // 余额后缀开关 + 余额值 + 立即刷新（[qqbotb-balance:ui-detail-head]）——仅群聊；默认关，按群开
+    const balState = kind === 'group' ? balanceRuleOf(cfg, chatId) : null;
+    const balanceCtlHtml = balState
+      ? '<label class="muted" title="打开后每 ' + balState.minutes + ' 分钟把「' + esc(balState.marker) + 'xx.xx」刷到本号的群名片尾部（只动这个群）">'
+        + '<input type="checkbox" id="mem-balance-chk"' + (balState.on ? ' checked' : '') + '> 💰 余额后缀</label>'
+        + ' <input id="mem-balance-val" type="text" class="btn btn-small" style="width:6em" value="' + esc(balState.amount) + '" title="余额（两位小数，0 或正数）——所有开启的群共用这一个值">'
+        + ' <button class="btn btn-small" id="mem-balance-sync" title="立即按当前余额刷一次群名片（不必等 30 分钟）">刷新</button>'
+        + ' <span id="mem-balance-status" class="muted"></span>'
+      : '';
+@@@ ui-detail-html|after|ui/app/05-memory-settings.js
+          ${balanceCtlHtml}<!-- [qqbotb-balance:ui-detail-html] -->
+@@@ ui-detail-bind|after|ui/app/05-memory-settings.js
+    // 余额后缀（[qqbotb-balance:ui-detail-bind]）——开关写 engage.balance.chats 并立即刷一次；
+    // 输入框改值（失焦 / 回车）写 engage.balance.value；「刷新」按钮立刻同步名片。
+    const balChkEl = detail.querySelector('#mem-balance-chk');
+    if (balChkEl && kind === 'group') {
+      balChkEl.addEventListener('change', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleBalanceChat(chatId, chatKey, balChkEl.checked);
+      });
+    }
+    const balValEl = detail.querySelector('#mem-balance-val');
+    if (balValEl && kind === 'group') {
+      const commit = () => setBalanceValue(chatId, chatKey, balValEl.value);
+      balValEl.addEventListener('change', commit);
+      balValEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      });
+    }
+    const balSyncEl = detail.querySelector('#mem-balance-sync');
+    if (balSyncEl && kind === 'group') {
+      balSyncEl.addEventListener('click', () => syncBalanceNow(chatId, chatKey));
+    }
+@@@ ui-fns|before|ui/app/05-memory-settings.js|blank
+/**
+ * 开 / 关某群的余额后缀（记忆页「💰 余额后缀」开关）。[qqbotb-balance:ui-toggle-fn]
+ *
+ * 写 config.engage.balance.chats——开着时宿主每 intervalMs（默认 30 分钟）把
+ * 「marker + 余额」刷到本号在该群的**群名片**尾部；关掉后宿主不再动这个群
+ * （已经加上的后缀不会自己消失——名片归群，要撤自己改回来）。
+ * 打开后立即刷一次，不用等下一个周期。
+ */
+async function toggleBalanceChat(groupId, chatKey, on) {
+  const id = String(groupId || '').trim();
+  if (!/^\d{1,15}$/.test(id)) { alert('该会话缺少群号，无法设置余额后缀'); return; }
+  const cfg = state.config || await api('/api/config');
+  const cur = ((((cfg.engage || {}).balance || {}).chats) || []).map(String);
+  const next = on ? (cur.includes(id) ? cur : [...cur, id]) : cur.filter((x) => x !== id);
+  try {
+    const data = await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ engage: { balance: { chats: next } } })
+    });
+    state.config = data.config;
+    if (on) await syncBalanceNow(id, chatKey, true);
+    if (state.currentMemoryChatKey === chatKey) await loadMemoryDetail(chatKey);
+    renderMemoryList();
+  } catch (e) {
+    alert(`保存失败：${e.message}`);
+  }
+}
+
+/** 写余额值（[qqbotb-balance:ui-value-fn]）——所有开启的群共用这一个数；本群开着就立即刷。 */
+async function setBalanceValue(groupId, chatKey, raw) {
+  const n = Number(String(raw == null ? '' : raw).trim());
+  if (!Number.isFinite(n) || n < 0) { alert('余额要填 0 或正数（如 12.34）'); return; }
+  const value = Math.round(n * 100) / 100;
+  try {
+    const data = await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ engage: { balance: { value } } })
+    });
+    state.config = data.config;
+    const st = balanceRuleOf(state.config, groupId);
+    if (st && st.on) await syncBalanceNow(groupId, chatKey, true);
+    if (state.currentMemoryChatKey === chatKey) await loadMemoryDetail(chatKey);
+    renderMemoryList();
+  } catch (e) {
+    alert(`保存失败：${e.message}`);
+  }
+}
+
+/** 立即刷一次群名片余额后缀（[qqbotb-balance:ui-sync-fn]）——按钮 / 开关 / 改值后用；silent 不弹窗。 */
+async function syncBalanceNow(groupId, chatKey, silent) {
+  const statusEl = document.querySelector('#mem-balance-status');
+  if (statusEl) statusEl.textContent = '刷新中…';
+  try {
+    const r = await api('/api/balance/sync', {
+      method: 'POST',
+      body: JSON.stringify({ chat: String(groupId || '') })
+    });
+    const one = ((r && r.results) || [])[0] || {};
+    const text = r && r.ok
+      ? (one.skipped ? '名片已是最新' : (one.card ? '名片已刷成 ' + one.card : '已刷新'))
+      : '刷新失败：' + (one.reason || (r && r.error) || '未知原因');
+    if (statusEl) statusEl.textContent = text;
+    else if (!silent) alert(text);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = '刷新失败：' + e.message;
+    else if (!silent) alert(`刷新失败：${e.message}`);
+  }
+}
+
+/** 取某群的余额后缀状态（[qqbotb-balance:ui-helpers]）——{on, amount, marker, minutes}；无群号返回 null。 */
+function balanceRuleOf(cfg, groupId) {
+  const id = String(groupId || '').trim();
+  if (!/^\d{1,15}$/.test(id)) return null;
+  const bal = ((cfg && cfg.engage && cfg.engage.balance) || {});
+  const chats = (Array.isArray(bal.chats) ? bal.chats : []).map(String);
+  const n = Number(bal.value);
+  const ms = Number(bal.intervalMs);
+  return {
+    on: chats.includes(id),
+    amount: Number.isFinite(n) && n >= 0 ? n.toFixed(2) : '0.00',
+    marker: String(bal.marker || '@余额'),
+    minutes: Number.isFinite(ms) && ms > 0 ? Math.round(ms / 60000) : 30
+  };
+}
+

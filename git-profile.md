@@ -52,9 +52,9 @@
 
 | 字段 | 值 |
 |:--|:--|
-| 上次同步时间 | 2026-10-25 13:31 |
-| 上次同步 commit | `b3fcc84` v0.83（发言档位五档 + 客观采集——补丁 `patch-qqagent-level.mjs` 13 点 / `patch-qqagent-level-ui.mjs` 8 点 + 自测 `verify-qqagent-level.mjs` 58 条；三份 verify 脚本随降级改写；档案面六件同步） |
-| 远程状态 | 与 origin 同步（`da2c826..b3fcc84`） |
+| 上次同步时间 | 2026-10-25 14:22 |
+| 上次同步 commit | `69e0730` v0.84（界面登录位闪烁 / 协议端控制台被顶回概览修复——`app/main.js` 三处 + `app/ui/app.js` 两处 + 档案面五件同步） |
+| 远程状态 | 与 origin 同步（`cfd34e0..69e0730`） |
 
 ## 五、项目特有规则
 

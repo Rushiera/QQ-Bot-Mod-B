@@ -2699,18 +2699,22 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * 语音——文字转语音（IrodoriTTS，中文自动翻日语）。
    *
    * @param {object} options 选项
-   * @param {string} [options.by] 触发来源
+   * @param {string} [options.by] 触发来源（qq = 群内点名 · auto = 群开关自动语音 · app = 界面）
    * @param {string|number} [options.chat] 来源群
    * @param {string} options.text 要说的内容
    * @param {string} [options.caption] 风格描述
-   * @returns {Promise<object>} { ok, text?, message?, error?, vipOnly? }
+   * @param {boolean} [options.auto] 伴随模式——文字已由发言方发过，只发音频
+   * @param {boolean} [options.queue] 排队口径（群语音伴随：忙时入队，不拒）
+   * @param {string} [options.runMode] 强制档位（small = 依田芳乃 · v4.1-Small）
+   * @returns {Promise<object>} { ok, text?, message?, error?, vipOnly?, queued? }
    */
-  async function ttsSpeak({ by = 'app', chat = null, text = '', caption = '' } = {}) {
-    const gate = mediaGate({ by, chat, feature: '语音生成' });
+  async function ttsSpeak({ by = 'app', chat = null, text = '', caption = '', auto = false, runMode = '', queue = false } = {}) {
+    const gate = mediaGate({ by, chat, feature: auto ? '群自动语音' : '语音生成' });
     if (!gate.ok) return gate;
-    const result = await media.ttsSpeak({ chat: gate.chat, text, caption });
+    const result = await media.ttsSpeak({ chat: gate.chat, text, caption, auto, runMode, queue });
     if (result.ok) {
-      state.noteCommand({ chat: gate.chat, target: '', text: `（语音）${String(text).slice(0, 60)}`, result: '已提交' });
+      const label = auto ? '（自动语音）' : '（语音）';
+      state.noteCommand({ chat: gate.chat, target: '', text: `${label}${String(text).slice(0, 60)}`, result: result.queued ? `排队第 ${result.queued} 句` : '已提交' });
     }
     return result;
   }
@@ -2872,10 +2876,14 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     }),
     'POST /api/nav/tts': async ({ body }) => ({
       body: await ttsSpeak({
-        by: body?.by === 'qq' ? 'qq' : 'app',
+        // by 只认 'qq'（群内点名）与 'auto'（群开关自动语音，仍要过群 + 功能开关）——其余按操作者通道
+        by: body?.by === 'qq' ? 'qq' : (body?.by === 'auto' ? 'auto' : 'app'),
         chat: body?.chat ?? null,
         text: body?.text ?? '',
-        caption: body?.caption ?? ''
+        caption: body?.caption ?? '',
+        auto: body?.auto === true,
+        runMode: body?.runMode ?? '',
+        queue: body?.queue === true
       })
     }),
     'POST /api/nav/tagger': async ({ body }) => ({

@@ -2991,3 +2991,78 @@ R喵喵：交接摘要已注入，等待确认
 1. **生效需重启业务面**（`启动QQBotB.vbs`）——`Start-Process` 被引擎拦，本会话无通道起进程；UI 改动另需刷新页面（记忆页）。
 2. **功能面真链路待重启后验**：重启 → 记忆页给某群勾上「💰 余额后缀」→ 填值 → 点「刷新」→ 群里看本号名片尾部是否出现「@余额xx.xx」；再等 30 分钟看 `data/logs/qq-agent-*.log` 的 `balance` 行是否按周期出现（值没变应为 `skipped`，不产生写请求）。
 3. **映射接口未接数据源**：`source` 目前只认 `manual`；接自动余额时改 `resolveBalance()` 并填 `endpoint` / `field`。
+
+## 七十四、群语音伴随（v0.86 · 2026-10-25）
+
+**需求（Rushiera 口述）：** 记忆里可以给某个群开 TTS；用 Irodori 的「依田芳乃 · v4.1-Small」；开了之后**所有决定发到群里的发言**都再过一次 TTS——转成日语口语表达，发到群里。
+
+**口径澄清（Rushiera 2026-10-25 追加）：** 合成能力由 **ComfyDock** 提供，群 bot 本来就有「念一句」的工具（`tts_speak`）——本次要做的是**接口**：业务面在每句发言发出去之后，把这句话交给单体念一遍，不必新造合成链。
+
+### A · 落点
+
+| 面 | 文件 | 内容 |
+|:--|:--|:--|
+| 配置 | `_unpack/resources/app/src/config.js`（engage 尾） | `engage.voiceReply` 默认段：`enabled:true` · `chats:[]`（默认全关）· `runMode:'small'`（依田芳乃 · v4.1-Small）· `maxChars:500` · `caption:''` |
+| 模块 | `_unpack/resources/app/src/voice-reply.js`（新增） | `voiceRule()` / `voiceChats()` / `isVoiceChat(chatKey)` / `voiceReply(chatKey, text)`——只做转发，POST `127.0.0.1:3280/api/nav/tts`（`by:'auto'` · `auto:true` · `queue:true` · `runMode`） |
+| 发送面 | `_unpack/resources/app/src/sender.js` | import + `sendTextBatch` 里**发送成功之后**挂 `voiceReply(chatKey, text)`（只在 `kind === 'group'`）；不 await、不抛出 |
+| 单体·执行体 | `app/src/navigator/media.js` | `ttsSpeak` 增 `auto` / `runMode` / `queue`；抽出 `runTtsJob`（档位强制写 `cfg.RunMode`）；`waitTts` 增 `auto`（不补发文字配文）；排队三件 `ttsQueue` / `ttsDraining` / `drainTts()` + 上限 12 句 |
+| 单体·路由 | `app/src/navigator/index.js` | `ttsSpeak` 透传 `auto` / `runMode` / `queue`（闸门 feature 名按 auto 分「群自动语音」）；`POST /api/nav/tts` 认 `by:'auto'` + `queue` |
+| UI | `_unpack/.../ui/app/05-memory-settings.js` | 记忆页详情头「🔊 语音伴随」开关 + 「依田芳乃 · v4.1-Small · 每句 ≤N 字」说明（仅群聊）；列表徽标 `🔊 语音`；两个写面函数 `voiceRuleOf` / `toggleVoiceChat` |
+| 补丁 | `tools/patch-qqbotb-voicereply.mjs`（新增）+ `tools/templates/voice-reply.js` | `_unpack/` 不入 git，运行副本改动的唯一重放通道；10 个补丁点全带 `[qqbotb-voicereply:*]` 标记，重跑全 skipped；模块「内容不同即同步」 |
+| 自测 | `tools/verify-qqbotb-voicereply.mjs`（新增） | 30 条判据（纯函数真跑 + 源码断言） |
+| 探测 | `tools/probe-tts-duration.mjs`（新增） | 读 `app/data/media-out/*.wav` 的 RIFF 头算真实时长（不解码音频） |
+
+### A2 · 30 秒上限取证（Rushiera 追问「语音好像最大只能发 30 秒」）
+
+| 判据 | 证据 |
+|:--|:--|
+| 运行时默认夹取 | `irodori-tts/inference_runtime.py:218` `max_seconds: float = 30.0`；:1257 `min(max_seconds, max(min_seconds, manual_seconds))`；:1324 `max_frames = floor(max_seconds * sample_rate / hop)` |
+| ComfyDock 未传该字段 | `ComfyDock/Tts/TtsWorkerScript.cs:175-186` 与工作副本 `data/tts/tts_worker.py:164-175`——`SamplingRequest(...)` 参数表里**没有** `max_seconds` |
+| checkpoint 训练窗口就是 30 秒 | `irodori_tts/config.py:190-194` `max_latent_steps = 750` · `fixed_target_latent_steps = 750`；`configs/train_v4_small.yaml:72-88` 同；750 × 1920 / 48000 = **30.000s** |
+| 越过时的后果 | `inference_runtime.py:1347-1355` 运行时自己警告「Long-tail stability may degrade」——不是不出声，是音质垮 |
+| 产物实锤 | 17 条 `app/data/media-out/*.wav` 里 9 条恰好 **30.000s / 2,880,044 字节 / 48 kHz**（有内容可念却停在 30s = 被夹，不是句末） |
+| 语速实测 | `tools/probe-tts-length.mjs`：日语 59 字 → 16.88 秒 → **3.495 字/秒**；30 秒 ≈ **104 字**、20 秒 ≈ 69 字 |
+
+**结论：** 上限抬不动（运行时默认 + 训练窗口两处都在 IrodoriTTS 侧，改 checkpoint 才算越界）。处置改为**先切后念**：`maxChars` 默认 **90 字**（约 26 秒，留停顿余量）；单体 `clipForSpeech(japanese, TTS_MAX_CHARS=100)` 再兜一道，切点优先句末标点（。！？…；）、其次逗号级、最后才硬切。
+
+### A3 · 档位分层（Rushiera 2026-10-25）
+
+| 口径 | 档位 | 理由 |
+|:--|:--|:--|
+| **手工念**（群里 @「念一下」/ 界面点按钮） | `large-int8` | 音质优先；用户明确要听这一次 |
+| **语音伴随**（每句发言都念，`auto` / `queue`） | `small`（依田芳乃 · v4.1-Small） | 省时省显存；群里一直念，量大 |
+
+实现：`ttsSpeak` 取 `runMode || ((auto || queue) ? 'small' : 'large-int8')`——显式传优先于默认。
+
+### B · 关键判据
+
+| 规则 | 判据 |
+|:--|:--|
+| 触发点 | **发送成功之后**（`#markSent` 之后、return 之前）——语音不是发言的前置，OneBot 失败的句子不该被念 |
+| 只对群 | `String(kind) === 'group'`——私聊没有群号，也没有「群里听声」的需求 |
+| 档位分层 | 手念 `large-int8` / 伴随（auto、queue）`small`——见 A3 |
+| 字数窗口 | 业务面按**中文 60 字**切；单体翻译后按 `clipForSpeech(japanese, 100)` 再兜一道（≈28.6 秒），切点优先句末标点——见 A2 |
+| 续接指令 | 语音**不参与**「重来 / 再来一次」——伴随语音自动触发，重来时再调 `tts_speak` 会让群里出现两条一样的语音；教材已写死（`role/media-rules.md` + `NAV_QUICK`） |
+| 不补文字 | `waitTts` 的 `if (!auto)` 分支——文字已由发言方发过；连 `sayRecord` 的 caption 也置空，避免「语音 · 前 40 字」再露一遍 |
+| 排队而非回绝 | `queue=true` 入队，`drainTts` 串行「提交 → 等收口 → 下一句」；手动路径仍「忙就回绝」 |
+| 队列上限 | 12 句，超出丢最旧并 `record('error', ...)` 出声——不静默截断 |
+| 失败面 | 转发失败 `logger.warn`；合成失败 / 超时由单体 `say` 回群告知（沿用既有 `waitTts` 语义） |
+
+### C · 自测
+
+| 判据 | 结果 |
+|:--|:--|
+| `node --check` × 5 | `voice-reply.js` / `sender.js` / `config.js` / `media.js` / `05-memory-settings.js` 全 0 错 |
+| `node tools/verify-qqbotb-voicereply.mjs` | **30/30** ALL PASS（含 `clipForSpeech` 四条纯函数断言 + 档位分层断言） |
+| 补丁复跑 | `skipped 9 · synced 1`（幂等实锤：模块内容变更时同步、其余跳过） |
+| 消费点只读 | `GET /api/tts` → `plan.label = 依田芳乃 · v4.1-Small · 全 GPU` · `runMode=small` · `env.canGenerate=true`；ComfyDock 在线 |
+| 时长探针 | `node tools/probe-tts-duration.mjs` → 17 条 wav · 48 kHz · 2.08~30s · 其中 9 条恰好停在 30.000s（夹取实锤） |
+| 语速实测 | `node tools/probe-tts-length.mjs`（临时脚本，跑在 `tools/CatTemp`）→ 59 字 / 16.88s = **3.495 字/秒** |
+
+### D · 遗留
+
+1. **生效需重启业务面**（双击 `启动QQBotB.vbs`）——`Start-Process` 被引擎拦，本会话无通道起进程；改的是 `_unpack` 运行副本 + `app/src` 单体源码，两者都要重启才吃下。UI 另需刷新页面（记忆页）。
+2. **真链路待验**：重启 → 记忆页给某群勾「🔊 语音伴随」→ 群里让 bot 说一句话 → 期望「文字一条 + 语音一条」，且语音条不带「语音 · …」caption；连说两句应依次念完（第 2 句入队不丢失）。
+3. **补丁点 `ui-helpers` 的坑（已修）**：初版该点名 `ui-fns`、标记串取 `[qqbotb-voicereply:ui-helpers]`，与插入内容自带的标记不一致 → 重跑会再插一份函数（实测出现两份 `voiceRuleOf`）。已改点名对齐标记串；本机副本里多出的一份已用正则合并。
+4. **30 秒上限不抬（判定已定）**：运行时默认 + checkpoint 训练窗口两处都在 IrodoriTTS 侧，抬它要改 checkpoint（越界且音质会垮）；处置 = 字数窗口（中文 60 字 / 日语兜底 100 字）+ 先切后念。若日后要「整段念完」只有两条路：拆多条语音（现状即如此，最稳）或改运行时 `max_seconds` 并接受尾部稳定性下降（未做）。
+5. **运行态 maxChars 已热写**：`POST /api/config` 把 `engage.voiceReply.maxChars` 500 → **60**（读回复核：chats / runMode / enabled 三项原样），无需等重启即对**下一句**生效。

@@ -86,3 +86,4 @@
 | `WD Tagger` | ComfyDock 的本地图片反推打标生成器（WD EVA02-Large Tagger v3）——输出 Danbooru 风格通用标签 / 角色标签 / 分级；群内工具 `wd_tag` |
 | `提示词自动翻译` | 群内生成能力的翻译层（`navigator.media.translate`）——MOSS 中文提示词 → 英文；IrodoriTTS 中文台词 → 日语；结构化 JSON 提示词只翻中文字段、保持结构 / 键名 / bbox |
 | `反推提示词` | 用户口语：把一张图交给 WD Tagger 产出可复用的提示词标签；对应工具 `wd_tag(messageId?)` |
+| `语音伴随` | 按群把本号的**每一句群文字发言**再用 TTS 念一遍日语发回群（2026-10-25）——音色固定 `依田芳乃 · v4.1-Small`，中文自动翻日语口语；开关按群（记忆页「🔊 语音伴随」，写 `config.engage.voiceReply.chats`，默认全关）；载体 `src/voice-reply.js`（业务面转发）+ 单体 `POST /api/nav/tts`（`by=auto` + `queue=true`，串行排队念完）；失败只落日志不阻断发言——见 `design-qqbotb-engage.md` §十七 |

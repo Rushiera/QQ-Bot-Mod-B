@@ -24,6 +24,59 @@ const TTS_TIMEOUT_MS = 10 * 60 * 1000;
 const TAGGER_TIMEOUT_MS = 3 * 60 * 1000;
 
 /**
+ * 单次语音合成的**字数窗口**——由 30 秒硬上限反推。
+ *
+ * 实测（2026-10-25 · `tools/probe-tts-length.mjs`，日语 59 字 → 16.88 秒）：
+ *   **3.5 字/秒** → 30 秒 ≈ 104 字。取 100 留一点余量（标点、停顿、语速波动）。
+ *
+ * 上限为什么是 30 秒：IrodoriTTS 的 `SamplingRequest.max_seconds` 默认 30.0
+ * （irodori-tts inference_runtime.py），ComfyDock 的 worker 构造时没传该字段；
+ * checkpoint 的训练窗口也正是 30 秒（`max_latent_steps = 750` · hop 1920 · 48 kHz）。
+ * 两处都不是本项目能改的——所以「长句」只能先切后念。
+ */
+const TTS_MAX_CHARS = 100;
+
+/**
+ * 按句截断到单次合成吃得住的长短（30 秒硬上限 · 约 3.5 字/秒）。
+ *
+ * 优先切在句末标点，切点太靠前退到逗号级，再不行才硬切——避免音频在句子中间断掉。
+ *
+ * @param {string} text 原文
+ * @param {number} [max] 字数上限（默认 TTS_MAX_CHARS）
+ * @returns {{text:string, clipped:boolean}} 结果
+ */
+function clipForSpeech(text, max = TTS_MAX_CHARS) {
+  const body = String(text ?? '').trim();
+  const limit = Number(max) > 0 ? Number(max) : TTS_MAX_CHARS;
+  if (!body || body.length <= limit) return { text: body, clipped: false };
+  const head = body.slice(0, limit);
+  const HARD = ['。', '！', '？', '!', '?', '…', '；', ';', '\n'];
+  const SOFT = ['，', '、', ',', ' '];
+  /**
+   * 在保留段里找最后一处给定标点。
+   *
+   * @param {string[]} set 标点集
+   * @returns {number} 下标（-1 = 没找到）
+   */
+  const lastOf = (set) => {
+    let idx = -1;
+    for (const ch of set) {
+      const at = head.lastIndexOf(ch);
+      if (at > idx) idx = at;
+    }
+    return idx;
+  };
+  const floor = Math.floor(limit * 0.4);   // 切太短不如硬切——半句话的语音没意义
+  let cut = lastOf(HARD);
+  if (cut < floor) {
+    const soft = lastOf(SOFT);
+    if (soft >= floor) cut = soft;
+  }
+  const use = cut >= floor ? cut + 1 : limit;
+  return { text: body.slice(0, use).trim(), clipped: true };
+}
+
+/**
  * 是否含中文（CJK 统一表意文字）。
  *
  * @param {string} text 文本
@@ -111,6 +164,55 @@ export function createMediaService({
   let mossBusy = false;
   let ttsBusy = false;
   let taggerBusy = false;
+
+  /**
+   * 语音排队（2026-10-25）——群语音伴随是一次发言排一句，几句话连着发时必须能依次念完。
+   *
+   * 语义：`queue` 口径进来的任务先入队，由单条 drain 循环串行执行（提交 → 等收口 → 下一句）；
+   * ComfyDock 侧本来就单任务，排队只是把「并发拒绝」换成「依次念」。手动路径（群内点名 /
+   * 界面点按钮）不入队，保持「上一句还在跑就明确回绝」的即时反馈。
+   */
+  const ttsQueue = [];
+  let ttsDraining = false;
+
+  /** 排队上限——超出丢最旧并出声（积压太久等于「念完这句时话题早过了」）。 */
+  const TTS_QUEUE_MAX = 12;
+
+  /**
+   * 队列里还有几句话（含正在念的那一句）。
+   *
+   * @returns {number} 待办条数
+   */
+  function ttsPending() {
+    return ttsQueue.length + (ttsBusy ? 1 : 0);
+  }
+
+  /**
+   * 单条 drain 循环——把队列按序念完；新的入队会重新唤起它。
+   *
+   * @returns {Promise<void>} 队列清空
+   */
+  async function drainTts() {
+    if (ttsDraining) return;
+    ttsDraining = true;
+    try {
+      while (ttsQueue.length) {
+        const job = ttsQueue.shift();
+        let result;
+        try {
+          result = await runTtsJob({ ...job, awaitDone: true });
+        } catch (error) {
+          result = { ok: false, error: String(error?.message ?? error) };
+        }
+        if (!result?.ok) record('error', `排队语音未成：${result?.error ?? '未知原因'}`);
+      }
+    } finally {
+      ttsDraining = false;
+      // 竞态收口：入队恰好落在「while 判空之后、finally 之前」时，那一句会被漏掉——
+      // 交给此刻再判一次（drainTts 同步重入安全：ttsDraining 已复位）。
+      if (ttsQueue.length) drainTts().catch((error) => record('error', `语音队列异常：${error?.message ?? error}`));
+    }
+  }
 
   /**
    * 调 ComfyDock 的 HTTP 接口。
@@ -421,11 +523,49 @@ export function createMediaService({
    * @param {string|number} options.chat 回报群
    * @param {string} options.text 要说的内容（中文自动翻日语）
    * @param {string} [options.caption] 风格描述（中文会一并翻日语）
+   * @param {boolean} [options.auto] 伴随模式（群开关开的自动语音）——
+   *   文字已由发言方发过，成果只发音频、不再补发文字配文
+   * @param {string} [options.runMode] 强制档位（small / large / large-int8 / large-gpu）——
+   *   空 = 按口径取默认：**手工念 → large-int8**（音质优先）· **伴随 / 排队 → small**（省时省显存）
+   * @param {boolean} [options.queue] 排队口径（群语音伴随）——忙时不回绝，入队串行念完
+   * @returns {Promise<object>} { ok, text?, message?, error?, queued? }
+   */
+  async function ttsSpeak({ chat, text, caption = '', auto = false, runMode = '', queue = false }) {
+    if (!String(text ?? '').trim()) return { ok: false, error: '文本是空的——语音要一句台词' };
+    // 档位默认（Rushiera 2026-10-25）：**手工念**（群里点名 / 界面按钮）用 Large int8——音质优先；
+    // **群语音伴随**（每句发言都念一遍）用 small——省时省显存。显式 runMode 优先于本默认。
+    const mode = String(runMode ?? '').trim().toLowerCase() || ((auto || queue) ? 'small' : 'large-int8');
+    // 排队口径（群语音伴随）：不参与「忙就拒」——几句话连着发时必须都能念到，
+    // 由单条 drain 循环按序合成；返回时只代表「已入队」。
+    if (queue) {
+      ttsQueue.push({ chat, text, caption, auto, runMode: mode });
+      // 积压上限：留最近 12 句（旧的丢，出声）——语音是伴随产物，宁可漏念也不越念越旧
+      while (ttsQueue.length > TTS_QUEUE_MAX) {
+        const dropped = ttsQueue.shift();
+        record('error', `语音排队超上限（${TTS_QUEUE_MAX}）——丢弃最旧一句：${String(dropped?.text ?? '').slice(0, 30)}`);
+      }
+      const ahead = ttsPending();
+      record('tts', `语音入队（第 ${ahead} 句待念）：${String(text).trim().slice(0, 40)}`);
+      drainTts().catch((error) => record('error', `语音队列异常：${error?.message ?? error}`));
+      return { ok: true, queued: ahead, message: `已入队（第 ${ahead} 句）` };
+    }
+    if (ttsBusy) return { ok: false, error: '上一句还在跑——先等它出来，或等它自然结束' };
+    return runTtsJob({ chat, text, caption, auto, runMode: mode, awaitDone: false });
+  }
+
+  /**
+   * 真正跑一句语音：探测 → 翻日语 → 写配置（含档位）→ 提交 → 收口。
+   *
+   * @param {object} options 选项
+   * @param {string|number} options.chat 回报群
+   * @param {string} options.text 要说的内容（中文自动翻日语）
+   * @param {string} [options.caption] 风格描述
+   * @param {boolean} [options.auto] 伴随模式——只发音频、不补文字配文
+   * @param {string} [options.runMode] 强制档位（空 = 沿用面板当前档）
+   * @param {boolean} [options.awaitDone] 等收口（排队口径用——念完才轮到下一句）
    * @returns {Promise<object>} { ok, text?, message?, error? }
    */
-  async function ttsSpeak({ chat, text, caption = '' }) {
-    if (ttsBusy) return { ok: false, error: '上一句还在跑——先等它出来，或等它自然结束' };
-    if (!String(text ?? '').trim()) return { ok: false, error: '文本是空的——语音要一句台词' };
+  async function runTtsJob({ chat, text, caption = '', auto = false, runMode = '', awaitDone = false }) {
     ttsBusy = true;
     let accepted = false;
     try {
@@ -452,6 +592,15 @@ export function createMediaService({
         return { ok: false, error: `读 ComfyDock TTS 配置失败：${error?.message ?? error}` };
       }
       const cfg = { ...(snapshot?.config || {}), text: japanese, caption: style };
+      // 档位强制（手念 large-int8 / 伴随 small）——写进 ComfyDock 的 RunMode 字段
+      const mode = String(runMode ?? '').trim().toLowerCase();
+      if (mode) cfg.RunMode = mode;
+      // 30 秒硬上限的兜底（2026-10-25）：日语文案超出单次合成窗口时先按句末切——
+      // 运行时会把超出部分**硬夹**在 30s（inference_runtime.py 的 max_seconds 夹取），
+      // 结果是音频在半句话上戛然而止。这里做「先切后念」，宁可少念一句，不留断句。
+      const spoken = clipForSpeech(japanese, TTS_MAX_CHARS);
+      cfg.text = spoken.text;
+      if (spoken.clipped) record('tts', `语音文案超 30 秒窗口——按句末切到 ${spoken.text.length} 字：${spoken.text.slice(0, 30)}`);
       let gen;
       try {
         const saved = await call('/api/tts/config', { method: 'POST', body: cfg });
@@ -463,7 +612,13 @@ export function createMediaService({
       if (gen?.ok !== true) return { ok: false, error: `TTS 未受理：${gen?.message ?? '未知原因'}` };
       accepted = true;
       record('tts', `语音已提交：${japanese.slice(0, 40)}`);
-      waitTts({ chat, source: String(text ?? '').trim() }).catch((error) => record('error', `语音收尾异常：${error?.message ?? error}`));
+      // 排队口径要把这一句念完才轮到下一句（waitTts 收口时释放 ttsBusy）；
+      // 手动口径不等——立即回执，收尾在后台轮询。
+      if (awaitDone) {
+        await waitTts({ chat, source: String(text ?? '').trim(), auto });
+      } else {
+        waitTts({ chat, source: String(text ?? '').trim(), auto }).catch((error) => record('error', `语音收尾异常：${error?.message ?? error}`));
+      }
       return { ok: true, text: japanese, message: gen.message };
     } finally {
       if (!accepted) ttsBusy = false;
@@ -476,9 +631,10 @@ export function createMediaService({
    * @param {object} options 选项
    * @param {string|number} options.chat 回报群
    * @param {string} options.source 用户原话（进回执标题）
+   * @param {boolean} [options.auto] 伴随模式——文字已发过，只发音频
    * @returns {Promise<void>} 完成
    */
-  async function waitTts({ chat, source }) {
+  async function waitTts({ chat, source, auto = false }) {
     const deadline = Date.now() + ttsWaitMs;
     try {
       while (Date.now() < deadline) {
@@ -508,8 +664,13 @@ export function createMediaService({
           }
           // 语音配文（Rushiera 2026-10-19 定）：语音发回前先把「说话内容」原文发一条文字——两条一起到。
           // 判例：17:52「念一下你是谁」只发了语音、文字一条没有（session mvf2sfsh · sent=[]）。
-          try { await sendText(chat, String(source || '').trim().slice(0, 500)); } catch (error) { record('error', `语音配文发送失败：${error?.message ?? error}`); }
-          const sent = await sendRecord(chat, file, `语音 · ${source.slice(0, 40)}`);
+          // 伴随模式（auto）除外：那条文字由发言方自己发过了，这里再补一条就是重复刷屏。
+          if (!auto) {
+            try { await sendText(chat, String(source || '').trim().slice(0, 500)); } catch (error) { record('error', `语音配文发送失败：${error?.message ?? error}`); }
+          }
+          // 伴随模式（auto）带「语音 · 前 40 字」会把刚发过的文字再露一遍——只用一条纯音频。
+          const caption = auto ? '' : `语音 · ${source.slice(0, 40)}`;
+          const sent = await sendRecord(chat, file, caption);
           record(sent.ok ? 'tts' : 'error', sent.ok
             ? `语音已发群（${path.basename(file)}）`
             : `语音发群失败：${sent.error}`);
@@ -643,9 +804,9 @@ export function createMediaService({
     }
   }
 
-  /** 是否有生成任务在跑。 */
+  /** 是否有生成任务在跑（语音另附队列长度——排队口径下「在跑」不等于「已有几句待念」）。 */
   function isBusy() {
-    return { moss: mossBusy, tts: ttsBusy, tagger: taggerBusy };
+    return { moss: mossBusy, tts: ttsBusy, ttsQueued: ttsQueue.length, tagger: taggerBusy };
   }
 
   return { mossDraw, ttsSpeak, wdTag, online, isBusy, endpoint };

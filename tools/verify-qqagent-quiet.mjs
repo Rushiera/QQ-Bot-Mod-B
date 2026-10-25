@@ -54,7 +54,17 @@ cfg.engage = {
     sweepMs: 5000,
     idleMs: 60000
   },
-  quiet: { enabled: true, chats: [], intervalMs: 21600000, organizeOnly: true }
+  quiet: { enabled: true, chats: [], intervalMs: 21600000, organizeOnly: true },
+  // 五档全放行（2026-10-25）：本自测验安静链路，不验参与率掷骰 ——
+  // 否则非安静群会被 60% 概率拦下，把"wake 带不带 quietOrganize"断言抖成假红。
+  levels: [
+    { name: '冰封', rate: 1, missCap: 0, organizeOnly: false },
+    { name: '保守', rate: 1, missCap: 0, organizeOnly: false },
+    { name: '标准', rate: 1, missCap: 0, organizeOnly: false },
+    { name: '活跃', rate: 1, missCap: 0, organizeOnly: false },
+    { name: '全开', rate: 1, missCap: 0, organizeOnly: false }
+  ],
+  levelByChat: {}
 };
 cfg.store = { ...(cfg.store || {}), contextTier: 4, contextSliderPos: 0, unifiedTier: true };
 cfg.commandMute = { enabled: true, command: '/安静', durationMin: 30, active: {} };
@@ -123,10 +133,17 @@ const PRIVATE = 'private:10001';
   check('补丁标记齐全（16 个源码点）', missing.length === 0, missing.join(',') || '16/16');
 
   const ui = fs.readFileSync(path.join(APP, 'ui', 'app', '05-memory-settings.js'), 'utf8');
-  const uiMarks = ['ui-list-quiet-def', 'ui-list-quiet-html', 'ui-detail-quiet-list',
-    'ui-detail-quiet-btn', 'ui-detail-quiet-html', 'ui-detail-quiet-handler', 'ui-toggle-fn'];
-  const uiMissing = uiMarks.filter((m) => !ui.includes('[qqagent-quiet-patch:' + m + ']'));
-  check('记忆页开关落点齐全（7 个 UI 点）', uiMissing.length === 0, uiMissing.join(',') || '7/7');
+  // 2026-10-25 五档改造：UI 的「安静模式」单按钮被五档选择器取代
+  // （patch-qqagent-level-ui.mjs）。老的 6 个 quiet UI 标记将随改造退场，
+  // 这里只核 quiet 语义仍在的落点 + 五档 UI 的 8 个新落点。
+  const quietUiStill = ['ui-toggle-fn'];
+  const quietUiMissing = quietUiStill.filter((m) => !ui.includes('[qqagent-quiet-patch:' + m + ']'));
+  check('安静模式写配置函数仍在（ui-toggle-fn）', quietUiMissing.length === 0, quietUiMissing.join(',') || '1/1');
+
+  const levelUi = ['list-badge', 'list-html', 'detail-state', 'detail-btn',
+    'detail-html', 'detail-bind', 'set-fn', 'helpers'];
+  const levelUiMissing = levelUi.filter((m) => !ui.includes('[qqagent-level-patch:ui-' + m + ']'));
+  check('记忆页五档选择器落点齐全（8 个 UI 点）', levelUiMissing.length === 0, levelUiMissing.join(',') || '8/8');
 
   const orch = fs.readFileSync(path.join(APP, 'src', 'orchestrator.js'), 'utf8');
   check('提示词拼接含 quietLine', orch.includes('+ browseLine + quietLine'));

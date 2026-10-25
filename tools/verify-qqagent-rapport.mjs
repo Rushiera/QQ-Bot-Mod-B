@@ -14,7 +14,8 @@
 //  10 教程段进系统提示（lean + full 都带）· 工具 adjust_rapport 已注册
 //  11 enabled=false → 闸门关闭（可回退）
 //  12 补丁落盘：八个文件的改动标记齐全（幂等可重放）
-//  13 客观结算（2026-10-19）：我发了话，下一批没人 @ / 引用 / 拍我 → 自动降分（-12）；
+//  13 客观结算（2026-10-19 · 2026-10-25 降级）：我发了话，下一批没人 @ / 引用 / 拍我
+//     → 判定与日志照跑，但降分量由档位 missCap 封顶（默认 0 = 只采集不降分）；
 //     有人接 → 加分（+6）· 主人豁免（exemptUsers）· 同一批只结算一次 · watch.enabled=false
 //     可回退 · 降下来的分在出站口真的会被拦（不是只写进文件）
 //
@@ -335,21 +336,26 @@ async function trySend(text, options = {}) {
   const VIP = '569145850';
   const ctx = { selfId: '10000', selfNickname: 'R喵', botName: 'R喵' };
 
-  // 18a 没人接 → 降 missDelta
+  // 18a 没人接 → 只采集、不降分（档位 missCap=0 封顶；2026-10-25 五档改造）
+  // 根因：闲聊群里"没人 @ 我"是常态（实测群 361820329 一个周期 1557 条里 @ 我 13 条），
+  // 拿它扣分等于系统性误判 —— 客观结算降级为采集面，判定与日志照跑，分数不动。
   clearRapportWatch();
   setRapport(KEY, T, 100);
   noteRapportOutbound(KEY, T, { name: '甲', sent: 1 });
   const miss = settleRapportWatch(KEY, [{ self: false, senderId: '20002', text: '在聊别的' }], ctx);
-  check('18a 没人接 → 自动降分（-12）', miss && miss.settled === true && miss.hit === false && miss.delta === -12,
+  check('18a 没人接 → 判定照跑但不降分（missCap=0）',
+    miss && miss.settled === true && miss.hit === false && miss.delta === 0,
     miss ? JSON.stringify(miss) : 'null');
-  check('18a 降分后分数 = 88', getScore(KEY, T) === 88, String(getScore(KEY, T)));
+  check('18a 降分后分数仍 = 100', getScore(KEY, T) === 100, String(getScore(KEY, T)));
 
-  // 18b 有人 @ 我 → 加分
+  // 18b 有人 @ 我 → 加分（先把分数压到 80，验证 +6 真生效）
   clearRapportWatch();
+  setRapport(KEY, T, 80);
   noteRapportOutbound(KEY, T, { name: '甲', sent: 1 });
   const hit = settleRapportWatch(KEY, [{ self: false, senderId: '20002', text: '@R喵 在吗', atMe: true }], ctx);
   check('18b 有人 @ 我 → 加分（+6）', hit && hit.hit === true && hit.delta === 6, hit ? JSON.stringify(hit) : 'null');
-  check('18b 加分后分数 = 94', getScore(KEY, T) === 94, String(getScore(KEY, T)));
+  check('18b 加分后分数 = 86', getScore(KEY, T) === 86, String(getScore(KEY, T)));
+  setRapport(KEY, T, 100);
 
   // 18c 引用我 / 拍我 也算接话
   clearRapportWatch();

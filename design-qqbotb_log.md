@@ -2780,3 +2780,121 @@ R喵喵：交接摘要已注入，等待确认
 1. **CH4 宿主全局 `vision.model` 仍是 `hy4-preview-f`** → 在新端 404，`image-analyze` 直接失败（本轮实测撞上）。`vision.api_config_id`（`6c107132` → 池 `newapi-47.250`）已指新端，只差模型名。归 CH4 配置面（本会话无 `config-*` 工具），已报 Rushiera。
 2. **`Data:config/llm-api.json` 的 `newapi-bak`（`7e5dd46a`）仍指旧端**且 `apiType` / `defaultModel` 都是 `hy4-preview-f`——LLM 池是人工面板专属面，工具面写不进。
 3. **同密钥共享 3 并发**：协商知识库批量轮与本业务面同密钥，同时跑会撞 429（重试池会退让，风险低——业务面单会话串行）。
+
+---
+
+## 七十一、发言档位五档 + 客观采集（v0.83 · 2026-10-25）
+
+> 来源：Rushiera 2026-10-25「回应参数是之前不知道怎么调控群 bot 发言的临时方式，现在你收集到了数据，可以给这个硬闸降级……但是还是要确保保守不要太热闹」+「我不希望修改 5/2min 的限制，这个限制应当保持，节拍也不要改，想别的方法」+「你可以再增加更多的客观参数调整项」+「直接做完，开始把」。
+> 判例输入：`usage-days/2026-10-19.json`（1138 次调用 / 459 条发言）+ 群 361820329 归档 `group_361820329_1792686251913.json`（1557 条里 `self:true` 34 条 = 2.2%、`atMe:true` 13 条 = 0.84%）。
+
+### A · 诊断（为什么"话变少却查不出原因"）
+
+| # | 事实 | 证据 |
+|:--:|:--|:--|
+| ① | 出站闸拦下的发送**不写日志** | `sender.#checkRate` 五道闸只在抛错时把错误回给模型 → 群里话少了，日志里只有"发送量骤降 + 结算行数暴增"可反推 |
+| ② | 客观结算把"没人 @ 我"当成"不想听我说话" | `missDelta=12`，10-20 一天触发 44 次，分数 88→80→70；而闲聊群里 @ 率实测 **0.84%**，这条信号必然是高频误判 |
+| ③ | 发言量由最严的那道闸单独决定 | `quotaState` 取两道闸更严者；且 5 道闸互不知情，任一触发就静默 |
+| ④ | `store.contextTier` 已被 browse 强制覆写 | `storeConfigForChat`：browse 开启时强制 `contextTier=4` → **老的响应档位滑条已失效**，分档绝不能复用它 |
+
+### B · 设计（三旋钮，全在配额与节拍表之外）
+
+| 档 | 名 | 入场率 | organizeOnly（只整理不发言） |
+|:--:|:--|--:|:--:|
+| 1 | 冰封 | 0（非 @ 不进 LLM） | ✅ |
+| 2 | 保守 | 25% | — |
+| 3 | 标准 | 60% | — |
+| 4 | 活跃 | 85% | — |
+| 5 | 全开 | 100% | — |
+
+**硬边界（Rushiera 定，实测核验已写成断言）**：`engage.quota` 恒为 `120000ms / 5 条`；`engage.browse.levels` 恒为 `[240000, 120000, 60000]`。两条由 `verify-qqagent-level.mjs` §7 以正则核验"原样未动"。
+
+**为什么用入场率而不是继续加出站闸**：出站闸只能拦住"已经想说的话"，压不住"想说"本身。10-22 实测进 LLM 267 批 / 只发出 76 条（0.28），说明瓶颈在入场面。
+
+**未命中时不推进已读**：判定插在 `unread<=0` 早退之后、`markIdleFired` / `logger.info` 之前；未命中 `continue`，那批消息留在未读里等下一拍，一条不丢。
+
+**冰封档兼容老字段**：`engage.quiet.chats` 保留为冰封档别名（`levelForChat` 与 `isQuietChat` 双向认同），老配置启动即生效、不清空。UI 选 1 时双写 `quiet.chats`。
+
+### C · 回应参数降级（硬闸 → 采集面）
+
+| 项 | 改前 | 改后 |
+|:--|:--|:--|
+| `settleRapportWatch` 的降分量 | `missDelta=12` 直接扣 | `Math.min(missDelta, paramsFor(chatKey).missCap)`，而五档默认 `missCap=0` → **判定与日志照跑，分数不动** |
+| 分数来源 | 客观结算 + 模型手调 | 仅模型手调 `adjust_rapport` + 自愈加分 |
+| `maxCooldownMs` | 1200000 | **不变**（模型真要降分时，20 分钟兜底还在） |
+
+### D · 客观信号（先采集，默认不参与判定）
+
+`engage-signals.js` 六信号纯函数（只用存档已有字段）：
+
+| 信号 | 口径 | 系数 |
+|:--|:--|:--|
+| `share` | `self / 总数` | ≤15% 不罚；>15% 线性收到下限 0.5 |
+| `atRate` | `atMe / 总数` | ≥3% → ×1.15，否则不动（低是常态，不罚） |
+| `askDensity` | 像提问的比例 | ≥25% → ×1.1 |
+| `hourFactor` | 当前小时 | 23–7 点 ×0.5 |
+| `costFactor` | 当日成本 | >100 元 ×0.7 · >50 元 ×0.85 |
+| `missFactor` | 连续未接拍数 | 每拍 −0.05，下限 0.5 |
+
+合成走**几何平均**（六项等权，下限 `floor=0.15`，上限 1.15）——单信号偏低不会一票否决，多个同时偏低才平滑收敛。`engage.signals.enabled` 默认 **false**（只采集），跑几天看分布再决定启用。
+
+### E · 采集面
+
+`engage-metrics.js` → `data/metrics/engage-<YYYY-MM-DD>.jsonl`（append-only，保留 30 天）：
+
+| event | 触发点 | 字段 |
+|:--|:--|:--|
+| `roll` | 每拍到点有未读 | `chat / level / rate / roll / hit / unread / idle` |
+| `blocked` | 出站闸拦下（新增观测点） | `chat / gate / why / level` |
+
+`sender.js` 的 `noteBlocked(chatKey, gate, message)` 挂在 `hardLimit` 与 `quota` 两道闸抛错前——**这就是"哪道闸在拦"的实锤**，原先完全缺失。
+
+### F · UI（记忆页）
+
+「🤫 安静模式」单按钮 → **五档下拉**（`1·冰封 / 2·保守 / 3·标准 / 4·活跃 / 5·全开`），写 `engage.levelByChat[群号]`；选 1 时双写 `quiet.chats`，选 2~5 时从 `quiet.chats` 摘掉。列表徽标从「🤫 安静」改为显示当前档名（冰封蓝 / 活跃·全开橙 / 其余灰）。
+
+### G · 落点
+
+| 件 | 改动 | 类型 |
+|:--|:--|:--|
+| `src/engage-level.js` | 五档表 / `levelForChat` / `paramsFor` / `rollParticipation` / `levelHint` | 新增 107 行 |
+| `src/engage-signals.js` | 六信号纯函数 + `compositeCoefficient` + `signalSummary` | 新增 105 行 |
+| `src/engage-metrics.js` | JSONL 落盘 + 30 天清理 | 新增 61 行 |
+| `src/config.js` | `engage.levels` / `levelByChat` / `signals` 默认段 | 补丁 `config-levels` |
+| `src/orchestrator.js` | import 三模块 + `browse-tick-gate` 参与率判定 + `levelLine` 提示段 | 补丁 4 点 |
+| `src/rapport.js` | `missDelta` 按档位封顶 | 补丁 2 点 |
+| `src/sender.js` | `noteBlocked` + 两道闸拦截落采集 | 补丁 3 点 |
+| `src/quiet-mode.js` | `isQuietChat` 认同 `levelByChat=1` | 补丁 1 点 |
+| `ui/app/05-memory-settings.js` | 五档下拉 + 列表档名徽标 + `setEngageLevel` / `engageLevelOf` | 补丁 8 点 |
+| `tools/patch-qqagent-level.mjs` | 幂等补丁（13 点，含三份新文件全文） | 新增 |
+| `tools/patch-qqagent-level-ui.mjs` | 幂等补丁（8 点，UI 面独立成因改 UI 单独重放） | 新增 |
+| `tools/verify-qqagent-level.mjs` | 58 条判据 | 新增 |
+
+### H · 实测
+
+| 命令 | 结果 |
+|:--|:--|
+| `node tools/patch-qqagent-level.mjs --dry` | 13 点在位（首跑 applied 13，复跑 skipped 13） |
+| `node tools/patch-qqagent-level-ui.mjs --dry` | 8 点在位（首跑 applied 8，复跑 skipped 8） |
+| `node tools/verify-qqagent-level.mjs` | **58/58** |
+| `node tools/verify-qqagent-quiet.mjs` | **25/25**（UI 断言由"7 个 quiet 点"改为"1 个 quiet 写配置点 + 8 个五档点"） |
+| `node tools/verify-qqagent-rapport.mjs` | **52/52**（18a/18b 断言随降级改写：没人接 → `delta=0` 且分数仍 100；有人接 → 80+6=86） |
+| `node tools/verify-qqagent-browse.mjs` | **49/49**（自测配置五档全 `rate=1`，避免 60% 概率把节拍断言抖成假红） |
+| `node tools/verify-qqagent-session.mjs` | 20/20 · `verify-qqagent-memory.mjs` 43/43 · `verify-qqagent-engage.mjs` 27/27 · `verify-qqagent-hardlimit.mjs` 11/11 · `verify-qqagent-talkstyle.mjs` 22/22 · `verify-qqagent-botguard.mjs` 17/17 · `verify-qqagent-readcompact.mjs` 25/25 · `verify-qqagent-chatvoice.mjs` 19/19 |
+| `node tools/verify-import-integrity.mjs` | ALL PASS（66 文件 / 358 符号） |
+| `node --check` × 8 | `engage-level` / `engage-signals` / `engage-metrics` / `orchestrator` / `sender` / `rapport` / `config` / `quiet-mode` / `05-memory-settings.js` 全 0 错 |
+
+🔴 **过程中修掉的两个真问题**：
+
+1. **补丁脚本内嵌模板与磁盘漂移**：`patch-qqagent-level.mjs` 的三份 `addFile` 内嵌全文是手写的，与磁盘实际落盘内容有 3 处不一致（首行差异 `engage-level.js:11`）。补丁脚本是重装时的**唯一重放通道**，漂移会导致重装后产出不同代码。已写一次性同步脚本从磁盘回灌模板，复核结果 `LEVEL_JS/SIGNALS_JS/METRICS_JS → SAME`。
+2. **`verify-qqagent-level.mjs` 初版用了不存在的 `saveConfig`**：`config.js` 只导出 `updateConfig` / `setRuntimeConfig`。改为 `setEngage` 走 `setRuntimeConfig`（内存态，不落盘、不污染 sandbox 副本），且不受 `deepMerge` "对象合并不会清空旧键"的影响。
+
+另修一处实现：`computeSignals` 的 `askDensity` 分母从 `total` 改为 `other`（`total-self`）——提问密度是"别人在问"的度量，把我自己的发言算进分母会稀释信号。
+
+### I · 遗留
+
+1. **生效需重启业务面**（`启动QQBotB.vbs`）——`Start-Process` 被引擎拦，本会话无通道起进程。UI 改动另需刷新页面（记忆页）。
+2. **真链路验收待账号恢复**：账号 2405997337 自 10-23 00:02 离线，OneBot 断连至今；恢复后在群里设一次档位，看 `data/metrics/engage-<日期>.jsonl` 的 `roll` 行是否与配置档位一致、`blocked` 行是否只在真撞闸时出现。
+3. **客观信号未启用**（`engage.signals.enabled=false`）：跑 3 天后按 `data/metrics` 里的分布决定是否开，以及 `floor` 取多少。
+4. **单档目标日发言未实测**：五档的 `rate` 是按 10-19（459 条）/ 10-22（76 条）两个锚点插值出来的，真实日发言要跑过才校准。
+5. **`reply` 字段恒 null**：归档里 `"reply": null` 全命中，`rapport.pointsAtMe` 的"引用我"分支实际只靠文本前缀匹配（`selfNickname` 空 → 退到 `botName`）。`atRate` 信号想算准需先补这个字段。

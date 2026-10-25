@@ -60,6 +60,16 @@ cfg.engage = {
   ...(cfg.engage || {}),
   quota: { enabled: true, windowMs: 120000, maxPerWindow: 5 },
   hardLimit: { enabled: false, windowMs: 60000, maxPerWindow: 1 },
+  // 发言档位：本自测只验节拍/补拍链路，不验参与率掷骰 —— 五档全部 rate=1，
+  // 让入场判定恒放行，断言才不会被 60% 概率抖成假红（真档位判定见 verify-qqagent-level.mjs）。
+  levels: [
+    { name: '冰封', rate: 1, missCap: 0, organizeOnly: false },
+    { name: '保守', rate: 1, missCap: 0, organizeOnly: false },
+    { name: '标准', rate: 1, missCap: 0, organizeOnly: false },
+    { name: '活跃', rate: 1, missCap: 0, organizeOnly: false },
+    { name: '全开', rate: 1, missCap: 0, organizeOnly: false }
+  ],
+  levelByChat: {},
   browse: {
     enabled: true,
     levels: [240000, 120000, 60000],

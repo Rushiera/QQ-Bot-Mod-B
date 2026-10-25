@@ -2898,3 +2898,52 @@ R喵喵：交接摘要已注入，等待确认
 3. **客观信号未启用**（`engage.signals.enabled=false`）：跑 3 天后按 `data/metrics` 里的分布决定是否开，以及 `floor` 取多少。
 4. **单档目标日发言未实测**：五档的 `rate` 是按 10-19（459 条）/ 10-22（76 条）两个锚点插值出来的，真实日发言要跑过才校准。
 5. **`reply` 字段恒 null**：归档里 `"reply": null` 全命中，`rapport.pointsAtMe` 的"引用我"分支实际只靠文本前缀匹配（`selfNickname` 空 → 退到 `botName`）。`atRate` 信号想算准需先补这个字段。
+
+---
+
+## 七十二、自研单体界面「登录位闪 / 控制台被顶回概览」修复（v0.84 · 2026-10-25）
+
+> 来源：Rushiera 2026-10-25「我感觉我们那个自研单体好像一直在未登录和已登录那里闪」+「然后点其他的比如说协议端控制台也会被一直拉到概览页面」。
+
+### A · 现象与取证
+
+| # | 现象 | 取证 |
+|:--:|:--|:--|
+| ① | 点「协议端控制台」秒回「概览」 | `app/main.js` 的 `did-fail-load` 回调**不看 `isMainFrame`**：任何 frame 加载失败都 `loadURL` 整个主窗 → 界面重载回初始标签页 |
+| ② | 概览「账号登录」卡在「已登录 / 未登录 / 协议端不可达」之间抖 | `app/ui/app.js` 的 `refreshLogin` 每 15 秒一次；接口抛错直接 `return`（保留旧值），但只要拿到 `ok:false` 就写「协议端不可达」——协议端重启期（`fetch failed` 与 `code:0` 交替）就一帧真一帧假 |
+| ③ | 抖动源有两条独立成因 | ①界面重载本身会重跑 `refreshLogin()`；②协议端 Worker 重启（`账号状态变更为离线` → `[Login] 账号已离线，正在重启 Worker`）期间 `/api/QQLogin/CheckLoginStatus` 数次 `fetch failed` |
+| ④ | 启动日志里「凭据注入」反复出现 | `boot.log` 2026-10-25 05:32 / 05:35 两次 `协议端控制台凭据注入失败：Render frame was disposed` —— 注入后会 `location.reload()`，frame 被销毁与事件叠加 |
+
+### B · 根因（两处）
+
+**根因一 · 免登录注入的判据与写入形态不匹配。** 协议端 WebUI 前端读 token 走 `useLocalStorage`（`JSON.parse`），写入形态是 **JSON 字符串字面量**（带引号）；它启动时还会做一次「裸串 → 带引号」迁移（`Vo&&!Vo.startsWith('"')&&localStorage.setItem(lt.token,JSON.stringify(Vo))`）。而 `main.js` 原实现 `localStorage.setItem('token', "<裸串>"); location.reload();`：
+
+- 写入裸串 → 前端迁移把它改成 `"<裸串>"`（带引号）
+- 下一轮 `did-frame-finish-load` 时旧实现的 `injectedFrames` 集合按 **frame.url** 去重——同一 URL 只注入一次，一旦主窗重载集合仍在内存里，**新 frame 会被当"已注入"跳过**；而 `injectedFrames` 记的是旧 frame 的记录，与实际状态脱节
+- 与根因二叠加：frame 失败 → 主窗重载 → frame 重建 → 注入 → reload → …… 自激
+
+**根因二 · `did-fail-load` 不分主 frame。** 子 frame（控制台 iframe）任何加载失败都触发主窗 `loadURL`，把界面打回「概览」。并且 `ERR_ABORTED(-3)`（加载被后续导航顶替，注入后主动 reload 必然产生）也被当失败处理 → 重载。
+
+### C · 修法（`app/main.js` + `app/ui/app.js` 两文件）
+
+| 点 | 文件 | 内容 |
+|:--:|:--|:--|
+| 1 | `main.js` | `did-fail-load` 增 `isMainFrame` 判据：**子 frame 失败只落 `boot.log`，绝不重载主窗**；`errorCode === -3`（ERR_ABORTED）直接忽略；主 frame 失败才重载并记原因 |
+| 2 | `main.js` | 免登录注入判据改为**按值比对**：`JSON.parse(localStorage.token) === 凭据` 才视为已就绪；不等才写入（写入形态 = `JSON.stringify(凭据)`，与协议端同形态）并 `location.reload()`。删掉 `injectedFrames` 集合——主窗重载后 frame 重建，集合会记住旧记录而跳过新 frame |
+| 3 | `main.js` | 注入期取凭据从「40 轮 × 1 秒」（启动期专用）改为「3 轮 × 300 毫秒」——frame 走到 `finish-load` 时协议端已就绪，长重试只会拖住事件循环 |
+| 4 | `ui/app.js` | 去掉启动即 `loadWebui()`——协议端控制台改**纯懒加载**（首次切到该页签才请求）；`switchView('webui')` 在 frame 无 `src` 时补加载（上次失败可重试） |
+| 5 | `ui/app.js` | `refreshLogin` 抗闪：`ok:false` / `fetch failed` 时**不改状态位与阶段**（保留上一次已知值），只在提示行标「连接中…（原因）」并禁用两个按钮；且**连续两次失败**才标注（15 秒一次轮询，偶发一次不动显示）；恢复即清计数 |
+
+### D · 验证
+
+| 判据 | 结果 |
+|:--|:--|
+| `node --check app/main.js` | 0 错 |
+| `node --check app/ui/app.js` | 0 错 |
+| 注入判据行为自测（同构脚本，CatTemp 用完即删） | 首次 `false`（需刷新）→ 落盘形态 `"sc-test-credential-abc"`（带引号）→ 第二次 / 第三次 `true`（不刷新）→ 裸串旧值 `false` 并改写为带引号形态 → 再判 `true` |
+| 界面服务回读（`GET /app.js`） | 已含新代码（`连接中…（` 与 `frame?.getAttribute('src')` 两处命中） |
+
+### E · 遗留
+
+1. **生效需重启自研单体**（`启动QQBotB.vbs`）——`main.js` 是 Electron 主进程，热改不生效；`ui/app.js` 是静态文件，重启后刷新页面即加载。
+2. **真链路复验待人工**：重启后点「协议端控制台」应稳定停留（不再被顶回概览）、概览「账号登录」状态位在协议端 Worker 重启期不再抖。判据：`app/data/boot.log` 里不再连续出现「已注入协议端控制台凭据」，只出现一次（首个 frame）。

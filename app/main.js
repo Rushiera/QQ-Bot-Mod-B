@@ -87,29 +87,53 @@ function createWindow(port) {
 
   // 协议端控制台免登录：iframe 加载完成后把凭据写进它的 localStorage（token 键），
   // 再让该 frame 自刷新——用户打开子页就是已登录状态，不用去翻启动日志找密钥。
-  const injectedFrames = new Set();
+  // 🔴 写入形态必须是 **JSON 字符串字面量**（带引号）：协议端前端用 useLocalStorage 读 token
+  //    走 JSON.parse，裸串会解析失败；它的启动迁移会把裸串自动改写成本形态
+  //    （`Vo&&!Vo.startsWith('"')&&localStorage.setItem(lt.token,JSON.stringify(Vo))`）。
+  //    判据也按解析后的值比对——拿裸串直接比字面量，会在迁移改写后恒不相等 → 每轮注入都重刷，
+  //    与 did-fail-load 的兜底重载叠成循环（判例 2026-10-25：点「协议端控制台」被反复拉回概览）。
   mainWindow.webContents.on('did-frame-finish-load', async () => {
     if (!core || !mainWindow) return;
     for (const frame of mainWindow.webContents.mainFrame.framesInSubtree) {
       if (!/^http:\/\/127\.0\.0\.1:\d+\/webui/.test(frame.url)) continue;
-      if (injectedFrames.has(frame.url)) continue;
-      injectedFrames.add(frame.url);
       try {
-        const credential = await core.webuiCredential();
+        // frame 能走到 finish-load 说明协议端已就绪——取凭据不必走启动期那套 40 轮重试，
+        // 但给三轮小退避：凭据接口偶发失败不该让控制台停在未登录页
+        const credential = await core.webuiCredential(3, 300);
         if (!credential) {
           bootLog('协议端控制台凭据为空，跳过自动登录');
           continue;
         }
-        await frame.executeJavaScript(
-          `localStorage.setItem('token', ${JSON.stringify(credential)}); location.reload();`
+        const applied = await frame.executeJavaScript(
+          `(() => {
+            const want = ${JSON.stringify(credential)};
+            const raw = localStorage.getItem('token') || '';
+            let parsed;
+            try { parsed = JSON.parse(raw); } catch { parsed = undefined; }
+            if (parsed === want) return true;
+            localStorage.setItem('token', JSON.stringify(want));
+            return false;
+          })()`
         );
+        if (applied) continue;
         bootLog('已注入协议端控制台凭据（自动登录）');
+        await frame.executeJavaScript('location.reload()');
       } catch (error) {
         bootLog(`协议端控制台凭据注入失败：${String(error?.message ?? error)}`);
       }
     }
   });
-  mainWindow.webContents.on('did-fail-load', () => {
+  // 只有**主界面自己**加载失败才兜底重载。子 frame（协议端控制台 iframe）失败一律不重载主窗：
+  // 重载会把整个界面打回初始态（当前标签页回到「概览」），且失败原因不消失就会一直循环
+  // ——判例 2026-10-25：点「协议端控制台」被反复拉回概览、概览状态位一直闪。
+  // ERR_ABORTED(-3)：加载被后续导航顶替（本项目注入凭据后会主动 reload），属正常现象。
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) {
+      bootLog(`子 frame 加载失败（不重载界面）：${errorCode} ${errorDescription} ${validatedURL}`);
+      return;
+    }
+    if (errorCode === -3) return;
+    bootLog(`主界面加载失败，1.5 秒后重载：${errorCode} ${errorDescription} ${validatedURL}`);
     setTimeout(() => mainWindow?.loadURL(`http://127.0.0.1:${port}/`).catch(() => {}), 1500);
   });
 

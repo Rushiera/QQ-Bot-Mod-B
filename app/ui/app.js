@@ -39,9 +39,11 @@ function switchView(name) {
   for (const view of document.querySelectorAll('.view')) {
     view.classList.toggle('active', view.id === `view-${name}`);
   }
-  if (name === 'webui' && !webuiLoaded) {
-    webuiLoaded = true;
-    loadWebui();
+  if (name === 'webui') {
+    // 懒加载：首次切到该标签才请求；若上次加载失败（frame 没拿到 src）则重试。
+    // 控制台不可达时不把整页顶回概览——失败只留在这个标签页里，靠「刷新」按钮重试。
+    const frame = $('#webui-frame');
+    if (!webuiLoaded || !frame?.getAttribute('src')) loadWebui();
   }
   if (name === 'nav') {
     refreshNav();
@@ -111,10 +113,17 @@ async function refreshStatus() {
 /** 已存账号下拉的当前选项签名（避免每次刷新重建选项）。 */
 let quickOptions = '';
 
+/** 登录面连续取数失败次数——单次失败不改显示，避免状态位在「已登录 / 未登录」间来回闪。 */
+let loginFailures = 0;
+
 /**
  * 刷新账号登录面（协议端账号状态 + 已存账号）。
  *
  * 掉登录后的恢复入口：状态与阶段直读协议端；快速登录按钮按已存账号发起。
+ *
+ * 取数失败（协议端重启 / 端口未就绪 / WebUI 未起来）时**保留上一次已知状态**，只在提示行
+ * 标注「连接中」——否则状态位会在「已登录 / 未登录 / 协议端不可达」之间反复闪
+ * （判例 2026-10-25：协议端重启期间每 15 秒抖一次，看起来像账号在未登录 / 已登录之间跳）。
  *
  * @returns {Promise<void>} 完成
  */
@@ -123,16 +132,28 @@ async function refreshLogin() {
   try {
     data = await api('/api/qq/login');
   } catch {
+    data = null;
+  }
+
+  const reachable = data?.ok === true && !!data?.status?.state;
+  const state = data?.status?.state ?? null;
+
+  if (!reachable) {
+    loginFailures += 1;
+    // 单次失败不改任何显示（重试 15 秒一次，偶发一次不该动状态位）；
+    // 连续两次仍取不到才在提示行标「连接中」，状态与阶段保持上一次的值。
+    if (loginFailures < 2) return;
+    const hint = data === null ? '界面接口无响应' : (data?.error || data?.status?.message || '协议端未就绪');
+    $('#ov-qq-error').textContent = `连接中…（${hint}）`;
+    $('#btn-qq-quick').disabled = true;
+    $('#btn-qq-scan').disabled = true;
     return;
   }
 
-  const reachable = data?.ok === true;
-  const state = data?.status?.state ?? null;
-  $('#ov-qq-state').textContent = reachable
-    ? (state?.isLogin ? '已登录' : '未登录')
-    : '协议端不可达';
-  $('#ov-qq-phase').textContent = state?.loginPhase || '-';
-  $('#ov-qq-error').textContent = state?.loginError || data?.status?.message || '-';
+  loginFailures = 0;
+  $('#ov-qq-state').textContent = state.isLogin ? '已登录' : '未登录';
+  $('#ov-qq-phase').textContent = state.loginPhase || '-';
+  $('#ov-qq-error').textContent = state.loginError || '-';
 
   const uins = Array.isArray(data?.quick) ? data.quick : [];
   const signature = uins.join(',');
@@ -358,7 +379,6 @@ refreshNav();
 loadLogs();
 loadConfig();
 refreshLogin();
-loadWebui();
 subscribeEvents();
 setInterval(refreshStatus, 3000);
 setInterval(refreshLogin, 15000);

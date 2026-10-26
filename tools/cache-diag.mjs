@@ -89,5 +89,5 @@ all.forEach((c) => {
 });
 for (const [k, v] of Object.entries(buckets)) L.push(`${k}: ${v}`);
 
-fs.writeFileSync('D:/Mau/WorkSpace/CatTemp/qqbotb-cache-diag3.out.txt', L.join('\n'), 'utf8');
+fs.writeFileSync('D:/Mau/WorkSpace/tools/CatTemp/qqbotb-cache-diag3.out.txt', L.join('\n'), 'utf8');
 console.log('ok ' + L.length);

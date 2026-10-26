@@ -87,6 +87,7 @@
 | `提示词自动翻译` | 群内生成能力的翻译层（`navigator.media.translate`）——MOSS 中文提示词 → 英文；IrodoriTTS 中文台词 → 日语；结构化 JSON 提示词只翻中文字段、保持结构 / 键名 / bbox |
 | `反推提示词` | 用户口语：把一张图交给 WD Tagger 产出可复用的提示词标签；对应工具 `wd_tag(messageId?)` |
 | `语音伴随` | 按群把本号的**每一句群文字发言**再用 TTS 念一遍日语发回群（2026-10-25）——音色固定 `依田芳乃 · v4.1-Small`，中文自动翻日语口语；开关按群（记忆页「🔊 语音伴随」，写 `config.engage.voiceReply.chats`，默认全关）；载体 `src/voice-reply.js`（业务面转发）+ 单体 `POST /api/nav/tts`（`by=auto` + `queue=true`，串行排队念完）；失败只落日志不阻断发言——见 `design-qqbotb-engage.md` §十七 |
+| `日语人称口径` | 只对 TTS 日语译文生效的人称约定（2026-10-26）：第一人称一律 `わたし`（禁 俺 / 僕 / おれ / ぼく 等男性自称），第二人称优先 `きみ`（禁 お前 / 貴様 / あんた 等不礼貌说法，敬语场景用 あなた）；两道执行——翻译提示词写明 + `normalizeJapanesePronouns()` 代码兜底（汉字「私」→ わたし 带复合词排除表）；中文正文与英文提示词不受影响——见 `design-qqbotb_log.md` §七十六 |
 
 ## 八、群名单（2026-10-26）
 

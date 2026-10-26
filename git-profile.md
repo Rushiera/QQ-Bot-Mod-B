@@ -52,9 +52,9 @@
 
 | 字段 | 值 |
 |:--|:--|
-| 上次同步时间 | 2026-10-25 20:16 |
-| 上次同步 commit | `7d17dd3` v0.86（群语音伴随——业务面 `src/voice-reply.js` + `sender.js` 挂钩、单体 `media.js` 排队 / 档位 / 切句、10 点补丁链 + 模板 + 自测 30/30 + 时长探针） |
-| 远程状态 | 与 origin 同步（`4ea8959..7d17dd3`） |
+| 上次同步时间 | 2026-10-26 22:52 |
+| 上次同步 commit | `23e8add` v0.87 群名单两栏看板 + v0.88 日语人称口径（单体 `business.js` / `groups-api.js` / 界面两栏看板；`navigator/media.js` `normalizeJapanesePronouns` + 日语翻译提示词人称段） |
+| 远程状态 | 与 origin 同步（`422d7b1..23e8add`） |
 
 ## 五、项目特有规则
 

@@ -15,6 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createNavigator } from '../app/src/navigator/index.js';
+import { normalizeJapanesePronouns } from '../app/src/navigator/media.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LIVE_MOSS = process.argv.includes('--live-moss');
@@ -153,6 +154,30 @@ check('请求者闸·群内非 VIP 触发不受理',
 const operator = await on.nav.mossDraw({ chat: 'selftest', prompt: '  ' });
 check('操作者通道·不受请求者闸（仍会走参数校验）',
   operator.ok === false && String(operator.error).includes('提示词') && !operator.vipOnly, operator.error || '');
+
+// ── 5b 日语人称口径（わたし / きみ 归一 · Rushiera 2026-10-26）────────────────
+const PRONOUN_CASES = [
+  ['俺は強いぞ', 'わたしは強いぞ'],
+  ['僕たちは行く', 'わたしたちは行く'],
+  ['おれたちの話だ', 'わたしたちの話だ'],
+  ['お前は誰だ', 'きみは誰だ'],
+  ['貴様、てめえ、あんた', 'きみ、きみ、きみ'],
+  ['お前たちは待ってろ', 'きみたちは待ってろ'],
+  ['私は猫だ', 'わたしは猫だ'],
+  ['私服と私立は残す', '私服と私立は残す'],
+  ['お礼を言う', 'お礼を言う'],
+  ['わたくしが参ります', 'わたしが参ります']
+];
+let pronounBad = [];
+for (const [src, want] of PRONOUN_CASES) {
+  const got = normalizeJapanesePronouns(src);
+  if (got !== want) pronounBad.push(`${src} → ${got}（期望 ${want}）`);
+}
+check('人称·わたし / きみ 归一（10 例）', pronounBad.length === 0, pronounBad.join('；'));
+const banned = [/俺/, /僕/, /ぼく/, /おれ/, /わし/, /お前/, /おまえ/, /貴様/, /てめ/, /あんた/];
+const clean = normalizeJapanesePronouns('俺がお前を助ける。僕たちも行く。あんたは待っていろ');
+check('人称·归一后不含男性 / 不礼貌代词',
+  clean === 'わたしがきみを助ける。わたしたちも行く。きみは待っていろ' && !banned.some((re) => re.test(clean)), clean);
 
 // ── 6 live：MOSS 生图 ──────────────────────────────────────────────────────
 if (LIVE_MOSS) {

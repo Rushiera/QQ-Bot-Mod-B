@@ -23,6 +23,7 @@
     <button class="tab" data-view="webui">协议端控制台</button>
     <button class="tab" data-view="logs">日志</button>
     <button class="tab" data-view="nav">领航员</button>
+    <button class="tab" data-view="groups">群名单</button>
     <button class="tab" data-view="settings">设置</button>
   </nav>
 
@@ -120,6 +121,42 @@
         <button id="btn-nav-refresh" class="btn small">刷新</button>
       </div>
       <pre id="nav-log" class="log-view"></pre>
+    </section>
+
+    <section id="view-groups" class="view">
+      <div class="groups-bar">
+        <input id="groups-add-input" type="text" inputmode="numeric" placeholder="输群号回车加入">
+        <button id="btn-groups-add" class="btn small">加入</button>
+        <span class="groups-spacer"></span>
+        <button id="btn-groups-reload" class="btn small">刷新</button>
+        <span id="groups-status" class="hint">载入中…</span>
+      </div>
+
+      <div class="groups-board">
+        <div class="groups-col">
+          <h3>未启用 <span id="groups-off-count" class="hint">0 个</span></h3>
+          <p class="hint groups-col-tip">协议端在的全部群——拖到右边即启用</p>
+          <div id="groups-off" class="groups-drop" data-list="off"></div>
+        </div>
+        <div class="groups-col">
+          <h3>已启用 <span id="groups-on-count" class="hint">0 个</span></h3>
+          <p class="hint groups-col-tip">这些群的消息会进猫——拖回左边即移除</p>
+          <div id="groups-on" class="groups-drop" data-list="on"></div>
+        </div>
+      </div>
+
+      <details class="groups-advanced">
+        <summary>高级：拒绝名单 · 空名单放行</summary>
+        <div class="groups-advanced-body">
+          <label class="check"><input id="groups-allow-all" type="checkbox"> 允许名单为空时放行全部群（谨慎）</label>
+          <label>拒绝名单（优先级高于允许，一行一个群号）
+            <textarea id="groups-deny" class="groups-text small" spellcheck="false"></textarea>
+          </label>
+          <div>
+            <button id="btn-groups-apply-deny" class="btn small">应用</button>
+          </div>
+        </div>
+      </details>
     </section>
 
     <section id="view-settings" class="view">

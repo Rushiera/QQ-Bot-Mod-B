@@ -97,6 +97,32 @@ function hasKana(text) {
 }
 
 /**
+ * 日语人称口径归一（仅语音台词用）。
+ *
+ * Rushiera 2026-10-26 定：日语译文里第一人称一律「わたし」（禁 俺 / 僕 等男性自称），
+ * 第二人称优先「きみ」（禁 お前 / 貴様 / あんた 等不礼貌说法；需要敬语时用 あなた）。
+ * 提示词已写明，这里做兜底——模型偶发不听话时仍念不出男性腔、也念不出骂人的称呼。
+ *
+ * @param {string} text 日语译文
+ * @returns {string} 归一后的文本
+ */
+export function normalizeJapanesePronouns(text) {
+  let out = String(text ?? '');
+  // 第一人称：男性 / 老人 / 女性口语自称 → わたし（长词优先，避免「おれたち」被切碎）
+  out = out.replace(/俺たち|俺達|おれたち|おれ達/g, 'わたしたち');
+  out = out.replace(/僕たち|僕達|ぼくたち|ぼく達|僕ら|ぼくら/g, 'わたしたち');
+  // 「おれ」要避开同音的 お礼（おれい）/ おれんじ——只挡独立的自称
+  out = out.replace(/俺|おれ(?!い|ん)|僕|ぼく|わし|あたし|わたくし/g, 'わたし');
+  // 第二人称：不礼貌 / 生硬说法 → きみ（汉字「君」不动——它读 きみ / くん 两读，替换会毁掉人名后缀）
+  out = out.replace(/お前たち|お前達|おまえたち|おまえ達|あんたたち/g, 'きみたち');
+  out = out.replace(/お前|おまえ|貴様|きさま|てめえ|てめぇ|あんた/g, 'きみ');
+  // 汉字「私」→ 平假名：IrodoriTTS 可能把「私」读成 わたくし，统一书写形态即锁定读音。
+  // 排除表只挡会改义的复合词（私服 / 私立 / 私的 …），不是人称用法。
+  out = out.replace(/私(?!服|立|的|有|用|物|鉄|生活|邸|財|案|見|情|製)/g, 'わたし');
+  return out;
+}
+
+/**
  * 去掉模型包在译文外面的代码围栏与引号。
  *
  * @param {string} text 模型输出
@@ -358,17 +384,20 @@ export function createMediaService({
   /**
    * 把中文翻成日语；已是日语（含假名）就原样返回。
    *
+   * 三条出口都过 `normalizeJapanesePronouns`：台词是给 IrodoriTTS 念的，
+   * 人称口径（わたし / きみ）与源语言无关——中文译来的、本来就是日语的都要归一。
+   *
    * @param {string} text 文本
    * @returns {Promise<string>} 日语文本
    */
   async function translateJapanese(text) {
     const source = String(text ?? '').trim();
     if (!source) throw new Error('文本是空的');
-    if (hasKana(source)) return source;
-    if (!hasChinese(source)) return source;
+    if (hasKana(source)) return normalizeJapanesePronouns(source);
+    if (!hasChinese(source)) return normalizeJapanesePronouns(source);
     const out = await translate(source, 'ja');
     if (!out) throw new Error('中文转日语失败（翻译端点未配置或超时）');
-    return cleanText(out);
+    return normalizeJapanesePronouns(cleanText(out));
   }
 
   /**

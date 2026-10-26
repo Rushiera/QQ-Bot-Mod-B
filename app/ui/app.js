@@ -48,6 +48,9 @@ function switchView(name) {
   if (name === 'nav') {
     refreshNav();
   }
+  if (name === 'groups') {
+    refreshGroups();
+  }
 }
 
 /**
@@ -289,6 +292,286 @@ async function refreshNav() {
   }
 }
 
+/** 群名单页的状态（一次刷新取回两份：业务面名单 + 协议端实际所在群）。 */
+const groupState = {
+  allow: [],           // 已启用（业务面 allow.groups）
+  deny: [],            // 拒绝名单（业务面 deny.groups）
+  allowAllWhenEmpty: false,
+  online: [],          // 协议端实际所在的群 [{id, name}]
+  onlineError: '',     // 拉协议端群列表失败的原因（拉到了则为空）
+  busy: false,         // 写请求在途（防连点重复提交）
+  loaded: false
+};
+
+/**
+ * 按 id 去重并只留纯数字。
+ *
+ * @param {string[]} list 原始清单
+ * @returns {string[]} 干净清单
+ */
+function cleanGroupIds(list) {
+  const out = [];
+  for (const item of list || []) {
+    const id = String(item ?? '').trim();
+    if (!/^\d+$/.test(id)) continue;
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/**
+ * 从界面各输入点收集提交内容。
+ *
+ * @param {object} [override] 局部覆盖（拖动时只改动其中一栏）
+ * @returns {object} 提交内容
+ */
+function collectGroupPatch(override = {}) {
+  return {
+    allowGroups: override.allowGroups ?? groupState.allow,
+    denyGroups: override.denyGroups ?? groupState.deny,
+    allowAllWhenEmpty: override.allowAllWhenEmpty ?? groupState.allowAllWhenEmpty
+  };
+}
+
+/**
+ * 写群名单并读回渲染（唯一写入口——拖动 / 加入 / 移除 / 拒绝名单全走这里）。
+ *
+ * @param {object} override 局部覆盖
+ * @param {string} action 动作说明（拼进状态行，让人知道刚才做了什么）
+ * @returns {Promise<boolean>} 是否成功
+ */
+async function commitGroups(override, action) {
+  if (groupState.busy) return false;
+  groupState.busy = true;
+  const hint = $('#groups-status');
+  hint.textContent = `${action}…`;
+  try {
+    const data = await api('/api/groups', { method: 'POST', body: collectGroupPatch(override) });
+    if (!data?.ok) throw new Error(data?.error || '写入被拒');
+    groupState.allow = cleanGroupIds(data.allowGroups);
+    groupState.deny = cleanGroupIds(data.denyGroups);
+    groupState.allowAllWhenEmpty = data.allowAllWhenEmpty === true;
+    renderGroupBoard();
+    hint.textContent = `${action}：已生效（已启用 ${groupState.allow.length} 个）`;
+    return true;
+  } catch (error) {
+    hint.textContent = `${action}失败：${error.message}`;
+    return false;
+  } finally {
+    groupState.busy = false;
+  }
+}
+
+/**
+ * 生成一只群条目的 DOM。
+ *
+ * @param {object} entry 群条目 `{ id, name, enabled, missing }`
+ * @returns {HTMLElement} 条目节点
+ */
+function buildGroupItem(entry) {
+  const item = document.createElement('div');
+  item.className = `groups-item${entry.enabled ? ' on' : ''}${entry.missing ? ' missing' : ''}`;
+  item.draggable = true;
+  item.dataset.id = entry.id;
+
+  const main = document.createElement('div');
+  main.className = 'groups-item-main';
+  const name = document.createElement('div');
+  name.className = 'groups-item-name';
+  name.textContent = entry.name || `群 ${entry.id}`;
+  const id = document.createElement('div');
+  id.className = 'groups-item-id mono';
+  id.textContent = entry.missing ? `${entry.id}（协议端未返回该群）` : entry.id;
+  main.append(name, id);
+
+  // 拖动之外给一个点击通道：拖动在某些触摸板 / 远程桌面下不好使，按钮永远能用
+  const button = document.createElement('button');
+  button.className = 'btn small groups-item-btn';
+  button.type = 'button';
+  button.textContent = entry.enabled ? '移除' : '启用';
+  button.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    button.disabled = true;
+    if (entry.enabled) {
+      await commitGroups({ allowGroups: groupState.allow.filter((x) => x !== entry.id) }, `移除 ${entry.id}`);
+    } else {
+      await commitGroups(
+        {
+          allowGroups: [...groupState.allow, entry.id],
+          // 在拒绝名单里的群要启用，先把它从拒绝名单摘掉——否则业务面按「同群冲突」拒写
+          denyGroups: groupState.deny.filter((x) => x !== entry.id)
+        },
+        `启用 ${entry.id}`
+      );
+    }
+    button.disabled = false;
+  });
+
+  item.append(main, button);
+
+  item.addEventListener('dragstart', (event) => {
+    event.dataTransfer.setData('text/plain', entry.id);
+    event.dataTransfer.effectAllowed = 'move';
+    item.classList.add('dragging');
+  });
+  item.addEventListener('dragend', () => item.classList.remove('dragging'));
+  return item;
+}
+
+/**
+ * 渲染群名单两栏（未启用 / 已启用）。
+ *
+ * @returns {void}
+ */
+function renderGroupBoard() {
+  const off = $('#groups-off');
+  const on = $('#groups-on');
+  if (!off || !on) return;
+
+  const names = new Map((groupState.online || []).map((g) => [g.id, g.name]));
+  const allowSet = new Set(groupState.allow);
+  const denySet = new Set(groupState.deny);
+
+  // 已启用：既有协议端返回的名字，也有手输进来、协议端没返回的群（标 missing）
+  const onEntries = groupState.allow.map((id) => ({
+    id,
+    name: names.get(id) || '',
+    enabled: true,
+    missing: !names.has(id)
+  }));
+  // 未启用：协议端所在群 + 拒绝名单里的群，去掉已启用的
+  const offIds = [];
+  for (const g of groupState.online || []) if (!allowSet.has(g.id)) offIds.push(g.id);
+  for (const id of groupState.deny) if (!allowSet.has(id) && !offIds.includes(id)) offIds.push(id);
+  const offEntries = offIds.map((id) => ({
+    id,
+    name: names.get(id) || '',
+    enabled: false,
+    missing: !names.has(id),
+    denied: denySet.has(id)
+  }));
+
+  off.textContent = '';
+  on.textContent = '';
+  for (const entry of offEntries) {
+    const node = buildGroupItem(entry);
+    if (entry.denied) node.title = '在拒绝名单里——启用前先从这里移出拒绝名单';
+    off.appendChild(node);
+  }
+  for (const entry of onEntries) on.appendChild(buildGroupItem(entry));
+
+  if (!offEntries.length) off.innerHTML = '<p class="hint groups-empty">（没有未启用的群）</p>';
+  if (!onEntries.length) on.innerHTML = '<p class="hint groups-empty">（先把左边的群拖过来）</p>';
+
+  $('#groups-off-count').textContent = `${offEntries.length} 个`;
+  $('#groups-on-count').textContent = `${onEntries.length} 个`;
+  $('#groups-allow-all').checked = groupState.allowAllWhenEmpty === true;
+  $('#groups-deny').value = groupState.deny.join('\n');
+}
+
+/**
+ * 载入群名单（名单取业务面、群名取协议端——两者并行，谁失败都不挡住另一个）。
+ *
+ * @returns {Promise<void>} 完成
+ */
+async function refreshGroups() {
+  const hint = $('#groups-status');
+  hint.textContent = '载入中…';
+  const [lists, online] = await Promise.all([
+    api('/api/groups').catch((error) => ({ ok: false, error: error.message })),
+    api('/api/groups/online').catch((error) => ({ ok: false, error: error.message }))
+  ]);
+
+  if (!lists?.ok) {
+    hint.textContent = `载入名单失败：${lists?.error || '业务面未响应'}（业务面没起？）`;
+    return;
+  }
+  groupState.allow = cleanGroupIds(lists.allowGroups);
+  groupState.deny = cleanGroupIds(lists.denyGroups);
+  groupState.allowAllWhenEmpty = lists.allowAllWhenEmpty === true;
+  groupState.online = online?.ok ? (online.groups || []) : [];
+  groupState.onlineError = online?.ok ? '' : (online?.error || '协议端不可达');
+  groupState.loaded = true;
+
+  renderGroupBoard();
+  hint.textContent = groupState.onlineError
+    ? `名单已载入（${lists.apiUrl}）；协议端群列表没拿到：${groupState.onlineError}`
+    : `名单已载入（${lists.apiUrl}）· 协议端 ${groupState.online.length} 个群`;
+}
+
+/**
+ * 手动加入一个群号（回车 / 点「加入」）。
+ *
+ * @returns {Promise<void>} 完成
+ */
+async function addGroupFromInput() {
+  const input = $('#groups-add-input');
+  if (!input) return;
+  const raw = String(input.value || '');
+  const ids = (raw.match(/\d+/g) || []).filter((id) => !groupState.allow.includes(id));
+  if (!ids.length) {
+    $('#groups-status').textContent = raw.trim() ? '这个群号已经在已启用里了' : '先输个群号';
+    return;
+  }
+  const ok = await commitGroups(
+    {
+      allowGroups: [...groupState.allow, ...ids],
+      denyGroups: groupState.deny.filter((x) => !ids.includes(x))
+    },
+    `启用 ${ids.join('、')}`
+  );
+  if (ok) input.value = '';
+}
+
+/**
+ * 应用拒绝名单（textarea → 业务面）。
+ *
+ * @returns {Promise<void>} 完成
+ */
+async function applyDenyList() {
+  const ids = cleanGroupIds(($('#groups-deny').value || '').match(/\d+/g) || []);
+  await commitGroups({ denyGroups: ids }, '应用拒绝名单');
+}
+
+/**
+ * 绑定群名单两栏的拖放（拖动即发请求，不设保存按钮）。
+ *
+ * @returns {void}
+ */
+function bindGroupDrops() {
+  for (const zone of document.querySelectorAll('.groups-drop')) {
+    const target = zone.dataset.list;  // on = 已启用 / off = 未启用
+    zone.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      zone.classList.add('drop-hot');
+    });
+    zone.addEventListener('dragleave', (event) => {
+      // 掠过子元素也会触发 dragleave——只在真正离开整个区时去掉高亮
+      if (!zone.contains(event.relatedTarget)) zone.classList.remove('drop-hot');
+    });
+    zone.addEventListener('drop', async (event) => {
+      event.preventDefault();
+      zone.classList.remove('drop-hot');
+      const id = String(event.dataTransfer.getData('text/plain') || '').trim();
+      if (!/^\d+$/.test(id)) return;
+      if (target === 'on') {
+        if (groupState.allow.includes(id)) return;
+        await commitGroups(
+          {
+            allowGroups: [...groupState.allow, id],
+            denyGroups: groupState.deny.filter((x) => x !== id)
+          },
+          `启用 ${id}`
+        );
+      } else {
+        if (!groupState.allow.includes(id)) return;
+        await commitGroups({ allowGroups: groupState.allow.filter((x) => x !== id) }, `移除 ${id}`);
+      }
+    });
+  }
+}
+
 /**
  * 绑定界面事件。
  *
@@ -312,6 +595,18 @@ function bindEvents() {
   });
 
   $('#btn-nav-refresh').addEventListener('click', () => refreshNav());
+
+  // 群名单页签——拖动 / 加入 / 移除都立刻发请求（无保存按钮），写后按读回值重渲染
+  $('#btn-groups-reload').addEventListener('click', () => refreshGroups());
+  $('#btn-groups-add').addEventListener('click', () => addGroupFromInput());
+  $('#groups-add-input').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') addGroupFromInput();
+  });
+  $('#btn-groups-apply-deny').addEventListener('click', () => applyDenyList());
+  $('#groups-allow-all').addEventListener('change', (event) => {
+    commitGroups({ allowAllWhenEmpty: event.target.checked }, event.target.checked ? '开启空名单放行' : '关闭空名单放行');
+  });
+  bindGroupDrops();
 
   $('#btn-napcat-toggle').addEventListener('click', async (event) => {
     const button = event.currentTarget;

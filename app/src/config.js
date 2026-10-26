@@ -42,6 +42,15 @@ const DEFAULTS = {
     exe: path.join(PROJECT_DIR, '_unpack', 'QQ Agent.exe'),
     cwd: path.join(PROJECT_DIR, '_unpack')
   },
+  // 业务面（QQ Agent）接口地址——群名单的读写面。
+  // 写面只走它的 /api/config：业务面把配置加载在内存里活，直改磁盘文件它不重读
+  // （写了不生效，下次启动才吃到），所以写必须经它的接口走「内存 + 磁盘」一体那条路。
+  business: {
+    apiUrl: 'http://127.0.0.1:3210',
+    // 业务面若在设置里设了「控制台管理令牌」（它的 `server.token`），这里填同一个值；
+    // 空 = 它未设令牌，读写免授权（默认态）。
+    token: ''
+  },
   // 领航员模式（design-qqbotb-navigator.md）——QQ 群指挥 CH4 猫群。
   // mainPort / vipUser / idleCloseMs 是行为参数；services 是开启回执的健康检查清单
   // （url 空 = 未接入，回执显示「未接入」）。

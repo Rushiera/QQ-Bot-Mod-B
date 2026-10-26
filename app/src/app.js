@@ -12,7 +12,9 @@ import { createWebuiClient } from './napcat/webui.js';
 import { createLogTail } from './napcat/logtail.js';
 import { createOnebotClient } from './onebot/client.js';
 import { createWebServer } from './web/server.js';
+import { createGroupsApi } from './web/groups-api.js';
 import { createCompanion } from './companion.js';
+import { createBusinessClient } from './business.js';
 import { createNavigator } from './navigator/index.js';
 
 /**
@@ -45,6 +47,13 @@ export async function createApp() {
     enabled: config.companion.enabled
   });
 
+  // 业务面配置接口客户端——群名单的读写面（只经它的 HTTP，不碰它的磁盘文件）
+  const business = createBusinessClient({
+    apiUrl: config.business.apiUrl,
+    token: config.business.token,
+    log
+  });
+
   // 壳层能力注入点（截图等）——核心不依赖 Electron，由 main.js 按需挂上
   const hooks = { capture: null, shot: null };
 
@@ -67,6 +76,9 @@ export async function createApp() {
         }
       }),
       'POST /api/config': async ({ body }) => ({ body: { ok: true, config: saveConfig(body ?? {}) } }),
+      // 群名单（业务面的 allow / deny）——读写都经业务面自己的 /api/config：
+      // 它在内存里持有一份活配置，直改磁盘文件不生效。三条接口的实现见 web/groups-api.js。
+      ...createGroupsApi({ business, log }),
       'POST /api/napcat/start': async () => ({ body: await napcat.start() }),
       'POST /api/napcat/stop': async () => ({ body: await napcat.stop() }),
       // QQ 登录面——账号掉登录后的恢复入口（状态 / 已存账号 / 快速登录）

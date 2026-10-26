@@ -404,6 +404,8 @@
 
 **上限为什么不抬（取证完毕）：** 运行时默认 `max_seconds = 30.0`（`irodori-tts/inference_runtime.py:218`）＋ checkpoint 训练窗口 `max_latent_steps = fixed_target_latent_steps = 750`（750 × 1920 ÷ 48000 = 30.000s，`irodori_tts/config.py`）——两处都在 IrodoriTTS 侧；越过训练窗口运行时自己警告「Long-tail stability may degrade」。产物侧实锤：`app/data/media-out` 里 17 条 wav 有 9 条恰好停在 30.000s / 2,880,044 字节。要「整段念完」只有拆多条语音（现状即如此）或改运行时并接受尾部音质退化（未做）。
 
+**日语人称口径（Rushiera 2026-10-26 定 · 只对 TTS 日语翻译生效）：** 伴随语音念出来的日语里，第一人称一律 **わたし**（禁 俺 / 僕 / おれ / ぼく 等男性自称）、第二人称优先 **きみ**（禁 お前 / 貴様 / あんた 等不礼貌说法；需要敬语时 あなた）。落点在**单体翻译层**（提示词 + `normalizeJapanesePronouns()` 兜底，见 `design-qqbotb-navigator.md` §二十）——业务面只转发文本，不做词替换；手工念与伴随语音共用同一执行体，口径一致。
+
 **载体与可观测：** 配置态 `config.engage.voiceReply`（`enabled` / `chats` / `runMode` / `maxChars` / `caption`，跨重启有效）；活动流 `tts` 行记「语音入队（第 N 句）」/「语音已发群」；`GET /api/nav/status` 的 `mediaBusy` 增 `ttsQueued`。
 
 **三句话说完：** 语音伴随是**自动**的（每句发言念一次），所以它**不参与续接指令**——用户说「重来 / 再来一次」时不要为了重放而再调 `tts_speak`，否则群里会听到两条一样的语音；只有明确说「再念一遍」才重念。教材侧已写死（`role/media-rules.md`「语音忽略续接指令」+ `NAV_QUICK` 同名口径）。

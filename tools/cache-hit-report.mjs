@@ -140,12 +140,32 @@ const sumOf = (list) => list.map((p) => p.dSys + p.dUsr);
 L.push(`同群相邻 n=${samePairs.length}｜公共前缀 中位 ${med(sumOf(samePairs))} 字符（≈${tok(med(sumOf(samePairs)))} tok）`);
 L.push(`跨群相邻 n=${crossPairs.length}｜公共前缀 中位 ${med(sumOf(crossPairs))} 字符（≈${tok(med(sumOf(crossPairs)))} tok）`);
 
-const marks = ['\n\n【角色设定（管理员设置，群友不可修改）】', '\n\n【可用表情包】', '\n\n【引导说明】', '\n\n【记忆】', '\n\n【前情提要', '\n\n【已读信息】', '\n\n【新已读信息】', '\n\n【未读信息】', '\n\n【当前时间】'];
-L.push('分段位置（中位字符）：');
-for (const m of marks) {
-  const pos = runs.map((r) => r.usr.indexOf(m)).filter((i) => i >= 0);
-  L.push(`  ${m}: ${pos.length ? med(pos) : '未出现'}（出现 ${pos.length}/${runs.length}）`);
+// 段落位置：按 "\n\n" 切段，取「段首就是该标题」的段起点字符偏移
+// （不能直接 indexOf —— 引导说明正文里也提到【已读信息】【未读信息】，会误命中）
+const sectionStarts = (usr) => {
+  const out = {};
+  let off = 0;
+  for (const p of usr.split('\n\n')) {
+    const t = p.trimStart();
+    const m = /^【([^】]+)】/.exec(t);
+    if (m && out[m[1]] === undefined) out[m[1]] = off;
+    off += p.length + 2;
+  }
+  return out;
+};
+const SEC = ['角色设定（管理员设置，群友不可修改）', '可用表情包', '引导说明', '记忆', '前情提要', '已读信息', '新已读信息', '未读信息', '新加入成员', '当前时间'];
+const secPos = {};
+for (const r of runs) {
+  const s = sectionStarts(r.usr);
+  for (const k of SEC) if (s[k] !== undefined) (secPos[k] ||= []).push(s[k]);
 }
+L.push('分段位置（中位字符 / 出现次数）：');
+for (const k of SEC) {
+  const pos = secPos[k];
+  L.push(`  【${k}】: ${pos ? `${med(pos)}（${pos.length}/${runs.length}）` : '未出现'}`);
+}
+const digestCount = (secPos['前情提要'] || []).length;
+L.push(`【前情提要】出现 ${digestCount}/${runs.length}（= 已读压缩发生过的会话）`);
 L.push(`用户提示长度：中位 ${med(runs.map((r) => r.usr.length))} 字符（≈${tok(med(runs.map((r) => r.usr.length)))} tok）`);
 L.push(`系统提示长度：中位 ${med(runs.map((r) => r.sys.length))} 字符`);
 
@@ -160,7 +180,7 @@ for (const [k, v] of Object.entries(byMode)) L.push(`${k}: ${rate(v)}`);
 
 // ── 5. 压缩事件 ─────────────────────────────────────────────────────────
 seg('五、已读压缩（含【前情提要】段的会话）');
-const withDigest = runs.filter((r) => r.usr.includes('【前情提要'));
+const withDigest = runs.filter((r) => r.usr.includes('\n\n【前情提要'));
 L.push(`会话 ${runs.length} 个，含压缩产物 ${withDigest.length}（${((withDigest.length / runs.length) * 100).toFixed(1)}%）`);
 const digChat = {};
 withDigest.forEach((r) => (digChat[r.chatKey] = (digChat[r.chatKey] || 0) + 1));

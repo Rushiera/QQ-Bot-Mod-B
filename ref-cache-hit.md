@@ -12,7 +12,7 @@
 | 项 | 实况 |
 |:--|:--|
 | 用量起点 | **2026-10-26 00:00（本地）** |
-| `data/sessions/` | 441 个（62 MB 级），本地时间 10-26 00:07 起 |
+| `data/sessions/` | 重置后 435 个（62.3 MB），本地时间 10-26 00:07 起；运行中持续新增（复跑时 441） |
 | `data/usage-days/` | **空**——按需从 sessions 回算并固化 |
 | `data/telemetry-totals.json` | **已归零**（原 calls=11,721 / prompt=816,330,441 已备份） |
 | `data/usage-today.json` | 保留（dayKey=2026-10-26） |
@@ -176,9 +176,10 @@ hy4 系列的命中低属**上游能力**问题（同一结构换 deepseek 即�
 | # | 缺口 | 现状 | 影响 |
 |:--|:--|:--|:--|
 | 1 | `tools/cache-diag.mjs:92` 输出路径写死 `WorkSpace/CatTemp/` | **已修**（改指 `tools/CatTemp/`） | 现成脚本可用 |
-| 2 | 间隔 / 夹带 / 公共前缀都是**事后从 sessions 重算** | `tools/cache-hit-report.mjs` 一次出全 | 每次要读 60MB+ |
-| 3 | 没有运行时缓存观测行 | 全量靠离线脚本 | 无法做实时告警 / 趋势图 |
-| 4 | 没有「前缀分叉点」的落盘 | 现有 `session.promptAnchorMode` 只记 anchored/reset | 分不分叉、叉在哪一段，事后才知道 |
+| 2 | 段落位置用 `indexOf` 会误命中（引导说明正文里也提到【已读信息】/【未读信息】） | `cache-hit-report.mjs` 改为按 `\n\n` 切段取段首 | 旧读数把分叉点误判在【已读信息】 |
+| 3 | 间隔 / 夹带 / 公共前缀都是**事后从 sessions 重算** | `tools/cache-hit-report.mjs` 一次出全 | 每次要读 60MB+ |
+| 4 | 没有运行时缓存观测行 | 全量靠离线脚本 | 无法做实时告警 / 趋势图 |
+| 5 | 没有「前缀分叉点」的落盘 | 现有 `session.promptAnchorMode` 只记 anchored/reset | 分不分叉、叉在哪一段，事后才知道 |
 
 **建议（待拍板）**：在 `data/metrics/` 加一类 `cache-<YYYY-MM-DD>.jsonl`，仿 `engage-metrics.js:46` 的旁路写法（try/catch 包住、失败不影响主流程），每次 LLM 调用落一行：
 

@@ -52,9 +52,9 @@
 
 | 字段 | 值 |
 |:--|:--|
-| 上次同步时间 | 2026-10-26 22:52 |
-| 上次同步 commit | `23e8add` v0.87 群名单两栏看板 + v0.88 日语人称口径（单体 `business.js` / `groups-api.js` / 界面两栏看板；`navigator/media.js` `normalizeJapanesePronouns` + 日语翻译提示词人称段） |
-| 远程状态 | 与 origin 同步（`422d7b1..23e8add`） |
+| 上次同步时间 | 2026-10-26 22:58 |
+| 上次同步 commit | `9154d75` v0.88 收工：todo 去重（人称口径 B43-B45） |
+| 远程状态 | 与 origin 同步（`2d1ae17..9154d75`） |
 
 ## 五、项目特有规则
 

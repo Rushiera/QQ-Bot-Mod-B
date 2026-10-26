@@ -210,5 +210,36 @@ seg('八、会话首次调用（无前序可复用）');
 const firsts = runs.map((r) => ({ prompt: r.prompt, cached: r.cached }));
 L.push(`会话首次调用 ${rate(firsts)}`);
 
+// ── 9. 每日趋势（按本地日聚合，供后续对比）──────────────────────────────
+seg('九、每日趋势（按本地日）');
+const dayAgg = {};
+calls.forEach((c) => {
+  const d = new Date(c.t);
+  const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  (dayAgg[key] ||= []).push(c);
+});
+for (const [k, v] of Object.entries(dayAgg).sort()) L.push(`${k}: ${rate(v)}`);
+
+// ── 10. 分叉点落点（相邻同群两轮在第几段分叉）────────────────────────────
+seg('十、相邻同群两轮：分叉落在哪一段');
+const SEG_ORDER = ['角色设定（管理员设置，群友不可修改）', '可用表情包', '引导说明', '记忆', '已读信息', '前情提要', '新已读信息', '未读信息', '新加入成员', '当前时间'];
+const forkAgg = {};
+for (let i = 1; i < runs.length; i++) {
+  const a = runs[i - 1], b = runs[i];
+  if (a.chatKey !== b.chatKey) continue;
+  const k = cpl(a.usr, b.usr);
+  const pos = sectionStarts(b.usr);
+  let at = '文件头之前';
+  for (const name of SEG_ORDER) {
+    const p = pos[name];
+    if (p !== undefined && p <= k) at = `【${name}】内`;
+  }
+  forkAgg[at] = (forkAgg[at] || 0) + 1;
+}
+const forkTotal = Object.values(forkAgg).reduce((x, y) => x + y, 0);
+for (const [k, v] of Object.entries(forkAgg).sort((a, b) => b[1] - a[1])) {
+  L.push(`${k}: ${v}（${((v / forkTotal) * 100).toFixed(0)}%）`);
+}
+
 fs.writeFileSync(OUT, L.join('\n'), 'utf8');
 console.log('ok ' + calls.length + ' calls / ' + runs.length + ' sessions');

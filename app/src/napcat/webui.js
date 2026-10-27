@@ -11,6 +11,14 @@ import { readWebui } from './shell.js';
 const CREDENTIAL_TTL_MS = 10 * 60 * 1000;
 
 /**
+ * 单次请求超时（毫秒）。
+ *
+ * 协议端卡死（2026-10-27 判例：12:09 起 WebUI 间歇不可达，界面每 15 秒轮询一次）时，
+ * 无超时的 fetch 会一直挂着，请求越积越多——失败必须是**有界的失败**，不是挂起。
+ */
+const FETCH_TIMEOUT_MS = 5000;
+
+/**
  * 创建协议端 WebUI 客户端。
  *
  * @param {object} options 选项
@@ -49,7 +57,8 @@ export function createWebuiClient({ layout, log }) {
         const response = await fetch(`http://127.0.0.1:${webui.port}/api/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ hash, totpCode: '' })
+          body: JSON.stringify({ hash, totpCode: '' }),
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
         });
         const data = await response.json();
         const value = data?.data?.Credential ?? '';
@@ -92,7 +101,8 @@ export function createWebuiClient({ layout, log }) {
       const response = await fetch(url, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body)
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
       });
       const text = await response.text();
       let data = null;

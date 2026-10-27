@@ -4,7 +4,7 @@
 // 边界：本文件只做装配与对外接口，具体能力在各子模块。
 
 import path from 'node:path';
-import { loadConfig, saveConfig, APP_DIR, DATA_DIR, CONFIG_PATH } from './config.js';
+import { loadConfig, saveConfig, APP_DIR, DATA_DIR, PROJECT_DIR, CONFIG_PATH } from './config.js';
 import { createLogger } from './log.js';
 import { createShellLayout, readWebui, readOnebot } from './napcat/shell.js';
 import { createNapcatHost } from './napcat/host.js';
@@ -16,6 +16,7 @@ import { createGroupsApi } from './web/groups-api.js';
 import { createCompanion } from './companion.js';
 import { createBusinessClient } from './business.js';
 import { createNavigator } from './navigator/index.js';
+import { createLoginWatch } from './incident/login-watch.js';
 
 /**
  * 创建应用实例。
@@ -38,6 +39,17 @@ export async function createApp() {
     token: onebotConfig.wsToken,
     log,
     reconnectMs: config.onebot.reconnectMs
+  });
+
+  // 登录异常探针——掉登录现场取证（只读；判据与产物见 incident/login-watch.js）
+  const loginWatch = createLoginWatch({
+    layout,
+    webuiApi,
+    businessLogDir: path.join(PROJECT_DIR, '_unpack', 'data', 'logs'),
+    dataDir: DATA_DIR,
+    log,
+    ports: { ws: onebotConfig.wsPort, http: onebotConfig.httpPort },
+    tuning: config.incident
   });
 
   const companion = createCompanion({
@@ -102,6 +114,7 @@ export async function createApp() {
         onebot.close();
         return { body: { ok: true } };
       },
+      'POST /api/incident/sample': async () => ({ body: { ok: true, sample: await loginWatch.tick() } }),
       'POST /api/debug/screenshot': async ({ query }) => {
         if (!hooks.capture) return { body: { ok: false, error: '截图能力未注册（非 Electron 运行环境）' } };
         const file = await hooks.capture(query.get('tab') || '');
@@ -174,6 +187,7 @@ export async function createApp() {
       onebot.connect();
     }
     navigator.start();
+    loginWatch.start();
     return port;
   }
 
@@ -184,11 +198,12 @@ export async function createApp() {
    */
   async function stop() {
     navigator.stop();
+    loginWatch.stop();
     onebot.close();
     logTail.stop();
     await web.stop();
     log.info('app', 'QQBot mod B 已停止');
   }
 
-  return { start, stop, status, log, config, layout, hooks, navigator, webuiCredential, stopNapcat: () => napcat.stop() };
+  return { start, stop, status, log, config, layout, hooks, navigator, loginWatch, webuiCredential, stopNapcat: () => napcat.stop() };
 }

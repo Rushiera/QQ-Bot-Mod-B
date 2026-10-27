@@ -98,6 +98,9 @@ export function composeCard(currentCard, rule, amount, nickname = '') {
   return base ? base + suffix : suffix;
 }
 
+/** 上一轮已确认的名片（gid → { key, card }）——key 含余额值与标记，变了才重算。 */
+const applied = new Map();
+
 /** 读本号在某群的当前名片：'' = 没设名片 · null = 读失败。 */
 async function readOwnCard(onebot, groupId, userId) {
   try {
@@ -113,7 +116,7 @@ async function readOwnCard(onebot, groupId, userId) {
  * 刷一个群的群名片（set_group_card 改本号自己）。
  * 返回 { ok, chat, card, amount, skipped?, reason?, error? }。
  */
-export async function syncChatCard(onebot, groupId) {
+export async function syncChatCard(onebot, groupId, options = {}) {
   const rule = balanceRule();
   const gid = String(groupId || '').trim();
   if (!gid) return { ok: false, reason: 'no-chat' };
@@ -128,16 +131,27 @@ export async function syncChatCard(onebot, groupId) {
     return { ok: false, chat: gid, reason: 'no-value' };
   }
   if (!Number.isFinite(amount)) return { ok: false, chat: gid, reason: 'no-value' };
+  // 「值未变不改写」（Rushiera 2026-10-27）：手动来源下余额是常量——上一轮写上去的串没变，
+  // 本轮整轮跳过，连 get_group_member_info 都不发。定时器的对外请求降为「真有变化时」。
+  const cacheKey = amount + '|' + String(rule.marker || '');
+  const cached = applied.get(gid);
+  if (!options.force && cached && cached.key === cacheKey) {
+    return { ok: true, chat: gid, skipped: true, reason: 'unchanged', card: cached.card, amount };
+  }
   const current = await readOwnCard(onebot, gid, userId);
   if (current === null) return { ok: false, chat: gid, reason: 'read-failed' };
   const next = composeCard(current, rule, amount, onebot.selfNickname);
-  if (next === current) return { ok: true, chat: gid, skipped: true, card: next, amount };
+  if (next === current) {
+    applied.set(gid, { key: cacheKey, card: next });
+    return { ok: true, chat: gid, skipped: true, card: next, amount };
+  }
   try {
     await onebot.call('set_group_card', { group_id: gid, user_id: userId, card: next });
   } catch (e) {
     logger.warn('balance', `写群 ${gid} 名片失败：${e?.message ?? e}`);
     return { ok: false, chat: gid, reason: 'write-failed', error: String(e?.message ?? e) };
   }
+  applied.set(gid, { key: cacheKey, card: next });
   logger.info('balance', `群 ${gid} 名片后缀已更新：${next}`);
   return { ok: true, chat: gid, card: next, amount, previous: current };
 }
@@ -149,7 +163,7 @@ export async function syncBalanceCards(onebot, options = {}) {
   const targets = chat ? [chat] : rule.chats;
   const out = { chats: targets.length, synced: 0, skipped: 0, failed: 0, results: [] };
   for (const gid of targets) {
-    const r = await syncChatCard(onebot, gid);
+    const r = await syncChatCard(onebot, gid, { force: options.force === true });
     out.results.push(r);
     if (!r.ok) out.failed += 1;
     else if (r.skipped) out.skipped += 1;

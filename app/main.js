@@ -172,15 +172,9 @@ function createTray() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示主界面', click: () => showWindow() },
     { type: 'separator' },
-    { label: '退出（协议端保持运行）', click: () => { quitting = true; app.quit(); } },
-    {
-      label: '退出并停止协议端',
-      click: async () => {
-        quitting = true;
-        try { await core.stopNapcat(); } catch { /* 停止失败不阻塞退出 */ }
-        app.quit();
-      }
-    }
+    // 退出链路里绝不碰协议端：强杀 NapCat 进程树 = QQ 掉登录，恢复要人工扫码（2026-10-27 判例）。
+    // 要停协议端走显式通道（界面「协议端」卡片 / POST /api/napcat/stop），不在退出路径上。
+    { label: '退出（协议端保持运行）', click: () => { quitting = true; app.quit(); } }
   ]));
   tray.on('click', () => showWindow());
 }

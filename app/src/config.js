@@ -35,6 +35,16 @@ const DEFAULTS = {
     autoConnect: true,
     reconnectMs: 3000
   },
+  // 登录异常探针（incident/login-watch.js）——掉登录现场取证。
+  // 2026-10-27 判例：掉登录后平台侧没有任何 kickoff 证据，「被踢 / 断网 / 协议端卡死」分不清；
+  // 这套采样在掉线**之前**就开始留痕（每 intervalMs 一行，异常时落整份现场快照）。
+  incident: {
+    enabled: true,
+    // 采样间隔——只读本地（WebUI 状态 + 端口 + 日志尾），不额外打 QQ 接口
+    intervalMs: 30 * 1000,
+    // 静默阈值：多久没有任何群消息就当作「疑似掉线」落现场（12:17:57 那次就是静默失联，无报错）
+    silentMs: 30 * 60 * 1000
+  },
   // 业务伴生进程（QQ Agent）——入口换成自研单体后，业务面由本应用按需拉起。
   // exe / cwd 都显式给出：绝不让它继承本应用的 cwd（判例 2026-10-10 工作目录钉死）。
   companion: {

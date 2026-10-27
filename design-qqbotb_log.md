@@ -3258,3 +3258,94 @@ R喵喵：交接摘要已注入，等待确认
 3. **缓存计价折扣率未取数**——`api.priceCachedPerM = 0` 且 `useOfficialPrice = true`，实际单价由远端价格表决定，未核对。
 4. **【记忆】段构成未拆**——约 7,500 字符里会话要点 / 群记 / 群友印象各占多少未分离。
 5. **O5（砍 prompt 总量）按用户裁定不做**——`ref-cache-hit.md` §八 已记。
+
+---
+
+## 七十八、掉登录现场取证 + 登录探针（v0.91 · 2026-10-27）
+
+**触发（Rushiera）：** 群里 bot 不回话 → 查得协议端 `waiting_qrcode`、OneBot 3000/3001 未监听 → 「先对灾难现场做探针，后续掉登录我希望知道是什么原因，比如掉登录前最后几条消息是什么，哪个群」→ 追加「不是接到的消息，是最后发的消息」→ 「看看修一下，有发现跟我说，实在没发现也留一下后续侦察的位点」。
+
+### A · 现场时间线（三源互证）
+
+| 时刻 | 证据 | 含义 |
+|:--|:--|:--|
+| 12:04:37 | 业务面日志 `[发送 -> group:361820329]` 「懂了，嘉豪＝不着调…」 | **bot 最后一次发言**（群 361820329 白毛红瞳一家亲） |
+| 12:09:52 | 单体日志 `接口 GET /api/qq/login 异常：fetch failed` | 6099 WebUI 首次不可达（此后零星复发） |
+| 12:12:55 | `[browse] group:361820329 静默补拍：1 条新内容进 LLM` | 业务面最后一次成功处理消息 |
+| 12:17:57 | 协议端日志 `接收 <- 群聊 [大耳的音趴交流-主群(312080198)] [哦鲸鲸(1808736969)] 还有，道什么歉啦，我可没惹他。` | **协议端收到的最后一条消息**（此后该文件再无收发行） |
+| 12:33:01 / 13:03:01 / 13:06:37 | `NTEvent ... fetchUserDetailInfo Timeout` | QQ 内核与服务器通路持续失效（NapCat 进程仍在、`get_login_info` 仍回 Shieraru） |
+| 13:10:29–35 | `连接已断开` → `协议端已停止（pid=35020,26948,8100,37692,54008）` → `已拉起协议端（pid=51788）` | 单体退出钩子 `napcat.stop()` 对整个 NapCat 进程树 `taskkill /T /F`；新实例 `-q 2405997337` 快速登录失败 |
+| 13:13 起 | `/api/qq/login` → `isLogin:false / loginPhase:waiting_qrcode / coreReady:false`；`POST /api/qq/login/quick` → `登录态已失效，请重新登录` | 只能扫码（实际 21:4x 由人工扫码恢复） |
+
+### B · 判定与修掉的真问题
+
+| # | 判定 | 处置 |
+|:--:|:--|:--|
+| 1 | **不是 13:10 重启导致掉登录**——12:17:57 消息断流、12:33 起内核超时都在重启之前 | 无（记录） |
+| 2 | **13:10 重启是二次伤害**——退出钩子强杀协议端进程树，把「半死」变成「必须扫码」；`tools/entry.cmd` 里特意写过「绝不杀 NapCat，杀它就要重新登录」，钩子没守住同一策略 | 记录待改：托盘已有「退出（协议端保持运行）」通道，钩子杀进程只在「退出并停止协议端」时发生；本次现场触发源无 web 请求记录，按「托盘退出并停止协议端」处理，未改代码 |
+| 3 | **`webui.call` 的 fetch 无超时**——协议端卡死时挂起的请求会堆积（界面每 15 秒轮询一次），失败退化为「悬挂」 | 🔴 已修：`src/napcat/webui.js` 两处 fetch 加 `AbortSignal.timeout(5000)`（`FETCH_TIMEOUT_MS`） |
+| 4 | 「单体探针/扫描直接触发掉登录」**未被证据支持**——12:12:55 之后业务面零请求（日志空白），12:09 的 6099 不可达早于消息断流 | 无法证伪，也无法证实：平台侧零 kickoff 证据 → 补探针（下） |
+
+### C · 落点（登录探针）
+
+| 面 | 文件 | 内容 |
+|:--|:--|:--|
+| 模块 | `app/src/incident/login-watch.js`（新增） | 周期采样（默认 30 秒）：`loginStatus`（isLogin / loginPhase / coreReady / loginError）· 3000/3001 端口 · 协议端日志尾（最新 `接收 <- 群聊` 行）· 业务面日志尾（最新 `[发送 -> …]` 行）；每采样一行落 `data/incidents/watch-<日期>.jsonl` |
+| 快照 | 同上 | 命中异常 → `data/incidents/<yyyyMMdd-HHmmss>_<原因>.json`：登录态 · 通道 · **最后 20 条收 + 最后 20 条发**（群号 / 发送人 / 正文）· 静默秒数；同原因 30 分钟去重，产物保留 30 天 |
+| 判据 | 同上 | `login_down`（连击 2）· `core_not_ready`（连击 2）· `webui_unreachable`（连击 3）· `onebot_down`（连击 3）· **`silent_no_message`（默认 30 分钟无任何群消息——12:17 那种静默失联不报错，只能靠它抓）** |
+| 装配 | `app/src/app.js` | `createLoginWatch(...)` → `start()` / `stop()`；新增 `POST /api/incident/sample` 手动采一次；`return` 暴露 `loginWatch` |
+| 配置 | `app/src/config.js` | 新增默认段 `incident: { enabled:true, intervalMs:30000, silentMs:1800000 }` |
+| 旁路 | `tools/watch-login.mjs`（新增） | 与单体同一份实现、日志出口换 stdout：`node tools/watch-login.mjs`（常驻）/ `--once`（采一次）/ `--interval=60` / `--silent=10`——单体还没重启时先用它取样 |
+| 边界 | —— | 全程只读：不重启协议端、不重登、不改业务面状态；采样自身失败一律 `log.warn` 出声 |
+
+### D · 自测
+
+| 判据 | 结果 |
+|:--|:--|
+| `node --check` × 4（login-watch / app.js / napcat/webui.js / tools/watch-login.mjs） | 全 0 错 |
+| `node tools/watch-login.mjs --once`（真环境） | 通：`isLogin=true / loginPhase=ready / coreReady=true / ws=3001 通 / http=3000 通`；`lastRecv=10-27 21:53:40 大耳的音趴交流-主群(312080198) 十里廊`；`lastSend=21:51:50 group:312080198「50块一周有点贵，能分期吗」` |
+| 收发解析口径 | 首版发送正则漏了 `[app]` 这一层前缀块 → 只解析到 0 条；改 `.*?\[发送 -> …` 后取到 20 条（含现场那 4 条 12:0x 记录） |
+
+### E · 遗留
+
+1. **生效需重启自研单体**（`app/src` 启动时加载）——重启后探针自动起，每 30 秒落一行。**注意：重启 = 一次协议端强杀风险，挑掉线不痛的时候做。**
+2. 现在就能用：`node tools/watch-login.mjs`（旁路常驻，与单体同一实现，互不干扰）。
+3. **未取到的证据面**：QQ 客户端自身日志（`nt_qq`）未定位，`kickoff` / `offline` 类事件仍读不到——探针只能看 NapCat 与业务面两侧；下一步若再掉，先看快照里「最后发送」与静默起点是否吻合。
+4. 余额后缀 `set_group_card`（每 30 分钟一次写操作）仍在跑——写操作触风控的概率高于读，若再掉登录可先把它临时关掉做对照实验（记忆页「💰 余额后缀」）。
+
+---
+
+## 七十九、退出链不碰协议端 + 余额后缀「值未变不改写」（v0.92 · 2026-10-27）
+
+**触发（Rushiera）：** 对 v0.91 提出的两个待定项拍板——「1，可以不用留」/「余额后缀先不管，但是定时写操作可以改成不变化不改写，暂时我们还没接余额变化接口」。
+
+### A · 落点
+
+| # | 面 | 文件 | 内容 |
+|:--:|:--|:--|:--|
+| 1 | 托盘 | `app/main.js` | 删「退出并停止协议端」菜单项；退出链只留「退出（协议端保持运行）」。理由写进注释：强杀 NapCat 进程树 = QQ 掉登录、要人工扫码（v0.91 判例）。停协议端改走显式通道（界面卡片 / `POST /api/napcat/stop`） |
+| 2 | 余额 | `_unpack/resources/app/src/balance.js` | 新增 `applied: Map<gid, {key, card}>`；`syncChatCard(onebot, gid, options)`——`force` 之外命中缓存直接返回 `skipped:'unchanged'`，**不发任何 QQ 请求**（原逻辑每轮必发一次 `get_group_member_info`）；`cacheKey = 余额值 + '|' + marker` |
+| 3 | 余额 | 同上 | 回填缓存两条路径：写成功之后、以及「读回与目标一致」分支 |
+| 4 | 路由 | `_unpack/resources/app/src/routes.js` | `POST /api/balance/sync` 传 `force: true`——手动刷新 / 改值 / 验收不吃缓存 |
+| 5 | 模板 | `tools/templates/balance.js` | 与磁盘同步（模板即源码，重装可复现） |
+| 6 | 段库 | `tools/templates/balance-patches.txt` | `routes-sync` 段回灌 force 行，`--audit` 该段转 `audit-ok` |
+
+### B · 判据
+
+- **省掉的请求量**：定时器从「每 30 分钟 × 每群 1 次读」降为 **0**（余额值不变时）；只有「值变了 / 首轮 / 手动刷新」才发请求。这直接对应 v0.91 里「唯一持续对 QQ 的定时动作」这条嫌疑——现在它基本不再对服务器说话。
+- **不动余额功能本身**：开关、marker、剥旧后缀、失败不写 0.00 等口径全部保持不变。
+
+### C · 自测
+
+| 判据 | 结果 |
+|:--|:--|
+| `node --check` ×3（balance.js / routes.js / main.js） | 全 0 错 |
+| `node tools/verify-balance.mjs` | **30/30 ALL PASS** |
+| `node tools/patch-qqbotb-balance.mjs --dry` | `skipped 10 · dry 1 · exist 1`（无重复写入、module 已存在） |
+| `--audit` | `routes-sync` 转 `audit-ok`；仍 3 处既有漂移（见遗留 2） |
+
+### D · 遗留
+
+1. **生效面**：托盘菜单要重启自研单体；`balance.js` / `routes.js` 要重启业务面 QQ Agent。两者都不碰 NapCat，掉登录风险低于单体重启——但仍建议挑群里安静时做。
+2. **段库 3 处既有漂移**：`config` / `ui-list-badge` / `ui-fns` 段 `--audit` 报 MISMATCH（本轮未动它们的内容，属历史状态）。后果 = 重装 `_unpack` 后这三处与当前磁盘不完全一致；修法 = 按磁盘现状回灌段库（专轮做，需逐段比对）。
+3. **自动余额来源**：`source` 仍只认 `manual`；接入后 `resolveBalance()` 返回值变化即自动触发重写，缓存无需改（key 含余额值）。

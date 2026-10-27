@@ -41,7 +41,8 @@ import { syncBalanceCards } from './balance.js';
         const body = await bodyOf(req);
         const chat = String(body?.chat || '').trim();
         try {
-          const result = await syncBalanceCards(onebot, { chat });
+          // force: 手动按钮/验收一律实刷（不吃「值未变」缓存）——缓存只服务于定时器
+          const result = await syncBalanceCards(onebot, { chat, force: true });
           return json(res, 200, { ok: result.failed === 0, ...result });
         } catch (error) {
           return json(res, 200, { ok: false, error: String(error?.message ?? error) });

@@ -3349,3 +3349,32 @@ R喵喵：交接摘要已注入，等待确认
 1. **生效面**：托盘菜单要重启自研单体；`balance.js` / `routes.js` 要重启业务面 QQ Agent。两者都不碰 NapCat，掉登录风险低于单体重启——但仍建议挑群里安静时做。
 2. **段库 3 处既有漂移**：`config` / `ui-list-badge` / `ui-fns` 段 `--audit` 报 MISMATCH（本轮未动它们的内容，属历史状态）。后果 = 重装 `_unpack` 后这三处与当前磁盘不完全一致；修法 = 按磁盘现状回灌段库（专轮做，需逐段比对）。
 3. **自动余额来源**：`source` 仍只认 `manual`；接入后 `resolveBalance()` 返回值变化即自动触发重写，缓存无需改（key 含余额值）。
+
+## 八十、领航员功能全景索引 + 设计文档口径回灌（v0.93 · 2026-10-28）
+
+> 触发：Rushiera「开工qqbotB，整理一下其领航员功能」→「漂移顺手修，索引放项目根」。
+
+**一、核对方法（以代码为准，不采信文档自述）**
+
+| 面 | 实测源 |
+|:--|:--|
+| 设计口径 | `design-qqbotb-navigator.md`（20 节 · §一~§二十，补丁式追加） |
+| 参数真相 | `app/src/config.js` 的 `navigator.*`（18 键含嵌套） |
+| 工具面 | `tools/navigator/nav-tools.js` **14 件**（`nav_*` 10 + `comfy_edit` / `moss_draw` / `tts_speak` / `wd_tag`） |
+| API | `app/src/navigator/index.js` **15 条**路由（status / health / detail 只读 + open / close / send / say / analyze / shot / reset / new-session / comfy / moss / tts / tagger） |
+| 会话态 | `app/src/navigator/state.js`（9 字段 + `commandLog` 保留 50 条） |
+
+**二、产物**：`ref-navigator-map.md`（项目根 · 九节）——九大能力簇 / 工具 14 件 / API 15 条 / 配置全表 / 状态字段 / 代码落点 / 未竟（N6·N7·N8）/ 口径漂移核对。
+
+**三、回灌 4 处（只改文字，节号未动）**
+
+| # | 处 | 原口径 → 现口径 |
+|:--:|:--|:--|
+| 1 | §六 开场全量 | `keyinfo?max=20` → `navigator.tourKeyinfoMax`（默认 80） |
+| 2 | §八 教学面 | 教材来源只写 `persona.roleText` → 补「B23 后 roleText 只留路由索引 + `NAV_QUICK`，完整教材在按需文件 `role/nav-rules.md`（`read_file` 取件）」 |
+| 3 | §九 开场巡检 | `tourLimit` 只、默认 3（与 §六 及 `config.js` 矛盾）→ 默认 **0 = 不限**，与 §六 同一口径；条数上限补 `tourKeyinfoMax` 80 |
+| 4 | §十一 验收判据 | 14 条 → **18 条**（补 15 分段截全 / 16 轻通道 / 17 生成能力 / 18 日语人称口径） |
+
+**四、核对后不改**：「交接摘要」旧词仅存于本 log 与 `CHANGELOG.md` 的历史记录 + §六c 判例对当时群内原话的引用——属历史事实（只写不改）。`tourLimit` 默认 3 的旧值同理仅存于 CHANGELOG v0.30 行与本 log §三十 段，不回改。
+
+**五、边界**：本轮零代码改动；节号一律不动（§号被 `app/src/config.js` 注释与本 log 引用）；索引文件放项目根（Rushiera 定）。

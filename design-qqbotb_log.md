@@ -3359,10 +3359,10 @@ R喵喵：交接摘要已注入，等待确认
 | 面 | 实测源 |
 |:--|:--|
 | 设计口径 | `design-qqbotb-navigator.md`（20 节 · §一~§二十，补丁式追加） |
-| 参数真相 | `app/src/config.js` 的 `navigator.*`（18 键含嵌套） |
+| 参数真相 | `app/src/config.js` 的 `navigator.*`（顶层 **16 键**：enabled / mainPort / vipUser / idleCloseMs / tourLimit / tourKeyinfoMax / shotKeyinfoMax / shotSegmentHeight / shotSegmentMax / resetTraceLimit / rescueMaxChars / analyzeDelayMs / summary / services / comfy / media） |
 | 工具面 | `tools/navigator/nav-tools.js` **14 件**（`nav_*` 10 + `comfy_edit` / `moss_draw` / `tts_speak` / `wd_tag`） |
 | API | `app/src/navigator/index.js` **15 条**路由（status / health / detail 只读 + open / close / send / say / analyze / shot / reset / new-session / comfy / moss / tts / tagger） |
-| 会话态 | `app/src/navigator/state.js`（9 字段 + `commandLog` 保留 50 条） |
+| 会话态 | `app/src/navigator/state.js`（**10 字段**，含 `commandLog` 保留 50 条） |
 
 **二、产物**：`ref-navigator-map.md`（项目根 · 九节）——九大能力簇 / 工具 14 件 / API 15 条 / 配置全表 / 状态字段 / 代码落点 / 未竟（N6·N7·N8）/ 口径漂移核对。
 

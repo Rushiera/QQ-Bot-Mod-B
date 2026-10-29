@@ -3,7 +3,7 @@
 > 定位：**一页看完「领航员模式现在有什么」**——能力 / 入口 / 工具 / API / 参数 / 状态 / 代码落点 / 未竟 / 文档漂移。
 > 真相源分工：设计口径在 `design-qqbotb-navigator.md`（20 节，补丁式追加；**节号已被 `app/src/config.js` 注释与 `design-qqbotb_log.md` 引用 → 不重排**）；兑现明细在 `design-qqbotb_log.md`；行动项在 `todo.md` §五。
 > 本文件只是导读与核对结果，不含新口径。
-> 更新：2026-10-28（按当前代码核对 `app/src/config.js` · `app/src/navigator/*` · `tools/navigator/nav-tools.js`）
+> 更新：2026-10-28（按当前代码核对 `app/src/config.js` · `app/src/navigator/*` · `tools/navigator/nav-tools.js`）｜2026-10-30 复核：工具 14 件 / 单体路由 15 条 / `navigator.*` 17 键 / 会话态 10 字段逐项吻合，补 §十 端到端时序与闸门汇总；会话重建改为固定代读猫（`rescueCat`）
 
 ---
 
@@ -22,7 +22,7 @@ QQ 群 = CH4 猫群的**外部指挥台**：群内下指令 → 投给某只猫 
 | 3 | **观测出站** | 无需开口——猫一有回复自动截图发群 | ——（常驻订阅） | `/api/nav/status` 的 `activity` | §六 |
 | 4 | **只读回执** | 「各单位运行情况」「分析一下 rb 在干什么」——**不派活** | `nav_status` / `nav_health` / `nav_analyze` / `nav_detail` | `/api/nav/status` · `/health` · `/analyze` · `/detail` | §六 §十四 §十六 |
 | 5 | **会话截图** | 「截一下 X 的会话」（全量 · 超高按段发 `1/N…N/N`） | `nav_shot` | `/api/nav/shot` | §六（v0.66 / v0.72） |
-| 6 | **会话重建** | ①「清理一下 X 的前文，然后让工作继续」→ `nav_reset`（先收工出**交接报告**再注入）②「X 跑不动了，抢救一下」→ `nav_reset(rescue)`③「清掉 X 的会话，直接开新的」→ `nav_new` | `nav_reset` / `nav_new` | `/api/nav/reset` · `/api/nav/new-session` | §六b §六c §十三 |
+| 6 | **会话重建** | ①「清理一下 X 的前文，然后让工作继续」→ `nav_reset`（固定代读猫 nav_rescue 先清自己的前文 → 代读产出交接报告 → 注入）②「清掉 X 的会话，直接开新的」→ `nav_new` | `nav_reset` / `nav_new` | `/api/nav/reset` · `/api/nav/new-session` | §六b §六c §十三 |
 | 7 | **场次沉淀** | 退出时自动：领航记录 `nav-log-*.md` + 一行小结写进本群群记（`kind=project`）+ 开启时置记忆回溯点 | ——（关闭路径） | 经业务面记忆 API | §十五 |
 | 8 | **生成能力** | 改图「把这张图做成三视图」→ `comfy_edit`（**需领航员已开启**）· 生图「画一张…」→ `moss_draw` · 语音「念一下…」→ `tts_speak` · 反推「打标」→ `wd_tag` | 4 件 | `/api/nav/comfy` · `/moss` · `/tts` · `/tagger` | §十八 §二十 |
 | 9 | **轻通道** | 领航员**没开**时，本人点名猫的指令照样投 + 回复截图（**不做投送后分析**） | `nav_send`（`by:'qq'`） | `/api/nav/send` | §十九 |
@@ -67,7 +67,8 @@ QQ 群 = CH4 猫群的**外部指挥台**：群内下指令 → 投给某只猫 
 | `shotSegmentHeight` | `12000` | 超过则分段截、按序发多张 |
 | `shotSegmentMax` | `12` | 段数安全阀（超出只发尾部 N 段） |
 | `resetTraceLimit` | `100` | 原文轨迹落盘条数（**只落盘不注入**） |
-| `rescueMaxChars` | `600000` | 抢救代读原文上限（超 → 头 30% + 尾 70%） |
+| `rescueMaxChars` | `600000` | 代读原文上限（超 → 头 30% + 尾 70%） |
+| `rescueCat` | `nav_rescue` | **固定代读猫**（2026-10-30）——会话重建一律由它代读；空串 = 回落旧口径（空闲且最干净） |
 | `analyzeDelayMs` | `60000` | 投递后自动会话分析延迟（0 = 关） |
 | `summary.*` | `deepseek-v4.1-flash` · 20s · 1500 tok | think / 播报摘要（**必须快档**，推理模型吃光 max_tokens 会 content 恒空） |
 | `services[]` | ApiSiteAnalyzer `/api/sites` · ComfyDock `/api/summary` | 开启回执健康检查清单（apisite 用量只调 `site=__all` 合并口径） |
@@ -122,3 +123,37 @@ QQ 群 = CH4 猫群的**外部指挥台**：群内下指令 → 投给某只猫 
 | 3 | **§八 教学面仍以 `persona.roleText` 的 `NAV_RULES` 为教材来源** | ✔ 已补：B23（v0.76）后 roleText 只留路由索引 + `NAV_QUICK`，完整教材在按需文件 `role/nav-rules.md`（`read_file` 取件） |
 | 4 | **§十一 验收判据 14 条停在 v0.64 口径** | ✔ 已补 15–18 四条：分段截全 / 轻通道 / 生成能力 / 日语人称口径 |
 | 5 | §六b「交接摘要」措辞 | ✔ 核对：§六b 已无残留（v0.70 统一为「**交接报告**」）；「交接摘要」只剩 `design-qqbotb_log.md` / `CHANGELOG.md` 的历史记录与 §六c 判例里对当时群内原话的引用——**属历史事实，不动** |
+
+---
+
+## 十、一次派活的端到端时序（2026-10-30 核对，代码逐项吻合）
+
+```
+群消息 @bot
+  └→ ① 业务面 R喵 判断（LLM，非正则）：指令 / 闲聊 / 生成类请求
+       ├ 闲聊 → 走 engage 原路径，与领航员无关
+       ├ 生成类 → comfy_edit / moss_draw / tts_speak / wd_tag（§二-8）
+       └ 指令   → ② nav_send(key, text, by='qq')
+                    └→ 单体 POST /api/nav/send
+                         ├ 目标猫：点名者 / 未点名默认 majordomo
+                         ├ 通道：majordomo → 8081 `Chat `；其余 → 8080 `cat.chat`
+                         ├ 原文照抄，不加来源头（`sourceTag` 默认 false）
+                         └ 登记持久观测（SSE `sessionstate` 为主判据 + 5s `keyinfo` 兜底）
+                              └→ ③ 猫跑完（run→idle）→ `keyinfo?max=12` 取回复
+                                   → 渲染截图（CH4 会话卡同源）
+                                   → 视觉解读一段 → 图片 + 文本两条发 `activeChat`
+       └ 无新回复但在跑 → `emitOutbound` 冷却过后纯文字播报 + @ 触发者（think 摘要 ≤50 字）
+④ 投递后 `analyzeDelayMs`（60s）自动跑一次猫会话分析 —— 静默反馈替代
+⑤ 关闭时场次沉淀：`nav-log-*.md` + 一行小结进本群群记（`kind=project`）
+```
+
+**闸门汇总（缺一出声拒绝，不静默）：**
+
+| 动作 | 前置 |
+|:--|:--|
+| 开 / 关 | 仅 `569145850`（群内）或应用内「领航员」页签 |
+| 投递（常规） | 领航员已开启 |
+| 投递（轻通道） | 未开启时：`by='qq'` + `vipFresh()`（VIP 群 @ 120 秒窗口）+ 点名了猫——否则回 `offMode` |
+| 改图 | 能力启用 + ComfyDock 在线 + VIP 窗口 + 单任务闸 + **领航员已开启** |
+| 生图 / 语音 / 反推 | 能力启用 + ComfyDock 在线 + VIP 窗口 + 单任务闸（**不要求领航员开启**） |
+| 出站（截图 / 图 / 语音 / 播报） | 无闸——单体 OneBot 直发，不经业务面发言配额 / 硬限 / 节拍 |

@@ -3378,3 +3378,50 @@ R喵喵：交接摘要已注入，等待确认
 **四、核对后不改**：「交接摘要」旧词仅存于本 log 与 `CHANGELOG.md` 的历史记录 + §六c 判例对当时群内原话的引用——属历史事实（只写不改）。`tourLimit` 默认 3 的旧值同理仅存于 CHANGELOG v0.30 行与本 log §三十 段，不回改。
 
 **五、边界**：本轮零代码改动；节号一律不动（§号被 `app/src/config.js` 注释与本 log 引用）；索引文件放项目根（Rushiera 定）。
+
+## 八十一、会话重建改固定代读猫 nav_rescue（v0.94 · 2026-10-30）
+
+> 触发：Rushiera「会话重建功能做下修改，现在 ch4 里有专门做这个的猫 nav_rescue，不在让猫自己清理前文，也不需要用户在点名抢救模式，只要我发起清理前文任务，nav_rescue 就先进行一次 nav_new（清理上一次抢救的内容）然后完成抢救动作后，重建目标猫的前文（nav_rescue 不清，下次重建前文在清）」。
+
+**一、语义变更**
+
+| 项 | 原（v0.93 及之前） | 现（v0.94） |
+|:--|:--|:--|
+| 交接材料来源 | 目标猫**自己收工自述**；跑不动才用 `rescue` 抢救 | 一律由**固定代读猫**代读产出——目标猫自述那条路删除 |
+| 抢救模式的触发 | 用户得在群里说「用抢救模式重建 X 的前文」→ `rescue=true` | **不需要点名**——任何一次前文整理都走代读；`rescue` 参数退役（保留接收不报错） |
+| 代读猫选择 | 空闲且最干净（majordomo 优先） | **固定猫** `navigator.rescueCat`（默认 `nav_rescue`）；未配置才回落旧口径 |
+| 代读猫前文 | 只有在选猫时才考虑干净度 | **每次开工先 `cat.new-session`**（清掉上一次抢救的内容）→ 等新会话就绪 → 再投原文 |
+| 代读猫善后 | 不自动清 | 本次流程后**不清**，等**下一次重建前**由开工清场自动清掉 |
+
+**二、五面落点**
+
+| 面 | 文件 |
+|:--|:--|
+| 配置 | `app/src/config.js` —— `navigator.rescueCat: 'nav_rescue'`（`navigator.*` 16 → **17 键**） |
+| 主流程 | `app/src/navigator/index.js` —— `rescueCatKey` 读取 · `pickRescueCat` 固定猫优先 · `rescueSummary` 开工清场 + 代读 · `resetSession` 固定走代读、`rescue` 退役（`void rescue`） |
+| 业务面工具 | `tools/navigator/nav-tools.js` —— `nav_reset` 描述 / `rescue` 参数说明 / 回执文案；补丁 `patch-qqagent-navigator.mjs` 落 `module-nav-tools: updated` |
+| 教材 | `tools/apply-qqagent-config.mjs`（`NAV_RULES` + `NAV_QUICK` 第 185 行）· `role/nav-rules.md` 两条 + 「别拿 nav_reset 顶」一条；`roleTextChars` 5271 → **5322**（`--roletext-only` 已落盘 `_unpack/data/config.json`） |
+| 口径 | `design-qqbotb-navigator.md` §六b（语义句 / 四步表 ① / 与 §六c 界线 / 代读猫整表五行 / 群内指令语）· §十一 判据 14 · `ref-navigator-map.md`（§二-6 · §五 新增 `rescueCat` 行 · 头部键数） |
+
+**三、🔴 修掉一处会致全流程失败的缺陷**
+
+`navigator.rescueCat` 写的是**显示名**（`nav_rescue`），而 `ch4.cats()` 返回的 `id` 是会话数字 id（`639289157044093243`）。原实现 `rows.find(row => row.id === rescueCatKey)` 恒不命中 → 每次整理都中止在「固定代读猫未就绪」，且**目标猫前文一条都清不掉**（失败保护生效，属静默不执行）。
+修法：按 **id 或显示名**匹配，并返回 `hit.id` 作为投递键（`cat.new-session` 需 id / 可解析键）。自测补两条断言实锤：解析产物 `639289157044093243 / nav_rescue（固定代读猫）`；目标猫就是代读猫本身时返回 null。
+
+**四、自测（全部实跑）**
+
+| 项 | 结果 |
+|:--|:--|
+| `node --check` ×6（`index.js` / `config.js` / `nav-tools.js` / `verify-navigator.mjs` / `apply-qqagent-config.mjs` / 补丁脚本） | 全 0 错 |
+| `tools/verify-navigator.mjs` | **62/62**（原 60 条 + 新增固定猫解析 2 条） |
+| `tools/verify-qqagent-navtools.mjs` | **19/19**（`nav_reset` 定义面：固定代读猫 + rescue 保留但不需传） |
+| `tools/verify-import-integrity.mjs` | ALL PASS（69 文件 / 368 符号） |
+| `tools/patch-qqagent-navigator.mjs` | `applied 1`（`module-nav-tools: updated`）· `skipped 5` |
+
+> 顺带修：`verify-navigator.mjs` 的「CH4·单猫详情」写死了猫名 `rf`——CH4 现有 11 只猫里已无该名（`未找到猫: rf`），失败属**环境漂移**不属代码；改动态取（majordomo 优先，回落首只）。
+
+**五、生效面与遗留**
+
+1. **生效需重启自研单体**——`app/src/navigator/index.js` / `app/src/config.js` 是启动时加载（`启动QQBotB.vbs`）。业务面工具描述已落盘，**业务面重启后**新描述进前文；教材改动需业务面**开新会话**。
+2. **真链路待验收**：群里说一次「清理一下 X 的前文，然后让工作继续」→ 期望活动流依次出现「代读猫 = nav_rescue（固定代读猫）」+「已开新会话（清上一次抢救内容，清前 N 条）」+ 交接报告分次收回 + 目标猫重建。**首次实跑等于真清一只猫的前文，挑非在用的猫做**。
+3. **`nav_rescue` 的根（enableRoots）为空**——它只做代读（读原文由领航员抓取后整条投递，不需要它自己读盘），当前配置够用；若日后让它自己取文件需补根。

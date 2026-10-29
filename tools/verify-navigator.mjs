@@ -67,8 +67,9 @@ try {
 }
 
 try {
-  const detail = await ch4.detail('rf');
-  check('CH4·单猫详情', detail?.ok === true && !!detail?.name, `${detail?.name ?? '?'} / ${detail?.runState ?? '?'}`);
+  const probeKey = String((cats.find((row) => String(row?.id) === 'majordomo') || cats[0] || {}).id || 'majordomo');
+  const detail = await ch4.detail(probeKey);
+  check('CH4·单猫详情', detail?.ok === true && !!detail?.name, `${probeKey} → ${detail?.name ?? '?'} / ${detail?.runState ?? '?'}`);
 } catch (error) {
   check('CH4·单猫详情', false, String(error?.message ?? error));
 }
@@ -301,9 +302,9 @@ check('nav_reset·原文轨迹只落盘不注入',
   '');
 navReset.stop();
 
-// ── 11 nav_reset 抢救模式：选猫判据 + 原文抓取 + 入口透传（Rushiera 2026-10-14）──
-// 判据：① API 面回执回显 rescue（入口没丢参数）② 选猫排除目标猫自身 / 忙猫 ③ 候选存在时 majordomo 优先
-//       ④ 完整前文抓取走只读 fullctx（按字符上限截断：头尾保留）+ keyinfo 位置索引 ⑤ 源码面存在代读段（真代读涉真猫 + 几分钟等待，走群内实测）。
+// ── 11 nav_reset 代读：未配 rescueCat 时回落选猫 + 原文抓取 + 固定代读猫（Rushiera 2026-10-30）──
+// 判据：① API 面回执回显 rescue（入口保留参数）② 未配 rescueCat 时回落旧口径（空闲 / 排除目标猫）
+//       ③ 完整前文抓取走只读 fullctx（按字符上限截断：头尾保留）+ keyinfo 位置索引 ④ 源码面存在代读段与固定猫（真代读涉真猫 + 几分钟等待，走群内实测）。
 const navSalvage = createNavigator({
   log,
   dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-salvage-')),
@@ -334,10 +335,28 @@ check('抢救·完整前文抓取（只读 fullctx + 关键信息位置索引）
   `${srcSalvage.count} 条 / ${srcSalvage.chars} 字符${srcSalvage.truncated ? '·超限截断' : ''} · 索引 ${srcSalvage.index.length} 字符`);
 
 const salvageSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
-check('抢救·源码代读段在位',
+check('代读·源码段在位（固定代读猫 + 开工先清它的前文 + 交接报告）',
   salvageSrc.includes('async function rescueSummary') && salvageSrc.includes('async function pickRescueCat')
-  && salvageSrc.includes('function keyIndex') && salvageSrc.includes('抢救报告已取到'),
+  && salvageSrc.includes('function keyIndex') && salvageSrc.includes('交接报告已取到')
+  && salvageSrc.includes('rescueCatKey') && salvageSrc.includes('清上一次抢救内容'),
   '');
+// 固定代读猫分支（Rushiera 2026-10-30）——配置写的是**显示名**（nav_rescue），必须解析到会话 id，
+// 否则「固定代读猫未就绪」会让所有前文整理直接失败（2026-10-30 修）。
+const navFixed = createNavigator({
+  log,
+  dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-fixed-')),
+  config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [], rescueCat: 'nav_rescue' } },
+  onebot: { call: async () => ({}), status: () => ({ self: { userId: 2405997337 } }) }
+});
+const rescueRow = cats.find((row) => String(row?.name) === 'nav_rescue') || {};
+const fixedPick = await navFixed.pickRescueCat({});
+check('代读·固定猫按显示名解析到会话 id',
+  !!fixedPick && !!rescueRow.id && String(fixedPick.key) === String(rescueRow.id) && fixedPick.name === 'nav_rescue',
+  fixedPick ? `${fixedPick.key} / ${fixedPick.name}（${fixedPick.reason}）` : '未解析');
+const fixedExclude = await navFixed.pickRescueCat({ excludeKey: String(rescueRow.id ?? '') });
+check('代读·目标猫就是代读猫本身 → 拒绝', fixedExclude === null, fixedExclude ? `误选 ${fixedExclude.name}` : '返回 null');
+navFixed.stop();
+
 navSalvage.stop();
 
 // ── 12 nav_shot 会话截图：显式块出图 + 源码段在位（Rushiera 2026-10-14）──────

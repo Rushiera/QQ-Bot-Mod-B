@@ -95,12 +95,12 @@ check('wd_tag·参数面（messageId 可选）',
 check('wd_tag·描述含反推提示词',
   !!wdDef && wdDef.description.includes('反推提示词'));
 
-// ── 2b nav_reset 定义面：抢救模式参数（Rushiera 2026-10-14）──────────────────
+// ── 2b nav_reset 定义面：固定代读猫 + rescue 已退役（Rushiera 2026-10-30）──────
 const resetDef = getTool('nav_reset');
-check('nav_reset·抢救模式参数面（rescue 可选）',
+check('nav_reset·定义面（固定代读猫 / rescue 保留但不需传）',
   !!resetDef && !!resetDef.parameters?.properties?.rescue
   && !(resetDef.parameters.required || []).includes('rescue')
-  && resetDef.description.includes('抢救模式'),
+  && resetDef.description.includes('固定代读猫') && resetDef.description.includes('已退役'),
   resetDef ? JSON.stringify(resetDef.parameters.required) : '未注册');
 
 // ── 2c nav_shot 定义面：截图会话（key 必填 + 描述含「会话卡」）──────────────

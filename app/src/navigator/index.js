@@ -224,6 +224,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   // 抢救模式代读上限（design §六b 抢救模式）——超出保留头尾、砍中段
   const rescueMaxRaw = Number(navConfig.rescueMaxChars);
   const rescueMaxChars = Number.isFinite(rescueMaxRaw) && rescueMaxRaw > 0 ? rescueMaxRaw : RESCUE_SOURCE_MAX;
+  // 固定代读猫（Rushiera 2026-10-30）——会话重建一律由它代读，不再让目标猫自己收工
+  const rescueCatKey = String(navConfig.rescueCat ?? '').trim();
   const services = Array.isArray(navConfig.services) ? navConfig.services : [];
   const vipUser = String(navConfig.vipUser || '');
   // 图像编辑（design-qqbotb-navigator.md §十八）——ComfyDock「[生成]」工作区
@@ -2010,10 +2012,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
-   * 挑一只「抢救猫」——空闲且没有参与内容的猫（majordomo 优先）。
+   * 挑代读猫——固定猫优先（`navigator.rescueCat`），未配置时回落「空闲且最干净」。
    *
-   * 判据（design §六b 抢救模式）：runState 为 idle（不在跑）、无待处理、非目标猫本身；
-   * majordomo 优先，其余按前文条数升序（越干净越优先——它要腾出上下文装目标猫的原文）。
+   * 固定猫语义（Rushiera 2026-10-30）：会话重建不再由目标猫自述，一律交给 CH4 里专门做这事的猫。
+   * 固定猫忙也照用（调用方会先开新会话把它腾出来）；找不到该猫 → 返回 null 由调用方出声中止。
    *
    * @param {object} options 选项
    * @param {string} [options.excludeKey] 排除的猫（目标猫自身）
@@ -2022,6 +2024,22 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   async function pickRescueCat({ excludeKey = '' } = {}) {
     const rows = await ch4.cats();
     const exclude = new Set([String(excludeKey || '')]);
+    if (rescueCatKey) {
+      if (exclude.has(rescueCatKey)) return null;
+      // 固定猫按 **id 或显示名** 匹配——配置里写的是显示名（`nav_rescue`），
+      // 而猫群条目的 `id` 是会话数字 id（2026-10-30 修：只比 id 会恒判「未就绪」）。
+      const hit = rows.find((row) => String(row?.id ?? '') === rescueCatKey
+        || String(row?.name ?? '') === rescueCatKey);
+      if (!hit) return null;
+      const key = String(hit.id ?? rescueCatKey);
+      if (exclude.has(key)) return null;
+      return {
+        key,
+        name: String(hit.name || rescueCatKey),
+        contextCount: Number(hit.contextCount ?? 0),
+        reason: '固定代读猫'
+      };
+    }
     const candidates = rows.filter((row) => {
       const id = String(row?.id ?? '');
       if (!id || exclude.has(id)) return false;
@@ -2129,7 +2147,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
-   * 抢救模式——目标猫自己跑不动时，由另一只空闲猫代读它的完整前文，产出交接报告。
+   * 代读——由固定代读猫（`navigator.rescueCat`，默认 nav_rescue）读目标猫的完整前文，产出交接报告。
+   *
+   * 开工前先给它开新会话（`cat.new-session`）——清掉上一次抢救的内容（Rushiera 2026-10-30）；
+   * 它自己本次流程结束后不清，等下一次重建前才清。
    *
    * @param {object} options 选项
    * @param {string} options.resolved 目标猫 key
@@ -2139,10 +2160,23 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   async function rescueSummary({ resolved, name }) {
     const rescuer = await pickRescueCat({ excludeKey: resolved });
     if (!rescuer) {
-      record('error', `${name}：抢救失败——没有空闲且未参与内容的猫可用`);
-      return { ok: false, error: '没有空闲且未参与内容的猫可用作抢救' };
+      record('error', `${name}：代读失败——${rescueCatKey ? `固定代读猫 ${rescueCatKey} 未就绪（不存在或就是目标猫本身）` : '没有空闲且未参与内容的猫可用'}`);
+      return { ok: false, error: rescueCatKey ? `固定代读猫 ${rescueCatKey} 未就绪` : '没有空闲且未参与内容的猫可用作代读' };
     }
-    record('reset', `${name}：抢救猫 = ${rescuer.name}（${rescuer.reason}，前文 ${rescuer.contextCount} 条）`);
+    record('reset', `${name}：代读猫 = ${rescuer.name}（${rescuer.reason}，前文 ${rescuer.contextCount} 条）`);
+
+    // ⓪ 开工先清代读猫自己的前文（Rushiera 2026-10-30）——上一场抢救的原文已用完；
+    //    它自己这次流程结束后**不清**，等下一次重建前才清（清的是"上一次抢救的内容"）。
+    try {
+      const before = await ch4.keyinfo(rescuer.key, 5);
+      const beforeCount = Number(before?.count ?? 0);
+      await ch4.command(`cat.new-session ${rescuer.key}`, ch4.mainPort);
+      const ready = await waitSessionReady(rescuer.key, { beforeCount });
+      record('reset', `${name}：代读猫 ${rescuer.name} 已开新会话（清上一次抢救内容，清前 ${beforeCount} 条${ready ? '' : '·就绪等待超时，仍按当前状态投递'}）`);
+    } catch (error) {
+      record('error', `${name}：代读猫 ${rescuer.name} 新会话失败（${error?.message ?? error}）`);
+      return { ok: false, error: '代读猫新会话失败' };
+    }
     let source;
     try {
       source = await grabCatSource(resolved);
@@ -2157,7 +2191,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     record('reset', `${name}：完整前文已抓取（${source.count} 条 / ${group(source.chars)} 字符${source.truncated ? '·超限截断' : ''}）→ 投给 ${rescuer.name} 代读`);
     const askAt = Date.now();
     await ch4.send(rescuer.key, [
-      `【领航员·前文抢救】目标：${name}。它自己的会话已经跑不动了（前文太长 / 无响应），没法自己收工整理——现在由你代读它的**完整前文**，产出一份**交接报告**，交给它的下一个会话。`,
+      `【领航员·前文整理】目标：${name}。它的前文即将清掉重建，现在由你代读它的**完整前文**，产出一份**交接报告**，交给它的下一个会话。`,
       '',
       '报告要求（足量、详尽，宁多勿漏——接手方只有这份报告，猜不到你没写的；**以「接手方能无疑问地继续」为准**：继续工作所需的一切都写进去，旧的、不再需要的信息可以略过）：',
       '· 任务全貌与背景（在做什么、为什么做）',
@@ -2179,73 +2213,44 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     ].join('\n'));
     const summary = await collectReport(rescuer.key, { since: askAt - 2000, name: rescuer.name });
     if (!summary) {
-      record('error', `${name}：抢救报告未取到（救援猫 ${rescuer.name}），整理中止`);
-      return { ok: false, error: '抢救报告未取到', rescuer };
+      record('error', `${name}：交接报告未取到（代读猫 ${rescuer.name}），整理中止`);
+      return { ok: false, error: '交接报告未取到', rescuer };
     }
-    record('reset', `${name}：抢救报告已取到（${rescuer.name} 代读，${summary.length} 字符）`);
+    record('reset', `${name}：交接报告已取到（${rescuer.name} 代读，${summary.length} 字符）`);
     return { ok: true, summary, rescuer, source };
   }
 
   /**
-   * 前文整理重启——收工整理 → 抓原文轨迹（仅落盘）→ 新会话 → 注入交接报告 → 自动继续。
+   * 前文整理重启——代读（固定猫先清自己的前文）→ 抓原文轨迹（仅落盘）→ 新会话 → 注入交接报告 → 自动继续。
    *
-   * 延续性优先（Rushiera 2026-10-11）：交接材料的主体 = 猫自述（或救援猫代读）的**交接报告**，
+   * 延续性优先（Rushiera 2026-10-11）：交接材料的主体 = 代读猫产出的**交接报告**，
    * 口径为「接手方能无疑问地继续」；长报告分多次输出、由领航员逐轮收全（Rushiera 2026-10-15）。
+   * 代读口径（Rushiera 2026-10-30）：不再由目标猫自己收工自述，一律交固定代读猫（`navigator.rescueCat`）。
    * 原文轨迹另抓一份**只落盘、不注入**——它属「不再提及就不需要」的信息，混进前文只稀释有效信息。
    *
    * @param {object} options 选项
    * @param {string} options.key 目标猫
    * @param {string|number} [options.chat] 回报群
    * @param {string} [options.text] 用户原话——新会话就绪后作为第一条指令投递（可选）
-   * @param {boolean} [options.rescue] 抢救模式——目标猫自己跑不动时由空闲猫代读（可选）
+   * @param {boolean} [options.rescue] **已退役**（2026-10-30）——保留接收不报错；传不传都走固定代读猫
    * @returns {Promise<object>} 结果
    */
-  async function resetSession({ key, chat = null, text = '', rescue = false }) {
+  async function resetSession({ key, chat = null, text = '', rescue = true }) {
     const userText = String(text || '').trim();
     const resolved = await ch4.resolveKey(key);
     const name = await catNameOf(resolved);
     const target = resolveChat(chat);
-    record('reset', rescue
-      ? `${name}：前文整理重启（抢救模式）开始——由空闲猫代读`
-      : `${name}：前文整理重启开始`);
+    // 会话重建口径（Rushiera 2026-10-30）：不再让目标猫自己收工自述——一律由代读猫
+    // （`navigator.rescueCat`，默认 nav_rescue）先清自己的前文、代读目标猫完整前文、产出交接报告。
+    // 原「抢救模式」参数退役：保留接收不报错，传不传都走同一条路（不再要求用户在群里点名抢救）。
+    void rescue;
+    record('reset', `${name}：前文整理重启开始——由代读猫 ${rescueCatKey || '（自动挑选）'} 代读`);
 
-    let summary = '';
-    let summaryFrom = '猫自述';
-    if (rescue) {
-      // 抢救模式：跳过目标猫自述，由另一只空闲猫代读它的会话（design §六b 抢救模式）
-      const salvaged = await rescueSummary({ resolved, name });
-      if (!salvaged.ok) return { ok: false, error: salvaged.error };
-      summary = salvaged.summary;
-      summaryFrom = `抢救猫 ${salvaged.rescuer.name} 代读`;
-    } else {
-    // ① 收工整理——让它把工作状态写成交接报告（不调工具）
-    const askAt = Date.now();
-    await ch4.send(resolved, [
-      '【领航员·前文整理】你现在做一次**完整收工**，按顺序：',
-      '① 落盘——把该写的写进文件（进度 / 变更 / 设计文档 / todo / CHANGELOG，按你所在项目的收工清单）。',
-      '② **推 git**——把当前工作提交并推送（能推的都推掉，别留着）。',
-      '③ **收工报告**——按你的收工纪律输出终态断言：完成项 / 落盘位置 / 遗留项去向，零疑问句。',
-      '④ 然后输出一份**交接报告**——要足量、详尽，宁多勿漏；接手方是你的下一个会话，它只有这份报告，猜不到你没写的：',
-      '   · 任务全貌与背景（在做什么、为什么做）',
-      '   · 已完成的步骤与做法（关键路径 / 命令 / 文件 / 接口）',
-      '   · 未完成事项与下一步',
-      '   · 关键结论、踩过的坑、被否决的方案与原因',
-      '   · 继续工作所必需的上下文（路径 / 参数 / 约定 / 凭证位置）',
-      '   · 不确定或待确认的点（明确标注，别让接手方当成事实）',
-      '   · 用户提过的原始要求（照抄关键句，别改写）',
-      '',
-      '**以「接手方能无疑问地继续」为准**——继续工作所需的一切（结论 / 数据 / 路径 / 参数 / 原话）都写进去，旧的、不再需要的信息可以略过；篇幅不设上限。',
-      '**报告可能很长——请分多次消息输出**：每次输出一部分（几个小节），单条不要太长（避免被输出上限截断）；每次写完就停下，我会催你继续；**全部写完后，最后一条以【整理完毕】结尾**。',
-      '①②③做完再输出报告；报告与摘要都只输出正文（纯文本，小标题 + 列表）。'
-    ].join('\n'));
-    // 不设时限——收工 + 落盘 + 推 git + 报告（可能分多次输出，逐轮收全），大前文的猫实测 8 分钟起
-    summary = await collectReport(resolved, { since: askAt - 2000, name });
-    if (!summary) {
-      record('error', `${name}：交接报告未取到，整理中止`);
-      return { ok: false, error: '交接报告未取到' };
-    }
-    record('reset', `${name}：交接报告已取到（${summary.length} 字符）`);
-    }
+    const salvaged = await rescueSummary({ resolved, name });
+    if (!salvaged.ok) return { ok: false, error: salvaged.error };
+    let summary = salvaged.summary;
+    let summaryFrom = `代读猫 ${salvaged.rescuer.name} 代读`;
+
 
     // ①b 抓原文轨迹（必须在清前文之前——清掉就没了）：仅落盘备查，不进注入面
     let trace = '';

@@ -54,7 +54,7 @@ const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { getTool, listTools } = await import(mod('tool-registry.js'));
 const { registerCatTools, timebackMarkStart, timebackRollback, timebackGateTool } = await import(mod('cat-tools.js'));
 const { browserService, resolveKernelPath } = await import(mod('cdp-browser.js'));
-const { webFetchService } = await import(mod('web-fetch.js'));
+const { webFetchService } = await import(mod('web-asset-fetch.js'));   // 归位期改名：web-fetch.js → web-asset-fetch.js
 // 补丁接线复核：走 tools.js 的真实入口（buildToolDefs）——比只调 registerCatTools 强一档；
 // 再导入编排器，验证补丁后的 orchestrator.js 语法与导入图可加载（重启才不会当场炸）。
 const { buildToolDefs } = await import(mod('tools.js'));
@@ -92,8 +92,9 @@ const TOOL_IDS = [
   ];
   const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(BIZ, String(rel).replace(/^src\//, '')), 'utf8').includes(m));
   check(`补丁标记齐全（${marks.length}/${marks.length}）`, missing.length === 0, missing.map((x) => x[1]).join(' '));
-  const files = ['src/cdp-browser.js', 'src/cat-tools.js', 'src/web-fetch.js'];
-  const absent = files.filter((f) => !fs.existsSync(path.join(APP, f)));
+  // 归位期改名：web-fetch.js → web-asset-fetch.js（R2-L1 §六-4）；路径基准是 app/src/business/
+  const files = ['cdp-browser.js', 'cat-tools.js', 'web-asset-fetch.js'];
+  const absent = files.filter((f) => !fs.existsSync(path.join(BIZ, f)));
   check('新模块在位（3/3）', absent.length === 0, absent.join(' '));
   // 编排器真的接上了回卷 / 门禁 / 台账 / 下载器（不只看标记，看调用）
   const orch = fs.readFileSync(path.join(BIZ, 'orchestrator.js'), 'utf8');

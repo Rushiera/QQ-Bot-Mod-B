@@ -338,9 +338,12 @@ try {
 }
 check('6a 补丁脚本可重放（幂等：applied 0 / 全部跳过）',
   // 幂等判据只看「本轮没有新落盘」——跳过条数随补丁点增长，不能写死。
+  // R2-L2 给 20 个补丁加了退役守卫：默认输出 `RETIRED: 已被 R2 吸收…`（非 JSON）。
+  // 判据升级（R3-L6）：RETIRED 也算「无需再打」——但**必须出声**，不把「被退役」当「幂等通过」吞掉。
   // [qqagent-memory-patch:no-throttle-6a]
-  patchOut.includes('applied 0') && /skipped \d+/.test(patchOut),
-  patchOut.split('\n')[0]);
+  patchOut.startsWith('RETIRED')
+  || (patchOut.includes('applied 0') && /skipped \d+/.test(patchOut)),
+  patchOut.startsWith('RETIRED') ? 'RETIRED（R2 已吸收，打补丁动作转验终态文件）' : patchOut.split('\n')[0]);
 const orchText = fs.readFileSync(path.join(BIZ, 'orchestrator.js'), 'utf8');
 const promptText = fs.readFileSync(path.join(BIZ, 'prompt.js'), 'utf8');
 const toolsText = fs.readFileSync(path.join(BIZ, 'tools.js'), 'utf8');

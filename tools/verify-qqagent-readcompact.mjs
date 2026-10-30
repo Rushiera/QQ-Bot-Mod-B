@@ -270,16 +270,23 @@ check('4g 会话要点已归档（session-*.jsonl）',
   fs.existsSync(archiveDir) ? fs.readdirSync(archiveDir).join(',') : '(no archive dir)');
 
 // ── 判据 7：补丁脚本幂等可重放 ─────────────────────────────────────────────
+// R2-L2 给 20 个补丁加了退役守卫：默认输出 `RETIRED: 已被 R2 吸收…`（非 JSON，parse 会抛）。
+// 故保留原始 stdout，退役与 JSON 两条路各自成判据（R3-L6 判据升级）。
+let patchOut = '';
 let patchReport = null;
 try {
-  const out = execFileSync(process.execPath, [path.join(HERE, 'patch-qqagent-readcompact.mjs')], { encoding: 'utf8' });
-  patchReport = JSON.parse(out);
+  patchOut = execFileSync(process.execPath, [path.join(HERE, 'patch-qqagent-readcompact.mjs')], { encoding: 'utf8' });
+  patchReport = JSON.parse(patchOut);
 } catch (error) {
-  patchReport = { ok: false, error: String(error && error.message || error) };
+  if (!patchOut) patchOut = 'ERR ' + String(error && error.message || error);
 }
+const readcompactRetired = patchOut.startsWith('RETIRED');
 check('7a 补丁脚本可重放（幂等：本轮 0 应用 / 全跳过）',
-  patchReport && patchReport.ok === true && (patchReport.applied || []).length === 0 && (patchReport.skipped || []).length >= 30,
-  'applied=' + JSON.stringify(patchReport && patchReport.applied) + ' skipped=' + ((patchReport && patchReport.skipped) || []).length);
+  readcompactRetired
+  || (patchReport && patchReport.ok === true && (patchReport.applied || []).length === 0 && (patchReport.skipped || []).length >= 30),
+  readcompactRetired
+    ? 'RETIRED（R2 已吸收，打补丁动作转验终态文件）'
+    : 'applied=' + JSON.stringify(patchReport && patchReport.applied) + ' skipped=' + ((patchReport && patchReport.skipped) || []).length);
 const srcText = fs.readFileSync(path.join(BIZ, 'orchestrator.js'), 'utf8');
 check('7b 源码改动带补丁标记（可追溯 / 可重装复现）',
   srcText.includes('[qqagent-readcompact-patch:orchestrator-methods]')

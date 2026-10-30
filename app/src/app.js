@@ -14,7 +14,7 @@ import { createOnebotClient } from './onebot/client.js';
 import { createWebServer } from './web/server.js';
 import { createGroupsApi } from './web/groups-api.js';
 import { createCompanion } from './companion.js';
-import { createBusinessClient } from './business.js';
+import { createBusinessClient, createBusinessHub } from './business.js';
 import { createNavigator } from './navigator/index.js';
 import { createLoginWatch } from './incident/login-watch.js';
 
@@ -71,6 +71,10 @@ export async function createApp() {
 
   // 领航员（design-qqbotb-navigator.md）——状态机 + CH4 猫面 + 观测 + 空闲守护 + 本地 API
   const navigator = createNavigator({ log, dataDir: DATA_DIR, config, onebot, hooks });
+
+  // 业务面事件分发中心（单体 ⇄ 业务面的唯一通道）——唯一订阅点在本 hub；
+  // 默认 mode='child'（子进程隔离），navigator 消费者走 kind='self'（只登记不投，防双投）。
+  const businessHub = createBusinessHub({ onebot, log });
 
   const web = createWebServer({
     port: config.app.port,
@@ -142,6 +146,7 @@ export async function createApp() {
         webuiUrl: `http://127.0.0.1:${webui.port}/webui/`
       },
       onebot: onebot.status(),
+      business: businessHub.status?.() ?? null,
       companion: companion.state
     };
   }
@@ -183,6 +188,9 @@ export async function createApp() {
       .then(() => companion.ensure())
       .catch((error) => log.error('app', `业务面拉起失败：${error?.message ?? error}`));
 
+    // 先订阅再接 WS：hub 是唯一订阅点，早于 onebot.connect() 才不漏首帧事件
+    businessHub.start();
+
     if (config.onebot.autoConnect) {
       onebot.connect();
     }
@@ -197,6 +205,8 @@ export async function createApp() {
    * @returns {Promise<void>} 完成
    */
   async function stop() {
+    // 先停分发（退订 + 通知子进程优雅退出），再停其它消费者
+    await businessHub.stop();
     navigator.stop();
     loginWatch.stop();
     onebot.close();
@@ -205,5 +215,5 @@ export async function createApp() {
     log.info('app', 'QQBot mod B 已停止');
   }
 
-  return { start, stop, status, log, config, layout, hooks, navigator, loginWatch, webuiCredential, stopNapcat: () => napcat.stop() };
+  return { start, stop, status, log, config, layout, hooks, navigator, businessHub, loginWatch, webuiCredential, stopNapcat: () => napcat.stop() };
 }

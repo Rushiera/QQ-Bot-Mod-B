@@ -70,7 +70,6 @@
 | B30 | 五档真链路验收 | 账号恢复后：给一个群设成「保守」（2 档），跑一天看 `data/metrics/engage-<日期>.jsonl` 的 `roll` 行 `hit` 比例是否 ≈25%、`blocked` 行是否只在真撞闸时出现；再切「全开」对比日发言量 |
 | B31 | 客观信号启用拍板 | `engage.signals.enabled` 现为 false（只采集）。跑 3 天按 `metrics` 分布决定是否开 + `floor` 取多少（默认 0.15） |
 | B32 | 五档目标日发言校准 | 现 `rate` 按 10-19（459 条）/ 10-22（76 条）插值；真跑后按实测校准每档目标 |
-| B33 | 归档 `reply` 字段恒 null | `rapport.pointsAtMe` 的"引用我"分支实际只靠文本前缀匹配（`selfNickname` 空 → 退 `botName`）；`atRate` 信号想算准需先补该字段 |
 
 ## 十一、v0.85 群名片余额后缀（待生效 + 待验收）
 
@@ -110,21 +109,30 @@
 |:--:|:--|:--|
 | B46 | **重启业务面使采集面生效** | `启动QQAgent-仅业务面.bat` 或 `启动QQBotB.vbs`（`_unpack` 源码启动时加载）。重启后跑几次群聊，确认 `data/metrics/cache-2026-10-26.jsonl` 开始落行；`node tools\cache-metrics-report.mjs` 应输出十段（来源：`design-qqbotb_log.md` §七十七 遗留 1） |
 | B47 | TTL 曲线待数据积累 | 采集面读端「二、TTL 曲线」+「十、TTL 拐点」需要样本（<5 条的分桶显示「样本不足」）。跑一天后再读；拿到拐点位置才决定 O2（缩短安静后首发间隔）值不值得做（来源：§七十七 遗留 2） |
-| B48 | 缓存计价折扣率核对 | `api.priceCachedPerM = 0` 且 `useOfficialPrice = true` → 实际单价由远端价格表（`kondius.cn`）决定，未核对；成本看板上的「省了多少」当前是估算（来源：§七十七 遗留 3） |
-| B49 | 【记忆】段构成拆分 | 约 7,500 字符里会话要点 / 群记 / 群友印象各占多少未分离——若日后要动 O6（压缩记忆段）需先有这份拆分（来源：§七十七 遗留 4） |
+| B48 | 缓存计价折扣率核对 | **R3 已建工具并取证**（`tools/price-cache-audit.mjs`）。`api.priceCachedPerM = 0` + `useOfficialPrice = true` → 单价由远端价格表决定。**取证结论比本条更严重**：当前模型 `deepseek-v4.1-flash` 在远端 192 条表里全不命中（前缀匹配被 `.1` 的 `.` 隔断）→ `resolveModelPrice` 返 `unmatched`、单价全 0 → **成本看板恒 0**（不是估算偏差，是两个 0 相减）。**待拍板**：改 `api.model` 成表内存在的键，还是填 `api.modelPrices['deepseek-v4.1-flash']`（来源：`R3-L7.md` §二） |
+| B49 | 【记忆】段构成拆分 | **R3 已建工具并实测**（`tools/prompt-memory-split.mjs`）。真实两群实测：12,853 字符（群记 42.2% / 印象 56.8%）与 3,517 字符（群记 87.1% / 印象 4.9%）——**`todo` 原写的「约 7,500」不是常数，两群差近 4 倍**，动 O6 前必须对目标群取真实基线。剩：主力群 ≥5 天多轮快照（来源：`R3-L7.md` §一） |
 
-## 十六、B+C 迁移（R1/R2 收线后遗留 · 下一轮叫号）
+## 十六、B+C 迁移（R3 已清 M1–M5 · 余 M6 待拍板）
 
 | # | 项 | 说明 |
 |:--:|:--|:--|
-| M1 | **落 `app/src/app.js` 的 5 处 hub 插入** | 装配层 `createBusinessHub` 已就绪但**零调用点**（`text-grep` 扫 `app/` 仅 `src/business.js` 自身 4 处提及）——`start()` 无人调用，子进程不会被拉起。锚点已给全（`R2-L3.md` §八-1）：①`:17` import ②`:73` 后建实例 ③`:186` 前 `start()` ④`:200` 内 `await stop()` ⑤返回面加一项 |
-| M2 | **补搬 `skills/` 6 件** | 未搬清单里的 6 件是 12 档 verify 的 import 前置——`tools.js → skills/manager.js`、`tool-registry.js → skills/errors.js`、`prompt.js → skills/manager.js`，缺一件 import 期即崩（`R2-L4.md` §四-1） |
-| M3 | **`patch-qqbotb-fixgroup.mjs` 两点从未落盘** | `tts-desc` / `comfy-retry` 在 `_unpack` 与 `app/src/business/` **都 0 命中**，`--dry` 实测状态为「待应用」——即该脚本从来没为这两点跑过（不是被上游覆盖）。归位副本因此也缺这两条描述（`R2-L4.md` §四-2） |
-| M4 | **`verify-qqagent-boot` 端口接线** | 新签名 `await core.start()` 已写，实际启动仍受 M2 阻断；且缺 `ws` 包（`app/node_modules` 为空，`ERR_MODULE_NOT_FOUND: ws`） |
-| M5 | **`tools/shadow-diff.mjs` 本体** | R2-L4 只给方案与采集点，未写脚本——影子开关需先决定是否上线 |
-| M6 | **47 点待人工判断** | R2-L1 的 346 点吸收里 47 点属「归并后仍需人工判断」（跨脚本冲突 / 语义改写），逐条见 `reports/R2-L0.md` |
+| M6 | **47 点待拍板** | R2-L1 的 346 点吸收里 47 点属「归并后仍需人工判断」（跨脚本冲突 / 语义改写）。R3-L5 已整理成逐点四列清单（争议是什么 / 建议动作），**等 Rushiera 过一遍**（来源：`reports/R3-L5.md`） |
 
-## 十七、已裁定不做（留档防重新引入）
+> M1–M5 已由 R3 落盘核销（见 `CHANGELOG.md` v0.97）：hub 五处插入 · 缺失模块全量补搬 · fixgroup 两点落盘 · ws/js-yaml/undici 依赖 + verify-boot 具名失败出口 · shadow-diff 层 1 落地。
+
+## 十七、R3 新增待办（2026-10-30 · 代码面遗留）
+
+| # | 项 | 说明 |
+|:--:|:--|:--|
+| R3-1 | **hub 接线后的冒烟 A–D** | `businessHub` 已在单体装配（5 处），但子进程隔离启动的真实行为未验：①`mode:'child'` 下 worker 起得来 ②事件不丢不重 ③navigator 不双投 ④子进程崩溃按 3→6→12s 退避重启。判据见 `R2-L3.md` §六冒烟清单（R3 明确未执行） |
+| R3-2 | **`mode:'inline'` 同进程切换** | 冒烟通过后 `createBusinessHub({mode:'inline', deliver})` 即切，代码已支持（`R2-L3.md` §九-4） |
+| R3-3 | **shadow-diff 层 2（WS fan-out）** | 层 1 已落地（`--self-test` 17/17、37 条零差异）；层 2 只留显式 TODO，「7 天零差异」判据尚未开始积累（`R3-主干对账.md` §六） |
+| R3-4 | **`navigator` 改由 hub 统一扇出** | 摘 `navigator/index.js:436` 自订阅 + 传 `navigatorDeliver`（`R2-L3.md` §九-2，需解禁 `app/src/navigator/**`） |
+| R3-5 | **`topic-words` 并入 `group-memory`** | engage#1 未兑现：`orchestrator.js:41` 仍从 `topic-words.js` import，`group-memory.js` 只有 `setGroupTopics` 没有 `extractTopicWords`/`writeTopicWords` 实现——合需要搬实现体（`R2-L1.md` §六-5） |
+| R3-6 | **`business.js` 文件与 `business/` 目录同名并存** | 实测运行不受影响（`app.js:17` 带显式扩展名，ESM 下目录不抢占解析）；改名需动 `app/src/` 既有文件，归接线期统一命名处理（`R2-L1.md` §六-6） |
+| R3-7 | **成本看板恒 0 修复** | 见 B48：当前模型在价格表里 unmatched。两条路（改 `api.model` 键 / 填 `api.modelPrices`）**待拍板**，选定后改 `config.js` 默认值或运行配置 |
+
+## 十八、已裁定不做（留档防重新引入）
 
 | # | 项 | 裁定与理由 |
 |:--:|:--|:--|

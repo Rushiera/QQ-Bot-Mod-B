@@ -3454,3 +3454,62 @@ R喵喵：交接摘要已注入，等待确认
 > §六c 判例、`design-qqbotb_log.md` §八十一、`CHANGELOG.md` v0.94 里出现的 `rf` / `rescue=true` 属**历史记录**（当时原话与当时实现），只写不改。
 
 **三、边界**：本轮**零代码改动**；`verify-comfy.mjs` / `verify-media.mjs` 未实跑（本机 ComfyDock 状态未验，不据旧数字宣称通过）；`todo.md` §五 N6 / N7 / N8 状态不变（N6 待排期 · N7 当前不做 · N8 待重启单体）。
+
+---
+
+## 八十三、R3 落地 R2 遗留（M1–M5 + B33 · 验收基线 9/24 → 23/24 · v0.97 · 2026-10-30）
+
+> 触发：Rushiera「读一下R喵喵的会话，使用并发协议，把他的todo全部落地，并发数不限，代码先做，需要人工验收的先跳过，后面通知我验收」。
+
+**一、任务面（`reports/R3-验收清单.md` 为准，本节省证据）**
+
+`todo.md` 行动面拆成「代码可落地」与「需人工 / 拍板 / 数据」两类。前者本轮全清，后者整理成五类清单交 Rushiera。
+
+**二、业务面首次真启动成功（R2 之后最关键的变化）**
+
+R2-L4 基线 `verify-suite` 9/24，`verify-qqagent-boot` 是失败项。根因两条：① `app/src/business/app.js` 的 import 图缺模块 → ESM 静态解析期崩；② `app/node_modules` 缺 `ws`。
+
+| 项 | R2-L4 基线 | R3 实测 |
+|:--|:--|:--|
+| `createApp` | 崩（缺 skills / ws） | ✅ 正常创建 |
+| `start()` 返回端口 | 无 | ✅ 3210 |
+| `/api/sessions` | 不可达 | ✅ 5 条真实会话 |
+| `/api/prompt-preview` | 不可达 | ✅ 2048 字符前文 |
+| 配置加载 | 未到 | ✅ 端点 / 密钥 / 12 群白名单 / 上下文档 4 |
+
+**三、裁决 D5（写进 `tasks/R3.md` §一）**
+
+| # | 裁决 | 理由 |
+|:--:|:--|:--|
+| D5-1 | 补搬口径扩为「全量缺失模块」，不只 skills/ 六件 | `business/app.js` 是装配根，任一 import 目标不存在则整面崩；实测缺 **14 个模块路径**（skills 六件按 1 计），只补 skills 只解 11/24 档 |
+| D5-2 | `telemetry` 退役，不补搬 | 每 6h 向 `kondius.cn` 上报（R1-L5 §2.6）；补搬等于把外联搬进单体，与「不搬则外联随之消失」的原裁定相反 |
+| D5-3 | `instance-lock` 按纯依赖补搬 | R1-L5 §2.4 M2 已判「单体侧缺单实例锁 → 合并期必须补」 |
+| D5-4 | R2-L1「不搬清单 15 模块一个没拷」判据被 D5-1 覆盖 | 替换为「telemetry 相关标识符在 `app/src/business/**` 内 0 命中」 |
+
+**四、代码面落地（12 项，逐项判据）**
+
+| 项 | 内容 | 判据 |
+|:--|:--|:--|
+| L1 模块补搬 | 13 顶层模块 + `skills/` 六件 | `tools/resolve-imports.mjs`（新建）→ `MISSING 0/203` |
+| M1 hub 接线 | `app/src/app.js` 五处插入 + `status()` 透出 hub 快照 | `git diff` 逐条核；`verify-boot` 起得来 |
+| M4 ws 依赖 | `ws ^8.18.0` + `js-yaml ^5.4.1` + `undici ^6.28.0` | `npm ls` 三包齐备（ws 8.22.0 / js-yaml 5.5.0 / undici 6.29.1） |
+| M4 verify-boot | 三段式具名失败出口（依赖预检 → 加载业务面 → 起内核） | 缺依赖时给原因 + 修法，不再丢 `ERR_MODULE_NOT_FOUND` 栈 |
+| M3 fixgroup | `tts-desc` / `comfy-retry` 两侧落盘（`nav-tools.js:471/:569` ×2） | `verify-qqbotb-fixgroup` **13/18 → 18/18**；`--dry` `skipped 6` |
+| B33 reply 字段 | `ingestMessage` 从 segments 取 reply 段 + `resolveReplyMemo` | 键形态 `reply: {senderId, messageId} \| null`；`rapport.js:354` 改认 `senderId` |
+| M5 shadow-diff | 层 1 闸门影子 + 层 2 显式 TODO | `--self-test` **17/17**；层 1 实跑 37 条**零差异** |
+| R2-L4 卡点 3 | `verify-data-root` 的 `readDataDirExpr` 括号配平 | `PASS（FAIL 0 / WARN 0）` |
+| 验收判据修正 | memory / readcompact / session 的 RETIRED 判据；fileread 数据根注入；cattools 改名失配 | 五件全绿（43/43 · 25/25 · 20/20 · 20/20 · 64/64） |
+| B48/B49 工具 | `tools/price-cache-audit.mjs` · `tools/prompt-memory-split.mjs` | 各 `--self-test` 通过；B48 `--fetch` 取 192 条 |
+| M6 / N6 报告 | `reports/R3-L5.md`（47 点四列）· `reports/R3-L8.md`（15 项 + 23 条点名） | 差额先说清（两套 47 成员不同，交集 14 点） |
+
+**五、B48 顺带查出的真问题（比原条目严重）**
+
+当前模型 `deepseek-v4.1-flash` 在远端 192 条价格表里**全不命中**——前缀匹配只认 `key+'/'|'-'|'@'|':'`（`model-prices.js:315`），而 `deepseek-v4` 与 `.1-flash` 之间是 `.`。结果 `resolveModelPrice` 返 `unmatched`、单价全 0（`:580-586`），`llm.js:673-676` 乘出成本 = 0。**成本看板恒 0**，不是估算偏差。两条修法待拍板（见 `todo.md` B48 / R3-7）。
+
+**六、验收基线**
+
+`verify-suite` **9/24 → 23/24**。唯一剩项 `verify-navigator` 61/62 的 `ApiSiteAnalyzer:离线` 属环境项。其余：`resolve-imports MISSING 0/203` · `check-syntax 73/73` · `verify-import-verification ALL PASS`。
+
+**七、并发纪律判例（详见 `L2/Worker/Majordomo/history/2026-10-30_R3落地轮派活边界与判据自证_判例.md`）**
+
+六线并发（R喵4/5/6/7/8 + R喵喵喵）+ 主干直做 L1。三处判例：① 复用常驻猫被 Rushiera 纠偏 → 并发一律新建临时猫（已升 Discipline §十 件 9）② 单点根因断言低估缺口面 ③ 分派范围过宽致硬判据被挤到最后（R喵6 60 轮未落 M3 → 主干接手）。

@@ -8,6 +8,11 @@
   "scripts": {
     "start": "electron ."
   },
+  "dependencies": {
+    "js-yaml": "^5.4.1",
+    "undici": "^6.28.0",
+    "ws": "^8.18.0"
+  },
   "devDependencies": {
     "electron": "^44.7.0"
   }

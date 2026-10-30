@@ -351,7 +351,15 @@ function pointsAtMe(m, { selfId = '', selfNickname = '', botName = '' } = {}) {
   if (m.atMe === true) return true;
   if (m.isPoke && /拍了拍\s*我/.test(String(m.text ?? ''))) return true;
   const r = m.reply;
-  if (r && selfId && String(r.sender ?? '') === String(selfId)) return true;
+  // 引用我（[qqbotb-b33:reply-structured] · 2026-10-30）——
+  // 判定键是**被引用者的 QQ 号**：结构化归档件由 app.js ingestMessage 写入，
+  // 形如 { senderId, messageId }（senderId = 被引用者 QQ 号，与 selfId 同口径，
+  // 取自 onebot.selfId）；老存档 reply 恒 null / 或只有 sender（群名片而非号），
+  // 那一路按 sender 兜底只为历史兼容，新数据不会走到。
+  if (r && selfId) {
+    if (r.senderId != null && String(r.senderId) === String(selfId)) return true;
+    if (r.senderId == null && String(r.sender ?? '') === String(selfId)) return true;
+  }
   const t = String(m.text ?? '');
   if (selfId && t.includes('(QQ:' + selfId + ')')) return true;
   if (selfNickname && t.includes('[引用 ' + selfNickname)) return true;

@@ -24,3 +24,20 @@
 | R2-L4 | Step 3 验收方案（28 verify + 影子对比） | `R2L4` | `reports/R2-L4.md` | ✅ 已交 · 28/28 裁决 · 实跑基线 9/24 |
 
 任务卡：`tasks/R1.md` · `tasks/R2.md`
+
+## R3 — 落地 R2 遗留（todo 代码面全量 · 2026-10-30 · 进行中）
+
+| 线 | 内容 | 执行猫 | 报告 | 状态 |
+|:--|:--|:--|:--|:--|
+| R3-L1 | 模块补搬（13 顶层 + `skills/` 六件） | 主干 | `reports/R3-主干对账.md` §一 | ✅ 已交 · `MISSING 0/203` |
+| R3-L2 | telemetry 退役 + B33 reply 字段 | R喵4 | `reports/R3-L2.md` | ✅ 已交 · 4 删 2 改 · 键形态 `{senderId,messageId}` |
+| R3-L3 | hub 接线 + ws（M1/M4） | R喵5 | `reports/R3-L3.md` | ✅ 已交 · 5 处插入 · ws 8.22.0 |
+| R3-L4 | fixgroup 两点 + shadow-diff + data-root | 主干 + R喵6 | `reports/R3-L4.md` | ✅ 已交 · M3 主干落盘（18/18）· data-root 配平 PASS · shadow-diff 主干接手 |
+| R3-L5 | M6 47 点待裁整理 | R喵7 | `reports/R3-L5.md` | 🟡 进行中 |
+| R3-L7 | 诊断工具（B48/B49） | R喵8 | `reports/R3-L7.md` | ✅ 已交 · 两脚本 self-test 通过 |
+| R3-L8 | N6 迁移方案 | R喵喵喵 | `reports/R3-L8.md` | ✅ 已交 · 15 项清单 + 23 条点名 · 第一刀=影子判断器 |
+| R3-L6 | 收线与验收 | 主干 | — | 🟡 收线中 |
+
+**主干自跑基线（非执行方自述）**：`verify-suite` **23/24**（R2-L4 基线 9/24）· `resolve-imports MISSING 0/203` · `check-syntax 73/73` · `verify-import-integrity ALL PASS` · `verify-boot` 真起得来（port 3210 / 5 条真实会话）。
+
+**验收清单**（需人工过）→ `reports/R3-验收清单.md`

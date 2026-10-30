@@ -11,7 +11,9 @@
 //   text:      解析后的纯文本（[图片] 等占位符已内联）
 //   self:      是否是机器人自己发的
 //   read:      已读状态（运行开始时批量置 true）
-//   reply:     可选 { sender, text }：该消息引用/回复的对象摘要
+//   reply:     可选 { senderId, messageId }：该消息引用/回复的对象摘要
+//              （senderId = 被引用者 QQ 号，rapport.pointsAtMe 的引用判定键；
+//                老存档 reply 恒 null；判定层兼容只有 { sender } 的旧形态）
 //   media:     可选 [{ kind, url, file, faceId, summary }] 原始媒体定位信息
 // }
 import fs from 'node:fs';
@@ -82,7 +84,9 @@ export class ChatStore {
     return { chatKey, total: st.messages.length, unread, lastTs: last?.ts ?? 0, lastText: last?.text ?? '' };
   }
 
-  /** 追加一条收到的消息（未读）。返回写入的条目。 */
+  /** 追加一条收到的消息（未读）。返回写入的条目。
+   *  `reply`：被引用消息的结构化摘要 { senderId, messageId }（可 null）。
+   *  只透传落盘、不改形态——判定口径在 rapport.pointsAtMe（认 senderId）。 */
   appendIncoming(chatKey, { mid, ts, senderId, senderName, text, reply = null, media = [], isPoke = false, atMe = null, atNames = [] }) {
     const st = this.#state(chatKey);
     const entry = {

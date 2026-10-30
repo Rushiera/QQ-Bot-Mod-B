@@ -18,6 +18,14 @@ const CFG_FILE = path.join(ROOT, '_unpack', 'data', 'config.json');
 const ROLE_DIR = path.join(ROOT, 'role');
 const ROLE_TEXT_MAX = 12000;
 
+// 🔴 数据根必须先注入：app/src/business/config.js 在 import 期即读 QQ_AGENT_DATA_DIR，
+// 未注入直接 throw（不回落源码目录）。用独立副本 = 只读验行为、写面不碰生产数据根。
+const DATA = path.join(ROOT, 'runtime', '.fileread-selftest');
+fs.rmSync(DATA, { recursive: true, force: true });
+fs.mkdirSync(DATA, { recursive: true });
+if (fs.existsSync(CFG_FILE)) fs.copyFileSync(CFG_FILE, path.join(DATA, 'config.json'));
+process.env.QQ_AGENT_DATA_DIR = DATA;
+
 const checks = [];
 async function check(name, fn) {
   try {

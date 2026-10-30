@@ -20,7 +20,6 @@ import { VideoReader } from './video-reader.js';
 import { cacheHitRate } from './llm.js';
 import { isPeakHour, priceAt, resolveModelPrice, modelLabel, splitModelLabel, UNKNOWN_VENDOR } from './model-prices.js';
 import { initPriceFeed } from './price-feed.js';
-import { startTelemetryLoop } from './telemetry.js';
 // 回应参数自愈（纯本地定时加分，不调 LLM）——[qqagent-rapport-patch:app-import]
 import { startHealLoop as startRapportHeal } from './rapport.js';
 // 余额后缀定时刷新（群名片尾部 @余额xx.xx）——[qqbotb-balance:app-import]
@@ -870,11 +869,46 @@ export function createApp({ log = console.log, eventSource = null } = {}) {
     }
     const media = segments ? extractMediaFromSegments(segments) : [];
 
+    // ── 引用（reply）段的结构化归档（B33 · 2026-10-30）──────────────────────
+    // 原问题：segmentsToText 把 reply 段拼成正文 `[引用 谁：什么]` 之后结构就丢了
+    // （onebot.js:458-478 只回文本），于是 appendIncoming 的 reply 恒为 null，
+    // rapport.pointsAtMe 的「引用我」分支永远走不到，只能退到文本前缀兜底。
+    // 取法：自己在 segments 里取第一个 reply 段的 message_id，用同一个 resolveReply
+    // 解析出被引用者的 QQ 号，交给 store 归档。
+    // 为什么不改 segmentsToText / 不给它加回传参数：段解析面归 onebot.js（本轮禁改），
+    // 而 resolveReply 是本文件自己的函数——在调用点取一次最省，不动公共函数签名。
+    // memo 只为不让同一条被引用消息被 getMsg 拉两次（segmentsToText 里还会再问一次）。
+    // 🔴 只落 senderId + messageId，**不带** sender/text（详见报告 §卡点 1）：
+    //    prompt.js:411 见到 reply.sender / reply.text 就会再拼一段 `[引用 名字：内容]`，
+    //    而同一段内容已经由 segmentsToText 内联进 text —— 带上即双份。
+    //    被引用者名字与被引用正文仍在 text 里（`[引用 张三(QQ:456)：…]`），零信息丢失；
+    //    senderId 是 rapport.pointsAtMe 的判定键，messageId 供下一轮 atRate 溯源。
+    const replyMemo = new Map();
+    const resolveReplyMemo = async (mid) => {
+      const k = String(mid);
+      if (replyMemo.has(k)) return replyMemo.get(k);
+      const r = await resolveReply(k);
+      replyMemo.set(k, r);
+      return r;
+    };
+    let replyInfo = null;
+    if (segments) {
+      const replySeg = segments.find((s) => s?.type === 'reply' && s?.data?.id != null);
+      if (replySeg) {
+        const replyMid = String(replySeg.data.id);
+        const resolved = await resolveReplyMemo(replyMid);
+        // 解析失败（被撤回 / 已过期）时留 null，不编造发送者
+        if (resolved && resolved.senderId) {
+          replyInfo = { senderId: resolved.senderId, messageId: replyMid };
+        }
+      }
+    }
+
     let text;
     const atMarks = [];   // @ 段收集（qq + 渲染原文）：档位判定的权威依据（2026-09-26）
     if (segments) {
       text = await segmentsToText(segments, {
-        resolveReply: (mid) => resolveReply(mid),
+        resolveReply: (mid) => resolveReplyMemo(mid),
         resolveAtName: (qq) => kind === 'group' ? resolveAtName(id, qq) : null,
         onAt: (m) => atMarks.push(m),
         // 语音转写（`media.transcribe`）要用它去 get_record 取音频
@@ -937,7 +971,10 @@ export function createApp({ log = console.log, eventSource = null } = {}) {
       text: text || '[图片]' ,
       media,
       atMe,
-      atNames
+      atNames,
+      // 被引用消息的结构化摘要（B33）：{ senderId, messageId }（来源见上方 replyInfo）
+      // 判定键是 senderId（被引用者 QQ 号）——rapport.pointsAtMe 拿它比 selfId。
+      reply: replyInfo
     });
     emit('chat-update', `${kind}:${id}`);
     // 逐条触发判定：把刚入库的条目交给编排器（entry 让它能精确标这一条已读）
@@ -1500,10 +1537,10 @@ export function createApp({ log = console.log, eventSource = null } = {}) {
 
   async function start() {
     // ── 启动顺序（2026-09-18 按耗时画像重排）────────────────────────────
-    // 旧顺序的瓶颈：HTTP → 遥测 → Skill加载(串行import) → SnowLuma启动(最长20s等端口)
+    // 旧顺序的瓶颈：HTTP → Skill加载(串行import) → SnowLuma启动(最长20s等端口)
     //              → OneBot连接 → 就绪日志。Skill 与 SnowLuma 互不依赖却串行，
     //              白白把两段等待加在一起。
-    // 新顺序：HTTP（页面先活）→ 遥测(纯后台) → **Skill 与 SnowLuma 并行** →
+    // 新顺序：HTTP（页面先活）→ **Skill 与 SnowLuma 并行** →
     //         OneBot 连接 → 就绪。会话索引的磁盘对账（reconcileInBackground）
     //         在 HTTP 起来后就排上，不占启动关键路径。
     const basePort = Number(getConfig().server?.port) || 3210;
@@ -1519,9 +1556,6 @@ export function createApp({ log = console.log, eventSource = null } = {}) {
       }
     }
     if (port == null) throw lastError ?? new Error('无法监听端口');
-
-    // 匿名用量遥测：启动 90 秒后发第一次，之后每 6 小时一次；失败静默不影响使用
-    startTelemetryLoop(log);
 
     // 会话索引后台对账：启动读的是毫秒级缓存，这里异步补扫磁盘修正差异
     // （缓存缺失的新文件/外部删除的文件）。不 await —— 不挡任何启动步骤。

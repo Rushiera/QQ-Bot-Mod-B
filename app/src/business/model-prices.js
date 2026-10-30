@@ -62,6 +62,22 @@ export const OFFICIAL_PRICES = {
     note: '闲时价；高峰翻倍；DeepSeek-V4.1-Flash；支持思考/非思考双模式、图片理解、工具调用、JSON 输出；1M 上下文 / 384K 输出',
     src: 'official'
   },
+  // 🔴 现行在用的真名（R3-7 / B48）——本项目 `api.model` 就是它。
+  // 旧实现里它一条都匹配不上：前缀匹配的边界只认 `/` `-` `@` `:`，
+  // 而 `deepseek-v4.1-flash` 与 `deepseek-v4-flash` 差在 `.1`（`.` 把前缀隔断），
+  // 于是 resolveModelPrice 返 unmatched、单价全 0 → **成本看板恒 0**（不是估算偏差，是两个 0 相减）。
+  // 显式登记：它就是 V4.1-Flash，按 Flash 价计费（见 deepseek-flash 条目的实测注释）。
+  'deepseek-v4.1-flash': {
+    in: 1, out: 4, cached: 0.02,
+    peak: { in: 2, out: 8, cached: 0.04 },
+    image: {
+      mode: 'capped',
+      maxTokensPerImage: 1024,
+      note: '同 deepseek-flash：缩放后封顶 1024 token/张'
+    },
+    note: 'DeepSeek-V4.1-Flash（本项目现行模型）；闲时价，高峰翻倍',
+    src: 'official'
+  },
   // 旧模型名：底座已下线，请求由 V4.1-Flash 承接，按 Flash 价计费
   'deepseek-v4-flash': {
     in: 1, out: 4, cached: 0.02,

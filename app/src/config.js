@@ -91,6 +91,29 @@ const DEFAULTS = {
     rescueCat: 'nav_rescue',
     // 投递指令后自动做一次「猫会话分析」的延迟毫秒（0 = 关闭）——静默执行的反馈替代
     analyzeDelayMs: 60 * 1000,
+    // 意图判断（N6 迁移第一刀：影子判断器）——群消息判 chat / instruct / generate。
+    // llm:仅规则判不准时是否允许交 LLM 复核（影子期默认关，零外部调用）。
+    intent: {
+      llm: false,
+      timeoutMs: 15000,
+      maxTokens: 800
+    },
+    // 群消息接入（N6 第二刀）——mode:shadow 只落采集行（data/metrics/intent-<日期>.jsonl），零行为；
+    // mode:live 由判断器直调领航员（开关 / 只读 / 生成 / 会话 / 投递），**切换前须先跑出影子基线**。
+    // allow：live 下逐类放行（渐进切换，可回退）——缺省（空数组）= 全放行；
+    //        给了清单就只放行清单内的动作类，取值 switch / readonly / shot / generate / session / send。
+    //        建议顺序：readonly·shot → switch → generate → session → send。
+    // viaHub：事件入口是否由业务面分发中心单点扇出（默认 true——两条 onEvent 订阅会跑两遍判断）。
+    ingress: {
+      mode: 'shadow',
+      allow: [],
+      viaHub: true
+    },
+    // 话术 / 教材自持（N6 清单 #4）——三级回落：业务面 roleText → role/*.md → 内置最小集。
+    // roleDir 相对项目根；换源一律出声（log.warn），不静默降级。
+    persona: {
+      roleDir: 'role'
+    },
     // think 摘要（会话分析「读全」的 think 段——交 LLM 总结，不整段倾倒原文）。
     // model 必须选快档：主模型对纯文本请求会先产数千 token 推理（2026-10-14 实测 65 秒、
     // 推理吃光 max_tokens 时 content 恒空）；enabled:false = 回落原文截断。

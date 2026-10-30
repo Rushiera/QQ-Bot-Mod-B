@@ -74,7 +74,15 @@ export async function createApp() {
 
   // 业务面事件分发中心（单体 ⇄ 业务面的唯一通道）——唯一订阅点在本 hub；
   // 默认 mode='child'（子进程隔离），navigator 消费者走 kind='self'（只登记不投，防双投）。
-  const businessHub = createBusinessHub({ onebot, log });
+  // R3-4：navigator 改由 hub 统一扇出——传 navigatorDeliver 即把它从「自订阅」切成
+  // 「排队消费者」（kind='inline'），整条 WS 只剩一个订阅点。
+  const businessHub = createBusinessHub({
+    onebot,
+    log,
+    navigatorDeliver: navigator.viaHub ? (task) => navigator.handleEvent(task?.event ?? task) : null
+  });
+  // 分发中心快照回挂（观测面：GET /api/nav/hub）——不反向依赖，由装配处注入
+  navigator.bindHubStatus(() => businessHub.status());
 
   const web = createWebServer({
     port: config.app.port,

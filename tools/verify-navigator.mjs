@@ -232,25 +232,24 @@ navIdem.stop();
 // ── 7 轻通道：未开启模式的投递闸门（Rushiera 2026-10-14）────────────────────
 // 判据：未开启 + 无新鲜 VIP → 不受理（offMode）；未开启 + 本人新鲜 VIP @ → 放行（闸门过，
 //       交付面失败不算闸门失败）；非 qq 通道一律不受理。
-let vipHandler = null;
+// R3-4 后事件由 hub 扇出（navigator 不再自订阅）——自测直接喂 handleEvent，等价于 hub 投递。
 const navLight = createNavigator({
   log,
   dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-light-')),
   config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
   onebot: {
     call: async () => ({}),
-    onEvent: (fn) => { vipHandler = fn; },
+    onEvent: () => {},
     status: () => ({ self: { userId: 2405997337 } })
   }
 });
 const rej1 = await navLight.send({ key: 'majordomo', text: '自测', by: 'qq' });
 check('轻通道·未开启且无 VIP → 不受理', rej1.ok === false && rej1.offMode === true, String(rej1.error ?? ''));
-if (typeof vipHandler === 'function') {
-  vipHandler({
-    post_type: 'message', message_type: 'group', user_id: '569145850', group_id: '940257985',
-    message: [{ type: 'at', data: { qq: '2405997337' } }], raw_message: '@Shieraru 自测'
-  });
-}
+navLight.handleEvent({
+  post_type: 'message', message_type: 'group', user_id: '569145850', group_id: '940257985',
+  message: [{ type: 'at', data: { qq: '2405997337' } }], raw_message: '@Shieraru 自测'
+});
+check('事件入口·由 hub 扇出可投递', navLight.viaHub === true, String(navLight.viaHub));
 const pass = await navLight.send({ key: 'no-such-cat-selftest', text: '自测', by: 'qq' });
 check('轻通道·未开启 + 新鲜 VIP → 放行（非 offMode）', pass.offMode !== true, JSON.stringify(pass).slice(0, 90));
 const rej2 = await navLight.send({ key: 'majordomo', text: '自测' });

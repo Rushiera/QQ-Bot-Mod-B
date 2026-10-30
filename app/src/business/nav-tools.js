@@ -123,13 +123,104 @@ function renderCats(cats) {
 }
 
 /**
+ * 工具 → 迁移动作类（与单体 ingress 的 action 同名）。
+ *
+ * 切换是**逐类**的：单体 `/api/nav/ingress` 的 allow 清单里出现哪一类，业务面对应的
+ * 那几个工具才自锁。只读类（status / detail / health）不在表里——它们永不锁，
+ * 迁移期两面都能查（对照用，且它们不发任何东西）。
+ */
+const ACTION_OF_TOOL = Object.freeze({
+  nav_open: 'switch',
+  nav_close: 'switch',
+  nav_send: 'send',
+  nav_analyze: 'readonly',
+  nav_shot: 'shot',
+  nav_new: 'session',
+  nav_reset: 'session',
+  comfy_edit: 'generate',
+  moss_draw: 'generate',
+  tts_speak: 'generate',
+  wd_tag: 'generate'
+});
+
+/** 单体入口状态缓存（5 秒）——避免每个工具调用都打一次 HTTP。 */
+let ingressCache = { at: 0, mode: 'shadow', allow: null, ok: false };
+
+/**
+ * 读单体入口状态（带 5 秒缓存；读不到返回 ok:false 且**不据此锁**）。
+ *
+ * @returns {Promise<{at:number, mode:string, allow:Array<string>|null, ok:boolean}>} 状态
+ */
+async function readIngress() {
+  if (Date.now() - ingressCache.at < 5000) return ingressCache;
+  try {
+    const data = await call('/api/nav/ingress', {}, 3000);
+    ingressCache = {
+      at: Date.now(),
+      mode: String(data?.mode ?? 'shadow'),
+      allow: Array.isArray(data?.allow) && data.allow.length > 0 ? data.allow.map(String) : null,
+      ok: data?.ok !== false
+    };
+  } catch {
+    // 单体不可达 = 判断器没在接管 → 业务面继续干活（失败向上暴露由离线回执承担）
+    ingressCache = { at: Date.now(), mode: 'shadow', allow: null, ok: false };
+  }
+  return ingressCache;
+}
+
+/**
+ * 确认某工具是否已被单体接管。
+ *
+ * 口径：单体 live 且 allow 清单含该工具的动作类。allow 为空清单（无白名单）= 单体全放行，
+ * 此时业务面**不锁**——空清单是「尚未开始逐类切换」，不是「全部已切」。
+ *
+ * @param {string} tool 工具 id
+ * @returns {Promise<boolean>} 是否已交给单体
+ */
+async function handedOff(tool) {
+  const action = ACTION_OF_TOOL[tool];
+  if (!action) return false;
+  const state = await readIngress();
+  if (!state.ok || state.mode !== 'live' || !state.allow) return false;
+  return state.allow.includes(action);
+}
+
+/**
+ * 统一的「已交给单体」回执。
+ *
+ * @param {string} tool 工具名
+ * @returns {object} 工具结果
+ */
+function offloaded(tool) {
+  return err(`${tool} 已交由自研单体判断器接管（业务面此路已收口）——不用再调本工具；切换口径看单体 GET /api/nav/ingress。`);
+}
+
+/**
  * 注册领航员工具组。
  *
  * @returns {void}
  */
 export function registerNavTools() {
+  /**
+   * 注册一个领航员工具——入口统一加「已交给单体」自锁。
+   *
+   * @param {object} def 工具定义
+   * @returns {void}
+   */
+  function regTool(def) {
+    const inner = def.execute;
+    registerTool({
+      ...def,
+      async execute(ctx, args) {
+        // 逐类自锁：单体把该类接管后才拦（只读三件不在映射表里，永不锁）
+        if (await handedOff(def.id)) return offloaded(def.id);
+        return inner(ctx, args);
+      }
+    });
+  }
+
   // ── nav_status ──────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'nav_status',
     name: '领航员·状态',
     description: `看领航员模式的状态与 CH4 猫群现状——是否开启、回消息群、当前目标猫、每只猫的运行态、最近指令流水。
@@ -161,7 +252,7 @@ export function registerNavTools() {
   });
 
   // ── nav_open ────────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'nav_open',
     name: '领航员·开启',
     description: `开启领航员模式（QQ 群指挥 CH4 猫群）。
@@ -198,7 +289,7 @@ export function registerNavTools() {
   });
 
   // ── nav_close ───────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'nav_close',
     name: '领航员·关闭',
     description: `关闭领航员模式。
@@ -220,7 +311,7 @@ export function registerNavTools() {
   });
 
   // ── nav_send ────────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'nav_send',
     name: '领航员·投递指令',
     description: `把一条指令投递给 CH4 的某只猫执行（猫那边看到的就是这条原文——系统不再加 [来自QQ]… 来源头，渠道由投递通道自身承载）。
@@ -259,7 +350,7 @@ export function registerNavTools() {
   });
 
   // ── nav_detail ──────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'nav_detail',
     name: '领航员·单猫详情',
     description: `看某只猫当前在干什么——运行态、前文规模、最近一条用户消息与最近一条回复。
@@ -290,7 +381,7 @@ export function registerNavTools() {
   });
 
   // ── nav_health ──────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'nav_health',
     name: '领航员·运行情况',
     description: `看「各单位」现在的运行情况——应用指令层 / CH4 宿主 / 猫群（在跑 / 有会话）/ 外部服务（ApiSiteAnalyzer、ComfyDock 等）。
@@ -319,7 +410,7 @@ export function registerNavTools() {
   });
 
   // ── nav_analyze ─────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'nav_analyze',
     name: '领航员·会话分析',
     description: `对某只猫做一次「会话分析」——**直接读它的思考（think）**，报出它现在在干什么 / 做到哪 / 卡不卡。
@@ -360,7 +451,7 @@ export function registerNavTools() {
   });
 
   // ── nav_shot ────────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'nav_shot',
     name: '领航员·截图会话',
     description: `把某只猫**当前的会话**渲染成会话卡截图发到群里（与领航员开场巡检同款样式——CH4 会话页的对话气泡卡；**长会话自动分段、按序发多张**，标注 1/N…N/N）。
@@ -389,7 +480,7 @@ export function registerNavTools() {
   });
 
   // ── nav_new ─────────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'nav_new',
     name: '领航员·新会话',
     description: `给一只或多只猫**直接开新会话**（等价于在该猫对话页发布 /new）——清掉前文 + 重新注入知识文件，**不保留旧前文的交接摘要**。
@@ -421,7 +512,7 @@ export function registerNavTools() {
   });
 
   // ── nav_reset ───────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'nav_reset',
     name: '领航员·前文整理重启',
     description: `把某只猫的前文整理重启——由**固定代读猫**（CH4 的 nav_rescue）代读它的完整前文产出交接报告，再清前文、注入报告、让它接着干。
@@ -460,7 +551,7 @@ export function registerNavTools() {
   });
 
   // ── comfy_edit ──────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'comfy_edit',
     name: '图像编辑',
     description: `把群里的一张图送上云端工作流做图像编辑（改姿势 / 换风格 / 出三视图 / 换画风…），出图后自动发回本群。
@@ -517,7 +608,7 @@ export function registerNavTools() {
   });
 
   // ── moss_draw ───────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'moss_draw',
     name: '生图·MOSS',
     description: `从零画一张新图（本地 MOSS-Image 文生图），出图自动发回本群。
@@ -561,7 +652,7 @@ export function registerNavTools() {
   });
 
   // ── tts_speak ───────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'tts_speak',
     name: '语音·IrodoriTTS',
     description: `把一段话合成语音发到群里（本地 IrodoriTTS · 依田芳乃音色）。
@@ -602,7 +693,7 @@ export function registerNavTools() {
   });
 
   // ── wd_tag ──────────────────────────────────────────────────────────────
-  registerTool({
+  regTool({
     id: 'wd_tag',
     name: '反推提示词·WD Tagger',
     description: `把群里的一张图反推成 Danbooru 风格提示词标签（本地 WD Tagger / eva02-large）。

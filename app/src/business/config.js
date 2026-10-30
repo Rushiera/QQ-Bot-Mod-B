@@ -146,6 +146,13 @@ export const DEFAULT_CONFIG = {
       siteSearchUrl: ''           // 站内搜索模板，如 'https://example.com/search?q={query}'
     }
   },
+  // 领航员入口归属（N6 迁移）——切换口径的**真相源已改到自研单体**：
+  // `GET/POST /api/nav/ingress` 的 { mode, allow }。业务面每次工具调用读一次（5 秒缓存），
+  // 单体 live 且 allow 里出现某动作类时，该类工具自锁并回「已交给单体」。
+  // 本段只留一个说明位，不再参与判定（旧值 'unity' 已退役——它只能整片锁，无法逐类切）。
+  navigator: {
+    ingress: 'business'
+  },
   // SnowLuma / OneBot v11
   snowluma: {
     dir: '',                   // SnowLuma 程序目录；留空 = 自动探测项目内 ./snowluma

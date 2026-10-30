@@ -3513,3 +3513,62 @@ R2-L4 基线 `verify-suite` 9/24，`verify-qqagent-boot` 是失败项。根因�
 **七、并发纪律判例（详见 `L2/Worker/Majordomo/history/2026-10-30_R3落地轮派活边界与判据自证_判例.md`）**
 
 六线并发（R喵4/5/6/7/8 + R喵喵喵）+ 主干直做 L1。三处判例：① 复用常驻猫被 Rushiera 纠偏 → 并发一律新建临时猫（已升 Discipline §十 件 9）② 单点根因断言低估缺口面 ③ 分派范围过宽致硬判据被挤到最后（R喵6 60 轮未落 M3 → 主干接手）。
+
+---
+
+## 八十四、N6 迁移落地 + R3 遗留收口（v0.98 · 2026-10-30）
+
+> 触发：Rushiera「先把需要搬进自研单体的功能做完，然后我现在有空，你要我试什么可以现在提」。
+> 上游：`reports/R3-L8.md`（15 项清单 + 23 条点名 · 第一刀 = 影子判断器）。零拍板阻塞项。
+
+### 一、第一刀：影子判断器（清单 #1 + #3）
+
+| 件 | 落点 | 要点 |
+|:--|:--|:--|
+| LLM 出口 | 复用 `shot.js:278 summarize` | 不新建客户端——它已是单体现成的 `/chat/completions` 出口（文本 / 视觉双档），判断器只是第二个消费者 |
+| 判断器 | `navigator/intent.js`（新建 262 行） | `stripTriggerTag` / `matchCat`（长名优先）/ `parseAddressPrefix` / `detectSwitch` / `classifyByRule` / `classifyByLlm` / `classify`；三分类 `chat\|instruct\|generate` × 六动作 `none\|send\|readonly\|shot\|generate\|switch\|session` |
+| 语料同源 | `persona.classifyHint()` 拼进 `CLASSIFY_PROMPT` | 教材改 → 判断跟着改（清单 #4 的落地形态） |
+| 影子路由 | `POST /api/nav/intent` | 只判不发；业务面仍走自己那条，双跑可比对；**删一行即完全回退** |
+| 自测 | `tools/verify-intent.mjs` | **41/41**（工具函数 13 · 三分类 15 · 开启态 2 · 不投递纪律 5 · LLM 兜底 4 · 影子零副作用 2） |
+
+### 二、第二刀：群消息接入 + 存档 + 话术自持（清单 #2 / #4 / #10 前置）
+
+| 件 | 落点 | 要点 |
+|:--|:--|:--|
+| 接入 | `navigator/ingress.js`（新建） | 接管**全部**群消息（不再只认 VIP 群 @）；`shadow` 只落 `data/metrics/intent-<日期>.jsonl`（30 天清理）+ 零行为；`live` 按动作分发 |
+| 带图缓冲 | 同上 | 每群 40 条环形缓冲 + `recentImage(chat, mid)`——补上业务面 `store.findByMid/recent` 这个**唯一真耦合**（清单 #10 的 `pickImageOf` 依赖） |
+| 话术服务 | `navigator/persona.js`（新建） | **三级回落**：业务面 `persona.roleText` → `role/*.md` → 内置最小集；掉到 builtin 必 `log.warn`（静默换源是坑）；按需文件白名单（防路径穿越）；`classifyHint()` 只取「判断 / 开关」两段 |
+| 观察面 | `GET /api/nav/persona` · `GET /api/nav/hub` · `GET/POST /api/nav/ingress` | 教材来源 / 分发中心快照 / 切换面，全部可读 |
+| 自测 | `tools/verify-ingress.mjs` **33/33** · `tools/verify-persona.mjs` **27/27** | 修 2 处真缺陷：① `splitSections` 把一级标题落成空段 → 改为跳过 ② `RESET` 正则跨不过「重建 majordomo 的前文，告诉他 X」的 20 字 → 放宽 `[\s\S]{0,20}` |
+
+### 三、渐变切换（清单 #5–#11 / #13 / #14 的可回退形态）
+
+原报告把「删业务面工具壳」列为 #14，并明确**禁止先删壳再接判断器**（中间期领航员整片哑掉）。落地方式改成「**逐类切换 + 单点真相**」：
+
+| 层 | 机制 |
+|:--|:--|
+| 单体 | `ingress.allow` 白名单（`['readonly','shot','switch','generate','send','session']` 的子集，空 = 全放行）；`setMode` / `setAllow` **运行时**可调（`POST /api/nav/ingress`）——不落配置、重启即回配置值，试错零成本 |
+| 业务面 | `nav-tools.js` 的 `handedOff(tool)` 逐类自锁：`ACTION_OF_TOOL` 把 11 件工具映射到动作类，只读三件（status / detail / health）**不在表里、永不锁**；5 秒缓存打单体 `/api/nav/ingress`；**单体不可达不锁**（判断器没接管就继续干活，失败由离线回执暴露） |
+| 顺序 | readonly / shot → switch → generate → session → send（`session` 最重：代读猫 + 原文轨迹 + 注入别人的前文） |
+
+判据：任何时刻只有一条路径在跑（业务面壳锁住的那一类，只剩单体在动）。回退 = 把该类从 allow 摘掉。
+
+### 四、R3-4 / R3-6 / R3-7 / R3-5 四件
+
+| # | 改动 | 判据 |
+|:--:|:--|:--|
+| R3-4 | `navigator.ingress.viaHub`（默认 true）——navigator 不再自订阅，由 `createBusinessHub` 的 `navigatorDeliver` 单点扇出（kind 从 `self` 变 `inline`，排队收件、保序、可计数） | `verify-navigator` **62/63 → 63/63**；`api /api/nav/hub` 读分发快照 |
+| R3-6 | `business.js` 文件与 `business/` 目录同名：实测 `app.js:17` 带显式扩展名，ESM 下目录不抢解析 → **不改名**，只在此记一笔（改名要动既有文件，收益为零） | `verify-qqagent-boot` 起得来（受单实例占用影响，见遗留 3） |
+| R3-7 / B48 | `model-prices.js` 增 `deepseek-v4.1-flash` 显式条目（in 1 / out 4 / cached 0.02 + peak + image capped 1024） | `resolveModelPrice('deepseek-v4.1-flash')` 实测返 `source:official / matched:deepseek-v4.1-flash`，成本不再恒 0 |
+| R3-5 | `topic-words.js` 实现体搬进 `group-memory.js`（五件 + `MAX_WORDS`），原文件改成转发壳 | `verify-qqagent-engage` **27/27**（断言改成验转发壳） |
+
+### 五、自测与验收基线
+
+`verify-suite` **25/27**（两项红：`verify-qqagent-boot` 因本机已有实例占单实例锁；`verify-navigator` 的 `ApiSiteAnalyzer:离线` 属环境项——同一条用例在 16:00 那次实跑是 63/63）。新增 4 件自测全绿：`verify-intent` 41 · `verify-ingress` 33 · `verify-persona` 27 · `verify-qqagent-navtools` 19。`verify-import-integrity` **ALL PASS（73 文件 / 374 符号）**。
+
+### 六、遗留
+
+1. **生效面全在重启后**：`app/src/navigator/**` 与 `app/src/business/**` 都是启动时加载——本轮所有改动要双击 `启动QQBotB.vbs` 才生效（`Start-Process` 被引擎拦，无工具通道）。
+2. **切换未开**：配置停在 `ingress.mode='shadow'`；影子基线跑出后按「四、渐变切换」逐类推 live，或直接用 `POST /api/nav/ingress` 临时试。
+3. `verify-qqagent-boot` 要跑需先停业务面（单实例锁），批跑时按 FAIL 记、不静默跳过。
+4. 清单 #15（补丁脚本三点退役）随 #13 / #14 一起走，本轮**不动**——补丁链默认 RETIRED 已能挡住重放。

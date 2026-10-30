@@ -217,7 +217,8 @@ function check(name, ok, detail) {
   const prompt = fs.readFileSync(path.join(BIZ, 'prompt.js'), 'utf8');
   check('话题词落进群记（产物特征：setGroupTopics）', orch.includes('setGroupTopics(chatKey, topicWords)'));
   check('【记忆】段接入群记（产物特征：formatGroupForPrompt）', prompt.includes('formatGroupForPrompt(ctx.chatKey)'));
-  check('话题词模块已落盘', fs.existsSync(path.join(BIZ, 'topic-words.js')));
+  check('话题词模块已落盘（R3-5 起为转发壳）', fs.readFileSync(path.join(BIZ, 'topic-words.js'), 'utf8')
+    .includes('from \'./group-memory.js\''));
 }
 
 const failed = results.filter((r) => !r.ok);

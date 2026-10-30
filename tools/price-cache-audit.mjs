@@ -306,7 +306,9 @@ async function fetchAndReport(spec, configuredModel, head) {
       const d = discount(hit.entry);
       L.push(`   当前模型 ${configuredModel} → ${hit.key}（${hit.how}）：in ${fmt(hit.entry.in)} / cached ${hit.entry.cached == null ? 'null（按 in 计）' : fmt(hit.entry.cached)} / out ${fmt(hit.entry.out)} → 折扣率 ${d == null ? '—' : (d * 100).toFixed(2) + '%'}`);
     } else {
-      L.push(`   ⚠️ 当前模型 ${configuredModel} 在这张表里**查不到**——按 model-prices.js:580-586，useOfficialPrice=true 时命中不到会返回 source=unmatched、单价全 0（成本看板显示 0 元，不是 0 成本）`);
+      L.push(`   ⚠️ 当前模型 ${configuredModel} 在这张远端表里**查不到**。`);
+      L.push('      兜底口径（R3-7 已修）：内置表 OFFICIAL_PRICES 里有显式条目 → setRemotePrices 合并时内置条目保留 →');
+      L.push('      resolveModelPrice 仍能命中（source=official），成本看板不再是 0。真·远端命中与否只影响是否走中转站实价。');
     }
   }
   L.push('');

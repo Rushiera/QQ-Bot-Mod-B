@@ -280,6 +280,95 @@ export function setGroupTopics(chatKey, words) {
   return topics.length;
 }
 
+// ── 话题词（R3-5 · engage#1：原 topic-words.js 并入本模块）──────────────────
+// [qqagent-engage-patch:topic-words-merged]
+// 为什么要并：话题词本来就是「本群在聊什么」的一类知识，与群记 topic 同源；
+// 两条写入面（_topics.json 与 _group.json 的 topic 条目）并存会让「本轮话题」有两个真相。
+// 现行池仍是 _topics.json（形态稳定、不迁移存量），但解析与渲染实现只此一份。
+const MAX_WORDS = 12;
+
+/** 话题词文件路径（与 _session.json 同址，下划线开头避开成员文件语义）。 */
+export function topicWordsFile(chatKey) {
+  return path.join(MEMORY_DIR, chatDirName(chatKey), '_topics.json');
+}
+
+/**
+ * 从收工轮正文里解析话题词行。
+ *
+ * 约定形态：「话题词：词1、词2、词3」（也容忍 逗号 / 空格 / 顿号 混用）。
+ * 解析不到就返回空数组 —— 本轮不更新词表，保留上一版（宁可不换，不可清空）。
+ *
+ * @param {string} text 收工轮正文
+ * @returns {string[]} 话题词
+ */
+export function extractTopicWords(text) {
+  const lines = String(text ?? '').split(/\r?\n/);
+  for (const line of lines) {
+    const m = /话题词\s*[:：]\s*(.+)$/.exec(line.trim());
+    if (!m) continue;
+    const words = m[1]
+      .split(/[、,，\s\/]+/)
+      .map((w) => w.replace(/^[\-*\d.、)]+/, '').trim())
+      .filter((w) => w && w.length <= 12 && !/^话题词/.test(w));
+    const seen = new Set();
+    const out = [];
+    for (const w of words) {
+      if (seen.has(w)) continue;
+      seen.add(w);
+      out.push(w);
+      if (out.length >= MAX_WORDS) break;
+    }
+    if (out.length) return out;
+  }
+  return [];
+}
+
+/**
+ * 写话题词（收工轮产出）。空数组不写 —— 保留上一版。
+ *
+ * @param {string} chatKey 会话键
+ * @param {string[]} words 话题词
+ * @param {object} [meta] 附加（rollovers）
+ * @returns {object|null} 落盘内容（空输入 null）
+ */
+export function writeTopicWords(chatKey, words, meta = {}) {
+  const list = (Array.isArray(words) ? words : []).map((w) => String(w).trim()).filter(Boolean).slice(0, MAX_WORDS);
+  if (!list.length) return null;
+  const payload = {
+    chatKey: String(chatKey),
+    words: list,
+    updatedAt: Date.now(),
+    rollovers: Math.max(0, Number(meta.rollovers) || 0)
+  };
+  writeJson(topicWordsFile(chatKey), payload);
+  return payload;
+}
+
+/**
+ * 读话题词；没有就返回 null。
+ *
+ * @param {string} chatKey 会话键
+ * @returns {object|null} `{ words, updatedAt, rollovers }`
+ */
+export function readTopicWords(chatKey) {
+  const raw = readJson(topicWordsFile(chatKey), null);
+  const words = Array.isArray(raw?.words) ? raw.words.map((w) => String(w)).filter(Boolean) : [];
+  if (!words.length) return null;
+  return { words, updatedAt: Number(raw?.updatedAt) || 0, rollovers: Number(raw?.rollovers) || 0 };
+}
+
+/**
+ * 渲染成【记忆】段的一块（会话级要点之后、群友印象之前）。
+ *
+ * @param {string} chatKey 会话键
+ * @returns {string} 提示词片段（无话题词时空串）
+ */
+export function formatTopicWordsForPrompt(chatKey) {
+  const t = readTopicWords(chatKey);
+  if (!t) return '';
+  return '【本群常聊的话题词】' + t.words.join('、') + '（参考用：跟这些沾边的消息更值得接，别硬往上靠）';
+}
+
 /** 渲染成【记忆】段的一块（会话要点之后、群友印象之前）。 */
 export function formatGroupForPrompt(chatKey) {
   const entries = listGroupEntries(chatKey);

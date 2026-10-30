@@ -14,6 +14,9 @@ import { createCatWatcher } from './watch.js';
 import { createShotService } from './shot.js';
 import { createComfyService } from './comfy.js';
 import { createMediaService } from './media.js';
+import { createIntentService } from './intent.js';
+import { createIngress } from './ingress.js';
+import { createPersonaService } from './persona.js';
 import { PROJECT_DIR } from '../config.js';
 
 /** 空闲巡检间隔（毫秒）。 */
@@ -288,6 +291,82 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   let watchTimer = null;
   let ticking = false;
 
+  // 意图判断（N6 第一刀 · 影子）——只产判断，不投递不发言。
+  // 猫名清单取配置（navigator.catNames），缺省用内置表。
+  const catNames = Array.isArray(navConfig.catNames) && navConfig.catNames.length > 0
+    ? navConfig.catNames.map((name) => String(name).trim()).filter(Boolean)
+    : null;
+  // 话术 / 教材自持（N6 清单 #4）——三级回落（业务面 roleText → role/*.md → 内置最小集），
+  // 换源必出声。判断器与本服务同源：教材改了判断跟着改，业务面摘掉后教材不跟着失效。
+  const persona = createPersonaService({ log, projectDir: PROJECT_DIR, config });
+  persona.load();
+
+  const intent = createIntentService({ log, summarize, persona, config });
+
+  // 群消息接入与分流（N6 第二刀）——shadow 只落采集行、零行为；live 由判断器直调领航员。
+  // 与业务面共用同一条 OneBot WS：shadow 期不产出任何动作，故不会双投。
+  const ingress = createIngress({
+    log,
+    dataDir,
+    config,
+    intent,
+    handlers: {
+      isEnabled: () => state.snapshot().enabled === true,
+      switch: async ({ chat, action }) => {
+        if (action === 'open') await open({ by: 'qq', chat, receipt: true, requireVip: true });
+        else if (action === 'close') await close({ reason: 'manual', by: 'qq', chat, notify: false });
+      },
+      readonly: async ({ chat, action, key, text }) => {
+        if (action === 'shot') {
+          await shotSession({ key: key || 'majordomo', chat, send: true });
+          return;
+        }
+        // 只读请求：要「回执 / 进度」→ 会话分析（读 think 播报）；无语义时给状态
+        const target = key || '';
+        if (target) {
+          await analyzeOnce({ key: target, chat, delayMs: 0, reason: '群内回执' });
+          return;
+        }
+        const snap = await status();
+        const running = (snap.cats || []).filter((row) => row?.runState && row.runState !== 'idle').map((row) => row.name);
+        await say(chat, running.length ? `在跑：${running.join('，')}` : '当前没有猫在跑。');
+        void text;
+      },
+      generate: async ({ chat, action, text, image }) => {
+        const feature = /念|读一下|转语音|朗读/.test(text) ? 'tts'
+          : /反推|打标|提示词/.test(text) ? 'tagger'
+            : /图像编辑|改图|变成|做成|三视图|姿势|画风/.test(text) ? 'comfy'
+              : 'moss';
+        if (feature === 'tts') {
+          await ttsSpeak({ by: 'qq', chat, text, caption: '', auto: false });
+          return;
+        }
+        if (feature === 'tagger') {
+          await wdTag({ by: 'qq', chat, image: image?.url || '', file: image?.file || '' });
+          return;
+        }
+        if (feature === 'comfy') {
+          await editImage({ by: 'qq', chat, prompt: text, url: image?.url || '', file: image?.file || '' });
+          return;
+        }
+        await mossDraw({ by: 'qq', chat, prompt: text, size: '', seed: null });
+        void action;
+      },
+      send: async ({ chat, key, text }) => {
+        await send({ key, text, chat, by: 'qq' });
+      },
+      // 会话操作（清会话 / 前文整理重启）——与两个工具同一实现，只是入口从模型改成判断器
+      session: async ({ chat, session, key, text }) => {
+        if (session === 'reset') {
+          await resetSession({ key: key || 'majordomo', chat, text: text || '' })
+            .catch((error) => record('error', `整理重启失败（${key}）：${error?.message ?? error}`));
+          return;
+        }
+        await newSession({ keys: key || 'majordomo', chat });
+      }
+    }
+  });
+
   /** 在途订阅：猫 key → 会话 { key, chat, port, blocks, startedAt, done }。 */
   const sessions = new Map();
 
@@ -424,16 +503,27 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    */
   function onOnebotEvent(payload) {
     if (payload?.post_type !== 'message' || payload?.message_type !== 'group') return;
-    if (String(payload?.user_id) !== vipUser) return;
+    // 接入分流（N6 第二刀）——shadow 只落采集、live 由判断器处置；两处共用同一入口，
+    // 因此 VIP 记录的采集放在前面（无论是否 VIP 都要记最近带图消息）。
     const self = selfId();
-    if (self && !atSelf(payload?.message, self)) return;
+    const atMe = self ? atSelf(payload?.message, self) : false;
+    ingress.handleMessage(payload, { self, atMe })
+      .catch((error) => log.warn('navigator', `意图接入失败：${error?.message ?? error}`));
+    if (String(payload?.user_id) !== vipUser) return;
+    if (self && !atMe) return;
     vip.chat = String(payload?.group_id ?? '');
     vip.at = Date.now();
     vip.text = String(payload?.raw_message ?? '');
     log.info('navigator', `VIP 消息（群 ${vip.chat}）：${vip.text.slice(0, 40)}`);
   }
 
-  if (typeof onebot?.onEvent === 'function') onebot.onEvent(onOnebotEvent);
+  // 订阅口径（R3-4）——默认自订阅；`navigator.ingress.viaHub !== false` 时改为由
+  // 业务面分发中心（business.js · createBusinessHub）单点扇出，本模块只暴露 handleEvent。
+  // 为什么：两条独立 onEvent 订阅会在同一事件上跑两遍判断（业务面一次、单体一次），
+  // 迁到 hub 后整条链路只有一个订阅点，navigator 作为消费者排队收件（保序、可计数）。
+  const viaHub = navConfig?.ingress?.viaHub !== false;
+  if (!viaHub && typeof onebot?.onEvent === 'function') onebot.onEvent(onOnebotEvent);
+  if (viaHub) log.info('navigator', '事件入口改由业务面分发中心扇出（不再自订阅）');
 
   /**
    * VIP 消息是否新鲜。
@@ -2770,6 +2860,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       activity: activity.map((item) => ({ ...item })),
       busy: cats.filter((row) => hasSession(row)).map((row) => row.id),
       cats,
+      ingress: ingress.status(),
+      persona: persona.snapshot(),
       ch4Error: error,
       idleMs: snap.lastCommandAt ? Date.now() - snap.lastCommandAt : 0
     };
@@ -2809,6 +2901,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   function start() {
     if (watchTimer) return;
     watchTimer = setInterval(() => { tick().catch(() => { /* 已在内部记录 */ }); }, WATCH_INTERVAL_MS);
+    ingress.start();
     if (state.snapshot().enabled) {
       armAll().catch((error) => record('error', `重启后重建持久观测失败：${error?.message ?? error}`));
     }
@@ -2917,6 +3010,44 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       })
     }),
     'GET /api/nav/detail': async ({ query }) => ({ body: await ch4.detail(query.get('key') || 'majordomo') }),
+    // 影子判断器（N6 第一刀）——只判不发：产 {kind, action, target, via, reason}。
+    // 业务面仍走自己的判断，本路由供影子双跑比对；删掉本行即完全回退。
+    'POST /api/nav/intent': async ({ body }) => {
+      const verdict = await intent.classify({
+        text: String(body?.text ?? ''),
+        atMe: body?.atMe === true,
+        enabled: body?.enabled === true,
+        catNames: catNames || undefined,
+        useLlm: body?.useLlm === true
+      });
+      return { body: { ok: true, ...verdict } };
+    },
+    // 话术 / 教材自持面（N6 清单 #4）——只读：给界面与影子比对看「教材从哪来、多少字、几段」。
+    // `full=true` 才回全文（默认只回快照，避免把整份教材塞进回执）。
+    'GET /api/nav/persona': async ({ query }) => ({
+      body: {
+        ok: true,
+        snapshot: persona.snapshot(),
+        classifyHint: query.get('hint') === '1' ? persona.classifyHint() : undefined,
+        roleText: query.get('full') === '1' ? persona.roleText() : undefined
+      }
+    }),
+    // 刷新教材缓存（改了 role/*.md 或业务面 roleText 后不必重启）
+    'POST /api/nav/persona/refresh': async () => ({ body: { ok: true, snapshot: persona.refresh() } }),
+    // 分发中心快照（R3-4）——navigator 已改为 hub 消费者后的观测面：投递计数 / 队列 /
+    // 去重与溢出。没有它就看不到「navigator 到底收到几条」，切换等于瞎切。
+    'GET /api/nav/hub': async () => ({ body: { ok: true, hub: hubStatus() } }),
+    // 意图接入运行时可调（N6 切换面）——免重启、免改配置就能试跑与回退：
+    //   POST /api/nav/ingress { mode:'shadow'|'live', allow:[...] }
+    // 只改运行态（不落盘）；重启即回 data/config.json 的值。
+    'GET /api/nav/ingress': async () => ({ body: { ok: true, ...ingress.status() } }),
+    'POST /api/nav/ingress': async ({ body }) => {
+      if (body?.mode !== undefined) ingress.setMode(String(body.mode));
+      if (body?.allow !== undefined) ingress.setAllow(Array.isArray(body.allow) ? body.allow : []);
+      const snap = ingress.status();
+      log.info('navigator', `意图接入调整：mode=${snap.mode} allow=${JSON.stringify(snap.allow)}`);
+      return { body: { ok: true, ...snap } };
+    },
     'POST /api/nav/new-session': async ({ body }) => ({
       body: await newSession({ keys: body?.keys ?? body?.key ?? [], chat: body?.chat ?? null })
     }),
@@ -2932,6 +3063,33 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     }
   };
 
+  /** 分发中心快照源（由 app.js 在 createBusinessHub 之后注入——单体内部不反向依赖）。 */
+  let hubStatusFn = null;
+
+  /**
+   * 注入分发中心快照函数（R3-4）。
+   *
+   * @param {Function|null} fn 返回 hub status 的函数
+   * @returns {void}
+   */
+  function bindHubStatus(fn) {
+    hubStatusFn = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
+   * 取分发中心快照（未注入时明确说「未接入」，不回落空对象假装正常）。
+   *
+   * @returns {object} 快照
+   */
+  function hubStatus() {
+    if (!hubStatusFn) return { bound: false, note: '分发中心未接入（viaHub=false 或装配顺序不对）' };
+    try {
+      return { bound: true, ...hubStatusFn() };
+    } catch (error) {
+      return { bound: true, error: String(error?.message ?? error) };
+    }
+  }
+
   return {
     state, ch4, watcher, shot,
     health, renderReceipt, apisiteDetail, open, close, send, status, say, sayAt, sayImage, sayRecord,
@@ -2941,6 +3099,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     pullCatView, digestFromView, digestFromSession, composeActivity, composeBrief,
     armLightWatch, cancelLightWatch, clearLightWatches, lightWatches,
     editImage, comfy, mossDraw, ttsSpeak, wdTag, media,
-    start, stop, api, idleCloseMs
+    start, stop, api, idleCloseMs,
+    intent, ingress, persona,
+    handleEvent: onOnebotEvent, viaHub, bindHubStatus, hubStatus
   };
 }

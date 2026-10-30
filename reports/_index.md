@@ -36,6 +36,17 @@
 | R3-L5 | M6 47 点待裁整理 | R喵7 | `reports/R3-L5.md` | ✅ 已交 · 47 点四列 · 先报差额（两套 47 成员不同，交集 14 点） |
 | R3-L7 | 诊断工具（B48/B49） | R喵8 | `reports/R3-L7.md` | ✅ 已交 · 两脚本 self-test 通过 |
 | R3-L8 | N6 迁移方案 | R喵喵喵 | `reports/R3-L8.md` | ✅ 已交 · 15 项清单 + 23 条点名 · 第一刀=影子判断器 |
+
+## N6 — 判断器与话术收进自研单体（2026-10-30 · 代码面全落 · v0.98）
+
+| 线 | 内容 | 报告 | 状态 |
+|:--|:--|:--|:--|
+| N6-① | 影子判断器 `navigator/intent.js` + `POST /api/nav/intent` | `design-qqbotb_log.md` §八十四 | ✅ `verify-intent` 41/41 |
+| N6-② | 群消息接入 `navigator/ingress.js` + 带图缓冲 | 同上 | ✅ `verify-ingress` 33/33 |
+| N6-③ | 话术自持 `navigator/persona.js`（三级回落） | 同上 | ✅ `verify-persona` 27/27 |
+| N6-④ | 渐变切换面（单体 allow + 业务面逐类自锁） | 同上 | ✅ `verify-qqagent-navtools` 19/19 |
+| N6-⑤ | R3-4 hub 单点扇出 / R3-5 topic-words 并入 / R3-7 成本折算 / R3-6 不改 | 同上 | ✅ `verify-navigator` 63/63 |
+| 验收 | 人工验收清单（重启 / 影子观察 / 逐类切换 / 拍板） | `reports/N6-验收清单.md` | ⏳ 等 Rushiera |
 | R3-L6 | 收线与验收 | 主干 | `reports/R3-主干对账.md` | ✅ 已交 · `verify-suite 23/24` · 五处真缺口修正 |
 
 **主干自跑基线（非执行方自述）**：`verify-suite` **23/24**（R2-L4 基线 9/24）· `resolve-imports MISSING 0/203` · `check-syntax 73/73` · `verify-import-integrity ALL PASS` · `verify-boot` 真起得来（port 3210 / 5 条真实会话）。

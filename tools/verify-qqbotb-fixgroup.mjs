@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
-const APP_SRC = path.join(ROOT, '_unpack', 'resources', 'app', 'src');
+const APP_SRC = path.join(ROOT, 'app', 'src', 'business');
 const read = (p) => fs.readFileSync(p, 'utf8');
 
 const results = [];

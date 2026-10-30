@@ -28,7 +28,8 @@ import http from 'node:http';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 // 🔴 自测数据目录必须落 NTFS：exFAT 卷上 Chromium 的 user-data-dir 起不来（浏览器链路全挂），
 //    落在项目盘（D: exFAT）会让浏览器用例假性"环境阻断"。
 const DATA = path.join(os.tmpdir(), 'qqagent-cattools-selftest');
@@ -49,7 +50,7 @@ fs.writeFileSync(CFG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
 
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { getTool, listTools } = await import(mod('tool-registry.js'));
 const { registerCatTools, timebackMarkStart, timebackRollback, timebackGateTool } = await import(mod('cat-tools.js'));
 const { browserService, resolveKernelPath } = await import(mod('cdp-browser.js'));
@@ -89,13 +90,13 @@ const TOOL_IDS = [
     ['src/config.js', '[qqagent-cattools-patch:config-webfetch]'],
     ['src/config.js', '[qqagent-cattools-patch:config-webfetch-priv]']
   ];
-  const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(APP, rel), 'utf8').includes(m));
+  const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(BIZ, String(rel).replace(/^src\//, '')), 'utf8').includes(m));
   check(`补丁标记齐全（${marks.length}/${marks.length}）`, missing.length === 0, missing.map((x) => x[1]).join(' '));
   const files = ['src/cdp-browser.js', 'src/cat-tools.js', 'src/web-fetch.js'];
   const absent = files.filter((f) => !fs.existsSync(path.join(APP, f)));
   check('新模块在位（3/3）', absent.length === 0, absent.join(' '));
   // 编排器真的接上了回卷 / 门禁 / 台账 / 下载器（不只看标记，看调用）
-  const orch = fs.readFileSync(path.join(APP, 'src/orchestrator.js'), 'utf8');
+  const orch = fs.readFileSync(path.join(BIZ, 'orchestrator.js'), 'utf8');
   check('编排器接线（回卷 / 门禁 / 台账 / 下载器 / 实例回收）',
     orch.includes('timebackMarkStart(ctx.session, assistantIndex)')
     && orch.includes('timebackRollback(messages, ctx.session, assistantIndex)')

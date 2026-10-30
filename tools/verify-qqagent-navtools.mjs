@@ -16,7 +16,8 @@ import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 const DATA = path.join(os.tmpdir(), 'qqagent-navtools-selftest');
 const SRC_CFG = path.resolve(HERE, '..', '_unpack', 'data', 'config.json');
 
@@ -25,7 +26,7 @@ fs.mkdirSync(DATA, { recursive: true });
 if (fs.existsSync(SRC_CFG)) fs.copyFileSync(SRC_CFG, path.join(DATA, 'config.json'));
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { getTool, listTools } = await import(mod('tool-registry.js'));
 const { buildToolDefs } = await import(mod('tools.js'));
 
@@ -50,10 +51,10 @@ const NAV_TOOL_IDS = [
 ];
 
 // ── 0 补丁落盘 ──────────────────────────────────────────────────────────────
-const toolsSrc = fs.readFileSync(path.join(APP, 'src', 'tools.js'), 'utf8');
+const toolsSrc = fs.readFileSync(path.join(BIZ, 'tools.js'), 'utf8');
 check('补丁标记·import', toolsSrc.includes('[qqagent-navigator-patch:tools-import]'));
 check('补丁标记·register', toolsSrc.includes('[qqagent-navigator-patch:tools-register]'));
-check('模块在位·nav-tools.js', fs.existsSync(path.join(APP, 'src', 'nav-tools.js')));
+check('模块在位·nav-tools.js', fs.existsSync(path.join(BIZ, 'nav-tools.js')));
 
 // ── 1 工具注册（走真实入口）─────────────────────────────────────────────────
 buildToolDefs();

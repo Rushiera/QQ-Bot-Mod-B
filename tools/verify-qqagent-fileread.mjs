@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
-const SRC = path.join(ROOT, '_unpack', 'resources', 'app', 'src');
+const SRC = path.join(ROOT, 'app', 'src', 'business');
 const CFG_FILE = path.join(ROOT, '_unpack', 'data', 'config.json');
 const ROLE_DIR = path.join(ROOT, 'role');
 const ROLE_TEXT_MAX = 12000;

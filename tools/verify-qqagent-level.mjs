@@ -10,8 +10,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
-const APP = path.join(ROOT, '_unpack', 'resources', 'app');
-const SRC = path.join(APP, 'src');
+const APP = path.join(ROOT, 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
+const SRC = path.resolve(APP, 'src/business');
 const SANDBOX = path.join(ROOT, 'runtime', '.level-selftest');
 
 let pass = 0;

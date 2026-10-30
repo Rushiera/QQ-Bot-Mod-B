@@ -6,13 +6,15 @@
 // 判据：配置能加载（前文 / 端点 / 白名单）+ 启动会话在会话列表里可见
 
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const DATA = 'D:\\Mau\\WorkSpace\\QQBotB\\_unpack\\data';
-const APP = 'D:\\Mau\\WorkSpace\\QQBotB\\_unpack\\resources\\app';
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const DATA = path.resolve(HERE, '..', '_unpack', 'data');   // D4 数据根（生产只读；冒烟只读不写）
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const { createApp } = await import(pathToFileURL(path.join(APP, 'src', 'app.js')).href);
+const { createApp } = await import(pathToFileURL(path.join(BIZ, 'app.js')).href);
 const core = createApp({ log: () => {} });
 const port = await core.start();
 core.orchestrator.setPaused(true);   // 冒烟期间不处理任何消息（不会发言）

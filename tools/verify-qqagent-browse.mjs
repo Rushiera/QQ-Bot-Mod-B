@@ -45,7 +45,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 const DATA = path.resolve(HERE, '..', 'runtime', '.browse-selftest');
 const SRC_CFG = path.resolve(HERE, '..', '_unpack', 'data', 'config.json');
 
@@ -86,7 +87,7 @@ fs.writeFileSync(CFG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
 
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { getConfig, storeConfigForChat } = await import(mod('config.js'));
 const {
   browseEnabled, browseMuted, browseIntervalMs, browseState,
@@ -236,11 +237,11 @@ const PRIVATE = 'private:10001';
     'orchestrator-import-idle', 'orchestrator-idle-tick'
   ];
   const files = ['browse-rate.js', 'config.js', 'store.js', 'orchestrator.js', 'tools.js', 'sender.js', 'app.js'];
-  const all = files.map((f) => fs.readFileSync(path.join(APP, 'src', f), 'utf8')).join('\n');
+  const all = files.map((f) => fs.readFileSync(path.join(BIZ, f), 'utf8')).join('\n');
   const missing = marks.filter((m) => !all.includes('[qqagent-browse-patch:' + m + ']'));
   check('补丁标记齐全（22 个带标记点）', missing.length === 0, missing.join(',') || '22/22');
 
-  const orch = fs.readFileSync(path.join(APP, 'src', 'orchestrator.js'), 'utf8');
+  const orch = fs.readFileSync(path.join(BIZ, 'orchestrator.js'), 'utf8');
   check('提示词拼接含 browseLine', orch.includes('+ chatterHint + browseLine'));
   check('含节拍巡检入口', orch.includes('#ensureBrowseLoop()') && orch.includes('#browseTick()'));
   check('运行结束回节拍', orch.includes('this.#noteBrowsePending(chatKey, true);'));
@@ -248,7 +249,7 @@ const PRIVATE = 'private:10001';
   check('无新增内容不调 LLM', orch.includes('if (unread <= 0) continue;   // 没人发言 → 不调 LLM'));
   check('含静默补拍分支（判定 + 记账）', orch.includes('idleFireDue(chatKey, lastUnreadTs, now)')
     && orch.includes('markIdleFired(chatKey, lastUnreadTs)'));
-  check('store 提供 lastUnreadTs', fs.readFileSync(path.join(APP, 'src', 'store.js'), 'utf8').includes('lastUnreadTs(chatKey)'));
+  check('store 提供 lastUnreadTs', fs.readFileSync(path.join(BIZ, 'store.js'), 'utf8').includes('lastUnreadTs(chatKey)'));
 }
 
 // ── I. 节拍链路端到端（假时钟：档位 80ms / 巡检 20ms）─────────────────────

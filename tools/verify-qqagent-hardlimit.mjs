@@ -20,7 +20,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 const DATA = path.resolve(HERE, '..', 'runtime', '.hardlimit-selftest');
 const SRC_CFG = path.resolve(HERE, '..', '_unpack', 'data', 'config.json');
 
@@ -42,7 +43,7 @@ fs.writeFileSync(CFG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
 
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { getConfig } = await import(mod('config.js'));
 const { SendQueue } = await import(mod('sender.js'));
 
@@ -138,7 +139,7 @@ resetWindows();
     ['src/sender.js', '[qqagent-hardlimit-patch:sender-checkrate]'],
     ['src/sender.js', '[qqagent-hardlimit-patch:sender-quotastate]']
   ];
-  const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(APP, rel), 'utf8').includes(m));
+  const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(BIZ, String(rel).replace(/^src\//, '')), 'utf8').includes(m));
   check('补丁标记齐全（4/4）', missing.length === 0, missing.map((x) => x[1]).join(' '));
 }
 

@@ -3425,3 +3425,32 @@ R喵喵：交接摘要已注入，等待确认
 1. **生效需重启自研单体**——`app/src/navigator/index.js` / `app/src/config.js` 是启动时加载（`启动QQBotB.vbs`）。业务面工具描述已落盘，**业务面重启后**新描述进前文；教材改动需业务面**开新会话**。
 2. **真链路待验收**：群里说一次「清理一下 X 的前文，然后让工作继续」→ 期望活动流依次出现「代读猫 = nav_rescue（固定代读猫）」+「已开新会话（清上一次抢救内容，清前 N 条）」+ 交接报告分次收回 + 目标猫重建。**首次实跑等于真清一只猫的前文，挑非在用的猫做**。
 3. **`nav_rescue` 的根（enableRoots）为空**——它只做代读（读原文由领航员抓取后整条投递，不需要它自己读盘），当前配置够用；若日后让它自己取文件需补根。
+
+## 八十二、领航员功能二次整理（复核 + 三处口径漂移修正 · v0.95 · 2026-10-30）
+
+> 触发：Rushiera「上工qqbotb，你整理一下其中的领航员功能」（与 §八十 同一句诉求，本轮做二次复核）。
+
+**一、核对方法（以代码与实跑为准，不采信文档自述）**
+
+| 面 | 实测源 | 结果 |
+|:--|:--|:--|
+| 配置 | `app/src/config.js` `navigator.*` | **17 键**（含 `rescueCat`）——与 `ref-navigator-map.md` §五 一致 |
+| 工具面 | `tools/navigator/nav-tools.js` 14 处 `name:` | **14 件**（10 件 `nav_*` + 改图 / 生图 / 语音 / 反推）——与 §三 一致 |
+| 单体 API | `app/src/navigator/index.js` 路由表 | **15 条**——与 §四 一致 |
+| 会话态 | `app/src/navigator/state.js` 初值 | **10 字段** + `COMMAND_LOG_LIMIT=50`——与 §六 一致 |
+| 自测实跑 | `node tools\verify-navigator.mjs` | **62/62 通过** |
+| 自测实跑 | `node tools\verify-qqagent-navtools.mjs` | **19/19 通过**（工具组注册 14 件） |
+
+**二、修掉三处口径漂移（只改文字，不动节号）**
+
+| # | 处 | 原口径 → 现口径 |
+|:--:|:--|:--|
+| 1 | `design-qqbotb-navigator.md` §八 教学面第 4 点 | 「目标猫自己跑不动时用抢救模式 `nav_reset(key, rescue=true)`」→「固定代读猫 `nav_rescue` 代读产出交接报告——不需点名抢救模式，`rescue` 参数已退役」 |
+| 2 | 同文件 §十三 交接材料来源表首行 | 「**交接报告**（猫自述 / 抢救猫代读）」→「（固定代读猫 `nav_rescue` 代读；目标猫自述已退役）」 |
+| 3 | 同文件 §五 目标猫解析示例 | 猫名 `@R喵` / `rf 看一下…`（CH4 现有猫群已无 `rf`）→ `@R喵喵` / `rb 看一下…`（现役猫名） |
+| 4 | `ref-navigator-map.md` §三 工具签名 | `nav_reset(key, rescue?, dryRun?, text?)` → `nav_reset(key, dryRun?, text?)`（`rescue` 已退役，保留接收不报错） |
+| 5 | `ref-navigator-map.md` §七 自测行 | `verify-navigator.mjs`（39/39）→ **62/62**，并补 `verify-qqagent-navtools.mjs`（19/19） |
+
+> §六c 判例、`design-qqbotb_log.md` §八十一、`CHANGELOG.md` v0.94 里出现的 `rf` / `rescue=true` 属**历史记录**（当时原话与当时实现），只写不改。
+
+**三、边界**：本轮**零代码改动**；`verify-comfy.mjs` / `verify-media.mjs` 未实跑（本机 ComfyDock 状态未验，不据旧数字宣称通过）；`todo.md` §五 N6 / N7 / N8 状态不变（N6 待排期 · N7 当前不做 · N8 待重启单体）。

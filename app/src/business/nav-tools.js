@@ -1,0 +1,643 @@
+// nav-tools.js —— 领航员工具组（QQBotB 卫星 · 2026-10-11）
+//
+// 领航员 = 本 bot 的一种工作模式：群里的人（限 VIP）借它指挥 CH4 的猫群干活。
+// 本模块只做「手」——状态 / 投递 / 详情都经自研单体（app/）的领航员 API：
+//   GET  /api/nav/status             领航员状态 + 猫群清单 + 指令流水
+//   GET  /api/nav/detail?key=<猫>    单猫详情（在干什么 / 末条 user / 末条回复）
+//   GET  /api/nav/health             健康检查
+//   POST /api/nav/open               开启（body { by:'qq', requireVip:true }）
+//   POST /api/nav/close              关闭
+//   POST /api/nav/send               投递（body { key, text }）
+//   POST /api/nav/new-session        新会话（body { keys: 'a,b,c' }——发布 /new，不清前文交接）
+//   POST /api/nav/comfy              图像编辑（body { chat, prompt, file, url }——送上 ComfyDock 生成工作区，出图自动回群）
+//   POST /api/nav/moss               生图（body { chat, prompt, size, seed }——MOSS 文生图，出图自动回群）
+//   POST /api/nav/tts                语音（body { chat, text, caption }——IrodoriTTS，中文自动翻日语，音频自动回群）
+//   POST /api/nav/tagger             反推提示词（body { chat, file, url }——WD Tagger，标签自动回群）
+//   POST /api/nav/shot               会话截图（body { key, send:true }——把某猫会话画成卡发群；不带 blocks 时拉该猫会话）
+//
+// 「指令 / 闲聊」的语义判断归模型——本模块不做判定，也不替猫编造进度。
+// 依赖：QQBot mod B 自研单体（Electron 应用）在 127.0.0.1:3280 在跑。
+
+import { registerTool } from './tool-registry.js';
+// 记忆回溯点（收工轮取材回溯到领航员开启那一刻）——[qqagent-navigator-patch:memory-reach-import]
+import { setMemoryFloor } from './session-state.js';
+
+/** 自研单体的界面 / API 端口。 */
+const ENDPOINT = 'http://127.0.0.1:3280';
+
+/** 单次调用超时（毫秒）——健康检查要探外部服务，留宽一点。 */
+const TIMEOUT_MS = 25000;
+
+/** 猫名清单（提示词里给模型认名字用）。 */
+const CAT_HINT = 'majordomo（主干）/ R喵 / R喵喵 / R喵喵喵 / R喵喵喵喵 / rb / rc / rd / re / rf';
+
+/**
+ * 调自研单体领航员 API。
+ *
+ * @param {string} pathname 路径（含查询串）
+ * @param {object} [options] 选项（method / body）
+ * @param {number} [timeoutMs] 超时毫秒（默认 25 秒；生成类接口传更宽）
+ * @returns {Promise<object>} 响应体
+ */
+async function call(pathname, options = {}, timeoutMs = TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${ENDPOINT}${pathname}`, {
+      method: options.method || 'GET',
+      headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`HTTP ${response.status}：${text.slice(0, 160)}`);
+    return text ? JSON.parse(text) : {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 成功回执。
+ *
+ * @param {string} text 正文
+ * @returns {object} 工具结果
+ */
+function ok(text) {
+  return { content: String(text), isError: false };
+}
+
+/**
+ * 失败回执。
+ *
+ * @param {string} text 正文
+ * @returns {object} 工具结果
+ */
+function err(text) {
+  return { content: String(text), isError: true };
+}
+
+/**
+ * 取当前会话的群号（生成能力只在群里用）。
+ *
+ * @param {object} ctx 工具上下文
+ * @returns {string} 群号（非群会话返回空串）
+ */
+function groupChatOf(ctx) {
+  const chat = String(ctx?.chatKey || '').replace(/^group:/, '');
+  return /^\d+$/.test(chat) ? chat : '';
+}
+
+/**
+ * 取消息里的图片段——指定 messageId 优先，否则取本群最近一条带图消息。
+ *
+ * @param {object} ctx 工具上下文
+ * @param {string|number} [messageId] 消息 #号
+ * @returns {object|null} 图片段（含 file / url）
+ */
+function pickImageOf(ctx, messageId) {
+  const mid = messageId;
+  let entry = (mid === undefined || mid === null || mid === '')
+    ? null
+    : ctx.store.findByMid(ctx.chatKey, mid);
+  if (!entry) {
+    const rows = ctx.store.recent(ctx.chatKey, { limit: 30 });
+    entry = [...rows].reverse()
+      .find((row) => (row.media || []).some((m) => m.kind === 'image' && (m.url || m.file))) ?? null;
+  }
+  if (!entry) return null;
+  return (entry.media || []).find((m) => m.kind === 'image' && (m.url || m.file)) ?? null;
+}
+
+/**
+ * 猫群清单渲染。
+ *
+ * @param {Array<object>} cats 猫状态
+ * @returns {string} 文本
+ */
+function renderCats(cats) {
+  if (!Array.isArray(cats) || cats.length === 0) return '（未读到猫群——CH4 宿主可能没在跑）';
+  return cats
+    .map((c) => `${c.runState === 'idle' ? '·' : '▶'} ${c.name}（${c.port}）${c.runState}｜前文 ${c.contextCount} 条 / ${c.context} 字符`)
+    .join('\n');
+}
+
+/**
+ * 注册领航员工具组。
+ *
+ * @returns {void}
+ */
+export function registerNavTools() {
+  // ── nav_status ──────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_status',
+    name: '领航员·状态',
+    description: `看领航员模式的状态与 CH4 猫群现状——是否开启、回消息群、当前目标猫、每只猫的运行态、最近指令流水。
+用途：「领航员开着吗」「猫在干什么」「刚刚让你做什么了」这类问题先调本工具，别凭空猜。`,
+    category: 'system',
+    icon: '🧭',
+    parameters: { type: 'object', properties: {}, required: [] },
+    async execute() {
+      try {
+        const data = await call('/api/nav/status');
+        const lines = [];
+        lines.push(`领航员：${data.enabled ? '已开启' : '未开启'}${data.openedBy ? `（来源 ${data.openedBy === 'qq' ? '群内 @' : '应用内'}）` : ''}`);
+        lines.push(`回消息群：${data.activeChat ?? '未定'}｜目标猫：${data.lastTarget || '未定'}`);
+        lines.push(`最后指令：${data.lastCommandAt ? new Date(data.lastCommandAt).toLocaleString('zh-CN', { hour12: false }) : '无'}`);
+        lines.push(`猫群（${(data.cats || []).length} 只）：`);
+        lines.push(renderCats(data.cats));
+        const flow = (data.commandLog || []).slice(-5).reverse();
+        if (flow.length) {
+          lines.push('最近指令：');
+          for (const e of flow) {
+            lines.push(`  [${new Date(e.at).toLocaleTimeString('zh-CN', { hour12: false })}] → ${e.target || '-'}：${e.text}（${e.result}）`);
+          }
+        }
+        return ok(lines.join('\n'));
+      } catch (error) {
+        return err(`领航员服务不可达（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── nav_open ────────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_open',
+    name: '领航员·开启',
+    description: `开启领航员模式（QQ 群指挥 CH4 猫群）。
+🔴 只有 QQ 569145850 本人在群里 @ 我 说「打开 / 开启 / 启动…领航员」时才可调用——其他任何人（含管理员）的请求一律不要调用本工具。
+🔴 领航员**已经开着**时就不要再调本工具（不确定状态先调 nav_status）——重复开启不会重发任何东西，但那是无意义动作；重复的「开工报告 + 开场巡检」已经在系统侧做了幂等保护。
+调用后我（自研单体）会自动在下指令的群发一条健康检查回执；你不需要再复述回执内容，也不要重复发送。`,
+    category: 'system',
+    icon: '🚀',
+    parameters: { type: 'object', properties: {}, required: [] },
+    async execute() {
+      try {
+        const data = await call('/api/nav/open', { method: 'POST', body: { by: 'qq', requireVip: true } });
+        if (data.ok === false) return err(`领航员未开启：${data.error ?? '未知原因'}`);
+        // 记忆回溯点：本次领航开启时刻置位 —— 收工轮取材据此回溯到这一刻起（不只吃本会话）。
+        // [qqagent-navigator-patch:memory-reach-open]
+        let reachNote = '';
+        try {
+          const st = await call('/api/nav/status');
+          const chatId = String(st?.activeChat ?? '').replace(/^group:/, '').trim();
+          if (/^\d+$/.test(chatId)) {
+            setMemoryFloor(`group:${chatId}`, Date.now());
+            reachNote = `\n记忆回溯点已置位（group:${chatId}）——本轮收工取材会回溯到此刻起。`;
+          } else {
+            reachNote = `\n⚠️ 记忆回溯点未置位：未读到回消息群（activeChat=${st?.activeChat ?? '空'}）。`;
+          }
+        } catch (error) {
+          reachNote = `\n⚠️ 记忆回溯点未置位：${error?.message ?? error}`;
+        }
+        return ok(`领航员已开启（回执已自动发到下指令的群）。猫群：\n${renderCats(data.health?.cats)}${reachNote}`);
+      } catch (error) {
+        return err(`领航员服务不可达（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── nav_close ───────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_close',
+    name: '领航员·关闭',
+    description: `关闭领航员模式。
+🔴 同样只接受 QQ 569145850 本人的请求。关闭后群里回到普通参与模式。
+发群按「哪里退出哪里回应」：群内退出 → 系统把领航记录发到本群；软件内退出 / 空闲自关 → 静默整理，不发群。`,
+    category: 'system',
+    icon: '🛑',
+    parameters: { type: 'object', properties: {}, required: [] },
+    async execute() {
+      try {
+        // by:'qq'——本工具只从群内被调用（应用面板走前端通道，自带 by:'app'）；
+        // 不带 chat：回消息群由自研单体按「最近一条 VIP 群消息」解析（与 nav_send 同口径）。
+        const data = await call('/api/nav/close', { method: 'POST', body: { reason: 'manual', by: 'qq', notify: false } });
+        return ok(data.enabled === false ? '领航员已关闭。' : '关闭请求已发出，但状态仍为开启——请再查一次状态。');
+      } catch (error) {
+        return err(`领航员服务不可达（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── nav_send ────────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_send',
+    name: '领航员·投递指令',
+    description: `把一条指令投递给 CH4 的某只猫执行（猫那边看到的就是这条原文——系统不再加 [来自QQ]… 来源头，渠道由投递通道自身承载）。
+- key：猫名或 id——${CAT_HINT}；拿不准目标时传 majordomo。
+- text：给猫的**完整指令原文**——照抄用户的指令内容，不要改写、不要加解释、不要加礼貌语、不要带触发标记（如「（@我/提到我）」这类是给判断用的，不是指令内容）。
+🔴 只投递**指令**（要猫干活的）；群里的闲聊不要调本工具。
+🔴 领航员**未开启**时也能投——限本人（569145850）**点名了猫**的指令：投递 + 回复截图照常（**不带投送后分析**）；没点名猫的、或非本人的请求，未开启时不要投。
+投递成功后猫会在 CH4 里干活；猫的回复到达时系统会自动截图发群，你不需要再复述。`,
+    category: 'system',
+    icon: '📮',
+    parameters: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: `目标猫（${CAT_HINT}）` },
+        text: { type: 'string', description: '给猫的完整指令原文' }
+      },
+      required: ['key', 'text']
+    },
+    async execute(ctx, args) {
+      const key = String(args?.key || 'majordomo').trim();
+      const text = String(args?.text || '').trim();
+      if (!text) return err('text 不能为空——把用户的指令原文填进来。');
+      try {
+        const data = await call('/api/nav/send', {
+          method: 'POST',
+          // 不带 chat——回消息群由自研单体按「最近一条 VIP 群消息」解析（比 chatKey 更准）
+          // by:'qq'——本工具只从群内被调用；未开启时的轻通道闸门（本人 + 近期 @）据此生效
+          body: { key, text, by: 'qq' }
+        });
+        if (data?.ok !== true) return err(`投递未受理：${JSON.stringify(data?.reply ?? data)}`);
+        return ok(`已投递 → ${key}（端口 ${data.port}）：${text.slice(0, 80)}\n猫的回复到达时会自动截图发群。`);
+      } catch (error) {
+        return err(`投递失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── nav_detail ──────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_detail',
+    name: '领航员·单猫详情',
+    description: `看某只猫当前在干什么——运行态、前文规模、最近一条用户消息与最近一条回复。
+用途：回答「X 猫做到哪了」「卡在哪」——有回复就报回复，还在跑就报在跑。**读不到就说读不到，不要替猫编进度。**`,
+    category: 'system',
+    icon: '🔎',
+    parameters: {
+      type: 'object',
+      properties: { key: { type: 'string', description: `猫名或 id（${CAT_HINT}）` } },
+      required: ['key']
+    },
+    async execute(ctx, args) {
+      const key = String(args?.key || 'majordomo').trim();
+      try {
+        const data = await call(`/api/nav/detail?key=${encodeURIComponent(key)}`);
+        if (data?.ok !== true) return err(`未读到 ${key} 的详情：${JSON.stringify(data).slice(0, 200)}`);
+        const lines = [
+          `${data.name}（${data.cat}）｜运行态 ${data.runState}｜相位 ${data.phase}`,
+          `前文 ${data.contextCount} 条 / ${data.context} 字符｜本轮请求 ${data.requests} 次｜待处理 ${data.pending}`
+        ];
+        if (data.lastUser?.text) lines.push(`最近用户消息（${data.lastUser.timeText ?? data.lastUser.source}）：${String(data.lastUser.text).slice(0, 300)}`);
+        if (data.lastReply?.text) lines.push(`最近回复（${data.lastReply.timeText ?? data.lastReply.source}）：${String(data.lastReply.text).slice(0, 600)}`);
+        return ok(lines.join('\n'));
+      } catch (error) {
+        return err(`查询失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── nav_health ──────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_health',
+    name: '领航员·运行情况',
+    description: `看「各单位」现在的运行情况——应用指令层 / CH4 宿主 / 猫群（在跑 / 有会话）/ 外部服务（ApiSiteAnalyzer、ComfyDock 等）。
+用途：群里问「各单位运行情况」「现在都怎么样」「状态如何」时调本工具。
+🔴 **只读**——看状态就读状态，**不要给猫发消息去问**（那会让它们真的干活、回话，还往各自前文堆一条）。`,
+    category: 'system',
+    icon: '🩺',
+    parameters: { type: 'object', properties: {}, required: [] },
+    async execute() {
+      try {
+        const data = await call('/api/nav/health');
+        const lines = [];
+        lines.push(`应用指令层 ${data?.app?.ok ? '--OK' : '--异常'}`);
+        lines.push(`CH4 宿主 ${data?.ch4?.ok ? '--OK' : `--异常（${data?.ch4?.error || '未连接'}）`}`);
+        for (const svc of data?.services || []) lines.push(`${svc.name}   ${svc.detail}`);
+        const cats = data?.cats || [];
+        const running = (data?.working || []).map((row) => row.name || row.id);
+        const busy = (data?.busy || []).map((row) => row.name || row.id);
+        lines.push(`猫群（${cats.length} 只）：${running.length ? `${running.join('，')} 正在跑` : '无猫在跑'}${busy.length ? `；有会话：${busy.join('，')}` : ''}`);
+        lines.push(renderCats(cats));
+        return ok(lines.join('\n'));
+      } catch (error) {
+        return err(`领航员服务不可达（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── nav_analyze ─────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_analyze',
+    name: '领航员·会话分析',
+    description: `对某只猫做一次「会话分析」——**直接读它的思考（think）**，报出它现在在干什么 / 做到哪 / 卡不卡。
+用途：群里要「回执」「看一下 X 现在干嘛」「进度怎么样」时调本工具；不传 key 就对所有在跑的猫各做一次。
+🔴 **只读**——分析是读会话与思考，**不是给猫发消息**；不要用 nav_send 去「问状态」（那会让猫真的回话、往它前文各堆一条）。
+分析结果由领航员自己发群（有回复 → 回复截图；还在跑 → 直接读 think 播报 + @ 你），你不用复述。`,
+    category: 'system',
+    icon: '🔬',
+    parameters: {
+      type: 'object',
+      properties: { key: { type: 'string', description: `目标猫（${CAT_HINT}）；留空 = 全部在跑的猫` } },
+      required: []
+    },
+    async execute(ctx, args) {
+      const raw = String(args?.key || '').trim();
+      try {
+        let keys = raw ? raw.split(/[,，、\s]+/).filter(Boolean) : [];
+        if (keys.length === 0) {
+          const st = await call('/api/nav/status');
+          keys = (st?.cats || [])
+            .filter((row) => row?.runState && row.runState !== 'idle')
+            .map((row) => row.id);
+          if (keys.length === 0) return ok('当前没有在跑的猫——不需要会话分析。要看整体状态用 nav_health。');
+        }
+        const done = [];
+        for (const key of keys) {
+          const data = await call('/api/nav/analyze', {
+            method: 'POST',
+            body: { key, delayMs: 0, reason: '群内回执' }
+          });
+          done.push(`${key}${data?.ok === true ? '' : '（未受理）'}`);
+        }
+        return ok(`会话分析已触发（只读，不发消息给猫）：${done.join('，')}\n结果由领航员自己发群。`);
+      } catch (error) {
+        return err(`会话分析失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── nav_shot ────────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_shot',
+    name: '领航员·截图会话',
+    description: `把某只猫**当前的会话**渲染成会话卡截图发到群里（与领航员开场巡检同款样式——CH4 会话页的对话气泡卡；**长会话自动分段、按序发多张**，标注 1/N…N/N）。
+用途：群里 @ 你说「截一下 X 的会话」「把 X 的会话发来看看」这类**要图**的请求时调本工具。
+- key：目标猫（${CAT_HINT}）。
+🔴 只读——只是把会话画成图，**不给猫发消息**、不改它的前文（要「它现在在干什么」的判读用 nav_analyze）。
+🔴 只接受 QQ 569145850 本人的请求。
+出图由领航员自己发群（会话卡 + 一段解读），你不用复述。`,
+    category: 'system',
+    icon: '🖼️',
+    parameters: {
+      type: 'object',
+      properties: { key: { type: 'string', description: `目标猫（${CAT_HINT}）` } },
+      required: ['key']
+    },
+    async execute(ctx, args) {
+      const key = String(args?.key || 'majordomo').trim();
+      try {
+        const data = await call('/api/nav/shot', { method: 'POST', body: { key, send: true, by: 'qq' } });
+        if (data?.ok !== true) return err(`截图未受理：${data?.error ?? JSON.stringify(data).slice(0, 200)}`);
+        return ok(`已截 ${key} 的会话卡并发群${data.sent === false ? '（发送失败）' : ''}。`);
+      } catch (error) {
+        return err(`会话截图失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── nav_new ─────────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_new',
+    name: '领航员·新会话',
+    description: `给一只或多只猫**直接开新会话**（等价于在该猫对话页发布 /new）——清掉前文 + 重新注入知识文件，**不保留旧前文的交接摘要**。
+用途：群里说「清掉 X 的会话」「把 X 的前文清了，直接开新会话即可」时调本工具。
+- key：猫名或 id——${CAT_HINT}；**多只用逗号分隔**（如 "R喵喵,rb,rc,rd,rf"）。
+🔴 与 nav_reset 的区别：nav_reset 是「前文整理重启」（先收工出交接摘要 → 再开新会话 → 注入摘要 → 让它接着干），用于**前文太长且工作要继续**；本工具只开新会话，不清点工作、也不让它继续。
+🔴 只接受 QQ 569145850 本人的请求。执行静默——投递后不要回话。`,
+    category: 'system',
+    icon: '🆕',
+    parameters: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: `目标猫，多只用逗号分隔（${CAT_HINT}）` }
+      },
+      required: ['key']
+    },
+    async execute(ctx, args) {
+      const key = String(args?.key || '').trim();
+      if (!key) return err('key 不能为空——要给哪只猫开新会话？');
+      try {
+        const data = await call('/api/nav/new-session', { method: 'POST', body: { keys: key } });
+        if (data?.ok !== true) return err(`新会话未受理：${JSON.stringify(data).slice(0, 200)}`);
+        const done = (data.results || []).filter((row) => row.ok).map((row) => row.key).join('，');
+        return ok(`已请求新会话（/new）：${done || key}（${data.count}/${data.total}）。执行静默——不用回话。`);
+      } catch (error) {
+        return err(`新会话失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── nav_reset ───────────────────────────────────────────────────────────
+  registerTool({
+    id: 'nav_reset',
+    name: '领航员·前文整理重启',
+    description: `把某只猫的前文整理重启——由**固定代读猫**（CH4 的 nav_rescue）代读它的完整前文产出交接报告，再清前文、注入报告、让它接着干。
+流程（全自动）：① 代读猫先开新会话（清掉上一次抢救的内容）② 抓目标猫完整前文交给它代读 → 产出**交接报告**（足量详尽，宁多勿漏）③ 抓原文轨迹（只落盘备查，不注入）④ 给目标猫开新会话（重新注入知识文件）⑤ 注入交接报告 ⑥ 让它据此继续 ⑦ **带上你这次要对它说的原话**（可选）。
+用途：用户说一句「清理一下 X 的前文，然后让工作继续」就调本工具。**不再需要点名抢救模式**——2026-10-30 起所有前文整理都走固定代读猫，目标猫自己收工自述那条路已退役（代读猫自己不清，下次整理前才清）。
+- key：要整理的猫（${CAT_HINT}）。
+- text：**你这次要对它说的原话**（可选）——用户原话照抄，别改写。系统会在它接上之后把它作为第一条指令投递。
+  例：用户说「重建 majordomo 的前文，告诉他，历史消息里有两个需求…你检查一下群bot的领航员前文」→ nav_reset(key='majordomo', text='历史消息里有两个需求一个是发给你的，另一个是发给R喵的…你检查一下群bot的领航员前文')——**只投「告诉他」之后的那句**，别把「重建前文」这半句也塞进去。
+- rescue：**已退役**（2026-10-30）——保留参数只为兼容旧调用，传不传都走同一条代读路径。
+🔴 只要「清掉会话 / 直接开新会话」用 nav_new——本工具会先代读出一份交接报告，耗时几分钟；别拿它当清会话使。
+🔴 只接受 QQ 569145850 本人的请求。整个过程无需人干预，进度看领航员活动流；耗时几分钟（要等代读猫读完原文写完报告，再等目标猫接上）。`,
+    category: 'system',
+    icon: '♻️',
+    parameters: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: `要整理的猫（${CAT_HINT}）` },
+        text: { type: 'string', description: '你这次要对它说的原话（可选；照抄，不改写）——新会话接上之后作为第一条指令投递' },
+        rescue: { type: 'boolean', description: '已退役（2026-10-30）——保留兼容；传不传都走固定代读猫' }
+      },
+      required: ['key']
+    },
+    async execute(ctx, args) {
+      const key = String(args?.key || '').trim();
+      if (!key) return err('key 不能为空——要整理哪只猫的前文？');
+      const text = String(args?.text || '').trim();
+      const rescue = args?.rescue === true;
+      try {
+        const data = await call('/api/nav/reset', { method: 'POST', body: { key, text, rescue } });
+        if (data?.ok !== true) return err(`整理重启未受理：${JSON.stringify(data).slice(0, 200)}`);
+        return ok(`已开始整理重启：${key}。流程 = 代读猫先清自己的前文 → 代读 ${key} 的完整前文产出交接报告 → 新会话 → 注入交接报告 → 自动继续${text ? ' → 投递你的原话' : ''}；耗时几分钟，进度会同步到群。`);
+      } catch (error) {
+        return err(`整理重启失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── comfy_edit ──────────────────────────────────────────────────────────
+  registerTool({
+    id: 'comfy_edit',
+    name: '图像编辑',
+    description: `把群里的一张图送上云端工作流做图像编辑（改姿势 / 换风格 / 出三视图 / 换画风…），出图后自动发回本群。
+用途：群里 @ 我 说「进行图像编辑」「把这张图做成三视图」「给这张图换个姿势」这类**改图**请求时调本工具。
+- prompt：给云端工作流的提示词——用户怎么说的就怎么填，别改写、别加戏。
+- messageId：带图那条消息的 #号（可选）——不传就取本群最近一条带图的消息。
+🔴 前置两条：**领航员已开启** + **ComfyDock 在线**——缺哪条回执就说明缺哪条，别硬试、别自己想办法绕。
+🔴 **只有 QQ 569145850 本人能用**——其他群友 @ 你要改图，**不要调本工具**，直接说这项暂时只对 TA 开放。
+🔴 受理即静默：提交后不用回话；出图（约 1~3 分钟）或失败由系统自动发回本群。
+🔴 一次只跑一张：回执说「已有一张图在跑」就等它出图，别连点。`,
+    category: 'system',
+    icon: '🎨',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: '给云端工作流的提示词（照抄用户的要求）' },
+        messageId: { type: ['integer', 'string'], description: '带图那条消息的 #号（可选；不传取本群最近一条带图的消息）' }
+      },
+      required: ['prompt']
+    },
+    async execute(ctx, args) {
+      const prompt = String(args?.prompt || '').trim();
+      if (!prompt) return err('prompt 不能为空——把用户要改图的那句话填进来。');
+      let media = null;
+      try {
+        const mid = args?.messageId;
+        let entry = (mid === undefined || mid === null || mid === '') ? null : ctx.store.findByMid(ctx.chatKey, mid);
+        if (!entry) {
+          const rows = ctx.store.recent(ctx.chatKey, { limit: 30 });
+          entry = [...rows].reverse()
+            .find((row) => (row.media || []).some((m) => m.kind === 'image' && (m.url || m.file))) ?? null;
+        }
+        if (!entry) return err('本群最近没有带图的消息——让用户先发一张图，再 @ 我说要改什么。');
+        media = (entry.media || []).find((m) => m.kind === 'image' && (m.url || m.file)) ?? null;
+      } catch (error) {
+        return err(`取图失败：${error?.message ?? error}`);
+      }
+      if (!media) return err('那条消息里没有可用的图片。');
+      const chat = String(ctx.chatKey || '').replace(/^group:/, '');
+      if (!/^\d+$/.test(chat)) return err('图像编辑只在群里用——当前会话没有可用的群号。');
+      try {
+        const data = await call('/api/nav/comfy', {
+          method: 'POST',
+          // by:'qq'——本工具只从群内被调用；请求者闸（VIP 限定）据此生效
+          body: { by: 'qq', chat, prompt, file: media.file || '', url: media.url || '' }
+        });
+        if (data?.ok !== true) return err(`图像编辑未受理：${data?.error ?? JSON.stringify(data).slice(0, 200)}`);
+        return ok(`已提交图像编辑（任务 ${data.taskId ?? '?'}）——出图后系统自动发回本群，你不用回话。`);
+      } catch (error) {
+        return err(`图像编辑失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── moss_draw ───────────────────────────────────────────────────────────
+  registerTool({
+    id: 'moss_draw',
+    name: '生图·MOSS',
+    description: `从零画一张新图（本地 MOSS-Image 文生图），出图自动发回本群。
+用途：群里 @ 我 说「画一张…」「帮我画…」「生成一张…」「用生图功能…」这类**从零画新图**的请求时调本工具。
+- prompt：用户要画的内容——**中文直接填**，工具会自动翻译成英文再送模型；已经是英文也直接填。
+  角色参考表 / 设定集 / 三视图 / 表情九宫格这类多格排版：按 \`workspace:QQBotB/role/media-rules.md\` 里的示例 JSON 结构填（summary + items + bbox，caption 用英文）。
+  用户只说「用生图功能」但没说要画什么 → **先问画什么**，不要拿这句话本身当提示词。
+- size：可选，如 "1024x1024" / "竖图" / "横图"；不填默认 1024×1024。
+- seed：可选，固定种子复现同一张图。
+🔴 与 comfy_edit 的分界：**无图从零画 = 本工具**；**带图改图 / 换姿势 / 换画风 = comfy_edit**。
+🔴 前置：ComfyDock 在线；只对 QQ 569145850 本人开放（其他群友问就说这项暂时只对 TA 开放）。
+🔴 受理即静默：出图约 1~2 分钟，出图或失败由系统自动发回本群——不用回「已提交」、不用催。
+🔴 一次只跑一张：回执说「已有一张图在跑」就等它出图，别连点。`,
+    category: 'system',
+    icon: '🎨',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: '要画的内容（中文直接填，工具自动翻英文；结构化排版用英文 caption）' },
+        size: { type: 'string', description: '尺寸（可选，如 1024x1024 / 竖图 / 横图）' },
+        seed: { type: ['integer', 'string'], description: '种子（可选，固定复现同一张图）' }
+      },
+      required: ['prompt']
+    },
+    async execute(ctx, args) {
+      const prompt = String(args?.prompt || '').trim();
+      if (!prompt) return err('prompt 不能为空——把用户要画的内容填进来。');
+      const chat = groupChatOf(ctx);
+      if (!chat) return err('生图只在群里用——当前会话没有可用的群号。');
+      try {
+        const data = await call('/api/nav/moss', {
+          method: 'POST',
+          body: { by: 'qq', chat, prompt, size: args?.size ?? '', seed: args?.seed ?? null }
+        }, 120000);
+        if (data?.ok !== true) return err(`生图未受理：${data?.error ?? JSON.stringify(data).slice(0, 200)}`);
+        return ok(`已提交生图（提示词已自动翻成英文）——出图后系统自动发回本群，你不用回话。`);
+      } catch (error) {
+        return err(`生图失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── tts_speak ───────────────────────────────────────────────────────────
+  registerTool({
+    id: 'tts_speak',
+    name: '语音·IrodoriTTS',
+    description: `把一段话合成语音发到群里（本地 IrodoriTTS · 依田芳乃音色）。
+用途：群里 @ 我 说「生成语音…」「说一句…」「用语音说…」「念一下…」这类**要听声音**的请求时调本工具。
+- text：要说的内容——**中文直接填**，工具会自动翻译成日语再送模型（IrodoriTTS 是日语 TTS）；已经是日语就直接填。
+- caption：可选，风格描述（如「温柔一点」「慢速」）——中文会一并翻译。
+- 用户只说「生成语音 / 说话」但没给内容 → **先问要说什么**，不要拿空话当台词。
+🔴 前置：ComfyDock 在线；只对 QQ 569145850 本人开放（其他群友问就说这项暂时只对 TA 开放）。
+🔴 一次一两句话，别塞整篇长文——单次语音合成上限就是 **30 秒**（约 100 个日语字符）；超出的部分会被系统按句末切掉，用户会听到「话说一半」。长内容分几次念。
+🔴 受理即静默：合成约十几秒到一分钟，语音或失败由系统自动发回本群——不用回「已提交」、不用催。`,
+    category: 'system',
+    icon: '🔊',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '要说的内容（中文直接填，工具自动翻日语）' },
+        caption: { type: 'string', description: '风格描述（可选，如 温柔一点 / 慢速）' }
+      },
+      required: ['text']
+    },
+    async execute(ctx, args) {
+      const text = String(args?.text || '').trim();
+      if (!text) return err('text 不能为空——把用户要说的那句话填进来。');
+      const chat = groupChatOf(ctx);
+      if (!chat) return err('语音只在群里用——当前会话没有可用的群号。');
+      try {
+        const data = await call('/api/nav/tts', {
+          method: 'POST',
+          body: { by: 'qq', chat, text, caption: args?.caption ?? '' }
+        }, 120000);
+        if (data?.ok !== true) return err(`语音生成未受理：${data?.error ?? JSON.stringify(data).slice(0, 200)}`);
+        return ok(`已提交语音合成（中文已自动翻成日语）——语音做好后系统自动发回本群，你不用回话。`);
+      } catch (error) {
+        return err(`语音生成失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
+  // ── wd_tag ──────────────────────────────────────────────────────────────
+  registerTool({
+    id: 'wd_tag',
+    name: '反推提示词·WD Tagger',
+    description: `把群里的一张图反推成 Danbooru 风格提示词标签（本地 WD Tagger / eva02-large）。
+用途：群里 @ 我 说「反推提示词」「反推一下这张图」「打标」「看看这张图的 tag」这类**图片转提示词**的请求时调本工具。
+- messageId：带图那条消息的 #号（可选；不传取本群最近一条带图的消息）。
+- 用户没发图 → 让 TA 先发图，别拿别的消息里的图硬凑。
+🔴 前置：ComfyDock 在线；只对 QQ 569145850 本人开放（其他群友问就说这项暂时只对 TA 开放）。
+🔴 结果（通用标签 / 角色标签 / 分级）由系统直接发回本群，你不用复述；受理后静默。`,
+    category: 'system',
+    icon: '🏷️',
+    parameters: {
+      type: 'object',
+      properties: {
+        messageId: { type: ['integer', 'string'], description: '带图那条消息的 #号（可选；不传取本群最近一条带图的消息）' }
+      },
+      required: []
+    },
+    async execute(ctx, args) {
+      let media = null;
+      try {
+        media = pickImageOf(ctx, args?.messageId);
+      } catch (error) {
+        return err(`取图失败：${error?.message ?? error}`);
+      }
+      if (!media) return err('本群最近没有带图的消息——让用户先发一张图，再 @ 我说反推提示词。');
+      const chat = groupChatOf(ctx);
+      if (!chat) return err('反推提示词只在群里用——当前会话没有可用的群号。');
+      try {
+        const data = await call('/api/nav/tagger', {
+          method: 'POST',
+          body: { by: 'qq', chat, file: media.file || '', url: media.url || '' }
+        }, 120000);
+        if (data?.ok !== true) return err(`反推提示词未受理：${data?.error ?? JSON.stringify(data).slice(0, 200)}`);
+        return ok('已提交反推提示词——标签结果由系统自动发回本群，你不用复述。');
+      } catch (error) {
+        return err(`反推提示词失败（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+}

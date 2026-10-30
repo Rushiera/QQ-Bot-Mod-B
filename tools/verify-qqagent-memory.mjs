@@ -20,7 +20,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 const DATA = path.resolve(HERE, '..', 'runtime', '.memory-selftest');
 const SRC_CFG = path.resolve(HERE, '..', '_unpack', 'data', 'config.json');
 
@@ -29,7 +30,7 @@ fs.mkdirSync(DATA, { recursive: true });
 if (fs.existsSync(SRC_CFG)) fs.copyFileSync(SRC_CFG, path.join(DATA, 'config.json'));
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { DEFAULT_CONFIG, deepMerge, setRuntimeConfig } = await import(mod('config.js'));
 const { ChatStore } = await import(mod('store.js'));
 const { MemoryStore } = await import(mod('memory.js'));
@@ -284,7 +285,7 @@ check('7e 注入有预算且明示「已归档」指针',
 
 const leanPrompt = (() => {
   // 系统提示 lean 模式必须带上记忆引导（原漏在 lean 之外，模型看不到记忆工具）
-  const src = fs.readFileSync(path.join(APP, 'src', 'prompt.js'), 'utf8');
+  const src = fs.readFileSync(path.join(BIZ, 'prompt.js'), 'utf8');
   return src.includes('[qqagent-memory-patch:no-throttle-lean-memory]');
 })();
 check('7f lean 模式带记忆引导（不再只有 full 模式有）', leanPrompt);
@@ -340,10 +341,10 @@ check('6a 补丁脚本可重放（幂等：applied 0 / 全部跳过）',
   // [qqagent-memory-patch:no-throttle-6a]
   patchOut.includes('applied 0') && /skipped \d+/.test(patchOut),
   patchOut.split('\n')[0]);
-const orchText = fs.readFileSync(path.join(APP, 'src', 'orchestrator.js'), 'utf8');
-const promptText = fs.readFileSync(path.join(APP, 'src', 'prompt.js'), 'utf8');
-const toolsText = fs.readFileSync(path.join(APP, 'src', 'tools.js'), 'utf8');
-const routesText = fs.readFileSync(path.join(APP, 'src', 'routes.js'), 'utf8');
+const orchText = fs.readFileSync(path.join(BIZ, 'orchestrator.js'), 'utf8');
+const promptText = fs.readFileSync(path.join(BIZ, 'prompt.js'), 'utf8');
+const toolsText = fs.readFileSync(path.join(BIZ, 'tools.js'), 'utf8');
+const routesText = fs.readFileSync(path.join(BIZ, 'routes.js'), 'utf8');
 check('6b 源码改动带补丁标记（可追溯 / 重装可复现）',
   orchText.includes('[qqagent-memory-patch:orchestrator-group-consolidate]')
   && promptText.includes('[qqagent-memory-patch:prompt-group]')
@@ -356,7 +357,7 @@ check('6d routes 暴露群记 API（POST / PUT / DELETE）',
   && routesText.includes('\\/group\\/([\\w-]+)$'));
 
 // ── 判据 8：沉淀拍（冷群兜底）+ 参数面 ────────────────────────────────────
-const orchSrc = fs.readFileSync(path.join(APP, 'src', 'orchestrator.js'), 'utf8');
+const orchSrc = fs.readFileSync(path.join(BIZ, 'orchestrator.js'), 'utf8');
 check('8a 沉淀拍判据在位（#sedimentDue + 到点走整理轮）',
   orchSrc.includes('[qqagent-memory-patch:no-throttle-sediment-method]')
   && orchSrc.includes('[qqagent-memory-patch:no-throttle-sediment-tick]')

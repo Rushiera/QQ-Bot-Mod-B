@@ -19,7 +19,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 const DATA = path.resolve(HERE, '..', 'runtime', '.engage-selftest');
 const SRC_CFG = path.resolve(HERE, '..', '_unpack', 'data', 'config.json');
 
@@ -45,7 +46,7 @@ fs.writeFileSync(CFG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
 
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { getConfig } = await import(mod('config.js'));
 const { SendQueue } = await import(mod('sender.js'));
 const { resolveContextTier } = await import(mod('prompt.js'));
@@ -210,13 +211,13 @@ function check(name, ok, detail) {
     ['chatter.js', '[qqagent-engage-patch:chatter]'],
     ['orchestrator.js', '[qqagent-engage-patch:orchestrator-chatter-def]']
   ];
-  const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(APP, 'src', rel), 'utf8').includes(m));
+  const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(BIZ, rel), 'utf8').includes(m));
   check('补丁标记齐全（6 处）', missing.length === 0, missing.map((x) => x.join(':')).join(', ') || '全部命中');
-  const orch = fs.readFileSync(path.join(APP, 'src', 'orchestrator.js'), 'utf8');
-  const prompt = fs.readFileSync(path.join(APP, 'src', 'prompt.js'), 'utf8');
+  const orch = fs.readFileSync(path.join(BIZ, 'orchestrator.js'), 'utf8');
+  const prompt = fs.readFileSync(path.join(BIZ, 'prompt.js'), 'utf8');
   check('话题词落进群记（产物特征：setGroupTopics）', orch.includes('setGroupTopics(chatKey, topicWords)'));
   check('【记忆】段接入群记（产物特征：formatGroupForPrompt）', prompt.includes('formatGroupForPrompt(ctx.chatKey)'));
-  check('话题词模块已落盘', fs.existsSync(path.join(APP, 'src', 'topic-words.js')));
+  check('话题词模块已落盘', fs.existsSync(path.join(BIZ, 'topic-words.js')));
 }
 
 const failed = results.filter((r) => !r.ok);

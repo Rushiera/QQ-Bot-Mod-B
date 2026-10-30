@@ -28,7 +28,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 const DATA = path.resolve(HERE, '..', 'runtime', '.rapport-selftest');
 const SRC_CFG = path.resolve(HERE, '..', '_unpack', 'data', 'config.json');
 
@@ -52,7 +53,7 @@ fs.writeFileSync(CFG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
 
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { getConfig } = await import(mod('config.js'));
 const { SendQueue } = await import(mod('sender.js'));
 const {
@@ -311,10 +312,10 @@ async function trySend(text, options = {}) {
     ['routes.js', '[qqagent-rapport-patch:routes-route]'],
     ['app.js', '[qqagent-rapport-patch:app-start]']
   ];
-  const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(APP, 'src', rel), 'utf8').includes(m));
+  const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(BIZ, rel), 'utf8').includes(m));
   check('补丁标记齐全（src 十三个点位）', missing.length === 0, missing.map((x) => x.join(':')).join(', ') || '全部命中');
 
-  const ui = fs.readFileSync(path.join(APP, 'ui', 'app', '05-memory-settings.js'), 'utf8');
+  const ui = fs.readFileSync(path.join(BIZ, 'ui', '05-memory-settings.js'), 'utf8');
   const uiMarks = [
     '[qqagent-rapport-patch:ui-detail-map]',
     '[qqagent-rapport-patch:ui-members-map]',
@@ -405,7 +406,7 @@ async function trySend(text, options = {}) {
     ['orchestrator.js', '[qqagent-rapport-patch:watch-orchestrator]'],
     ['orchestrator.js', '[qqagent-rapport-patch:watch-note]']
   ];
-  const missMarks = newMarks.filter(([rel, m]) => !fs.readFileSync(path.join(APP, 'src', rel), 'utf8').includes(m));
+  const missMarks = newMarks.filter(([rel, m]) => !fs.readFileSync(path.join(BIZ, rel), 'utf8').includes(m));
   check('18h 客观结算补丁标记齐全（五点）', missMarks.length === 0, missMarks.map((x) => x.join(':')).join(', ') || '全部命中');
 }
 

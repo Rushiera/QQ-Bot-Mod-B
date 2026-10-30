@@ -3,7 +3,7 @@
 > 定位：**一页看完「领航员模式现在有什么」**——能力 / 入口 / 工具 / API / 参数 / 状态 / 代码落点 / 未竟 / 文档漂移。
 > 真相源分工：设计口径在 `design-qqbotb-navigator.md`（20 节，补丁式追加；**节号已被 `app/src/config.js` 注释与 `design-qqbotb_log.md` 引用 → 不重排**）；兑现明细在 `design-qqbotb_log.md`；行动项在 `todo.md` §五。
 > 本文件只是导读与核对结果，不含新口径。
-> 更新：2026-10-28（按当前代码核对 `app/src/config.js` · `app/src/navigator/*` · `tools/navigator/nav-tools.js`）｜2026-10-30 复核：工具 14 件 / 单体路由 15 条 / `navigator.*` 17 键 / 会话态 10 字段逐项吻合，补 §十 端到端时序与闸门汇总；会话重建改为固定代读猫（`rescueCat`）
+> 更新：2026-10-28（按当前代码核对 `app/src/config.js` · `app/src/navigator/*` · `tools/navigator/nav-tools.js`）｜2026-10-30 复核：工具 14 件（实跑 19/19）/ 单体路由 15 条 / `navigator.*` 17 键 / 会话态 10 字段逐项吻合，补 §十 端到端时序与闸门汇总；会话重建改为固定代读猫（`rescueCat`）｜2026-10-30 二次核对：`verify-navigator` 实跑 62/62、工具 14 件与 navtools 19/19 实跑吻合；修三处口径漂移（§八 抢救模式 → 代读猫 · §十三 交接报告来源 · §五 猫名示例 `rf` → `rb`）
 
 ---
 
@@ -36,7 +36,7 @@ QQ 群 = CH4 猫群的**外部指挥台**：群内下指令 → 投给某只猫 
 | 类别 | 工具 | 性质 |
 |:--|:--|:--|
 | 开关 | `nav_open(by, chat)` · `nav_close(by, chat)` | 派活（置位） |
-| 派活 | `nav_send(key, text, by)` · `nav_reset(key, rescue?, dryRun?, text?)` · `nav_new(keys)` | 派活 |
+| 派活 | `nav_send(key, text, by)` · `nav_reset(key, dryRun?, text?)`（`rescue` 已退役，保留接收不报错） · `nav_new(keys)` | 派活 |
 | 只读 | `nav_status()` · `nav_health(key?)` · `nav_analyze(key?, delayMs?)` · `nav_detail(key)` | **只读——不许为了看状态去 nav_send** |
 | 截图 | `nav_shot(key)` | 只读 |
 | 生成 | `comfy_edit(chat, prompt, file?, url?)` · `moss_draw(prompt, size?, seed?)` · `tts_speak(text, caption?)` · `wd_tag(messageId?)` | 派活（产物直发群） |
@@ -98,7 +98,7 @@ QQ 群 = CH4 猫群的**外部指挥台**：群内下指令 → 投给某只猫 
 | 业务面补丁（VIP 免闸 / 教材） | `tools/patch-qqagent-navigator.mjs` · `apply-qqagent-config.mjs`（`NAV_QUICK`） |
 | 领航员完整教材（按需文件） | `role/nav-rules.md`（B23 后 roleText 只留路由索引，模型用 `read_file` 取件） |
 | 界面 | `app/ui/`（「领航员」页签 + 活动流 40 条） |
-| 自测 | `tools/verify-navigator.mjs`（39/39）· `verify-comfy.mjs` · `verify-media.mjs` |
+| 自测 | `tools/verify-navigator.mjs`（62/62）· `verify-qqagent-navtools.mjs`（19/19）· `verify-comfy.mjs` · `verify-media.mjs` |
 
 ---
 

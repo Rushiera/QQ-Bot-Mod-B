@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "tool": "cache-diag-recalibrate.mjs",
+  "caliber": "cache-diag.mjs v3（prompt_tokens / prompt_tokens_details.cached_tokens → prompt_cache_hit_tokens 回落）",
+  "at": "2026-10-30T01:24:32.404Z",
+  "since": "2026-10-15T00:00:00.000Z",
+  "dataDir": "D:\\Mau\\WorkSpace\\QQBotB\\_unpack\\data\\sessions",
+  "metrics": {
+    "sessions": 1833,
+    "sessionFiles": 2208,
+    "unreadable": 0,
+    "tooOld": 0,
+    "calls": 3715,
+    "promptTokens": 120894654,
+    "cachedTokens": 86464128,
+    "hitRate": 71.52,
+    "zeroCalls": 191,
+    "zeroRate": 5.14,
+    "firstCalls": 1833,
+    "firstZeroRate": 10.26,
+    "byChat": {
+      "group:361820329": {
+        "calls": 1577,
+        "hitRate": 66.06
+      },
+      "group:112562956": {
+        "calls": 352,
+        "hitRate": 77.56
+      },
+      "group:1097492606": {
+        "calls": 638,
+        "hitRate": 82.21
+      },
+      "group:785638698": {
+        "calls": 29,
+        "hitRate": 81.62
+      },
+      "group:689942975": {
+        "calls": 217,
+        "hitRate": 80.26
+      },
+      "group:512942437": {
+        "calls": 55,
+        "hitRate": 78.34
+      },
+      "group:940257985": {
+        "calls": 25,
+        "hitRate": 82.68
+      },
+      "group:1124336393": {
+        "calls": 16,
+        "hitRate": 86.31
+      },
+      "group:312080198": {
+        "calls": 791,
+        "hitRate": 72.98
+      },
+      "group:682662459": {
+        "calls": 15,
+        "hitRate": 81.92
+      }
+    }
+  },
+  "prevHitRate": null
+}

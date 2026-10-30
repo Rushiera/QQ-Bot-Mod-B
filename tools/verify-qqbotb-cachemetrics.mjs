@@ -15,7 +15,7 @@ import os from 'node:os';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SRC = path.resolve(HERE, '..', '_unpack', 'resources', 'app', 'src');
+const SRC = path.resolve(HERE, '..', 'app', 'src', 'business');
 
 // 用临时 DATA_DIR 引导模块（config.js 在 import 期读环境变量）
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'qqbotb-cachemetrics-'));

@@ -113,7 +113,18 @@
 | B48 | 缓存计价折扣率核对 | `api.priceCachedPerM = 0` 且 `useOfficialPrice = true` → 实际单价由远端价格表（`kondius.cn`）决定，未核对；成本看板上的「省了多少」当前是估算（来源：§七十七 遗留 3） |
 | B49 | 【记忆】段构成拆分 | 约 7,500 字符里会话要点 / 群记 / 群友印象各占多少未分离——若日后要动 O6（压缩记忆段）需先有这份拆分（来源：§七十七 遗留 4） |
 
-## 十六、已裁定不做（留档防重新引入）
+## 十六、B+C 迁移（R1/R2 收线后遗留 · 下一轮叫号）
+
+| # | 项 | 说明 |
+|:--:|:--|:--|
+| M1 | **落 `app/src/app.js` 的 5 处 hub 插入** | 装配层 `createBusinessHub` 已就绪但**零调用点**（`text-grep` 扫 `app/` 仅 `src/business.js` 自身 4 处提及）——`start()` 无人调用，子进程不会被拉起。锚点已给全（`R2-L3.md` §八-1）：①`:17` import ②`:73` 后建实例 ③`:186` 前 `start()` ④`:200` 内 `await stop()` ⑤返回面加一项 |
+| M2 | **补搬 `skills/` 6 件** | 未搬清单里的 6 件是 12 档 verify 的 import 前置——`tools.js → skills/manager.js`、`tool-registry.js → skills/errors.js`、`prompt.js → skills/manager.js`，缺一件 import 期即崩（`R2-L4.md` §四-1） |
+| M3 | **`patch-qqbotb-fixgroup.mjs` 两点从未落盘** | `tts-desc` / `comfy-retry` 在 `_unpack` 与 `app/src/business/` **都 0 命中**，`--dry` 实测状态为「待应用」——即该脚本从来没为这两点跑过（不是被上游覆盖）。归位副本因此也缺这两条描述（`R2-L4.md` §四-2） |
+| M4 | **`verify-qqagent-boot` 端口接线** | 新签名 `await core.start()` 已写，实际启动仍受 M2 阻断；且缺 `ws` 包（`app/node_modules` 为空，`ERR_MODULE_NOT_FOUND: ws`） |
+| M5 | **`tools/shadow-diff.mjs` 本体** | R2-L4 只给方案与采集点，未写脚本——影子开关需先决定是否上线 |
+| M6 | **47 点待人工判断** | R2-L1 的 346 点吸收里 47 点属「归并后仍需人工判断」（跨脚本冲突 / 语义改写），逐条见 `reports/R2-L0.md` |
+
+## 十七、已裁定不做（留档防重新引入）
 
 | # | 项 | 裁定与理由 |
 |:--:|:--|:--|

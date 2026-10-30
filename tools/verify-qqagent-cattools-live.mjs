@@ -15,7 +15,8 @@ import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 const PROD = path.resolve(HERE, '..', '_unpack', 'data');
 const DATA = path.join(os.tmpdir(), 'qqagent-cattools-live');
 const SITE = 'https://www.baidu.com';
@@ -30,7 +31,7 @@ cfg.webFetch = { ...(cfg.webFetch || {}), downloadsDir: path.join(DATA, 'downloa
 fs.writeFileSync(path.join(DATA, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8');
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { getTool } = await import(mod('tool-registry.js'));
 const { browserService } = await import(mod('cdp-browser.js'));
 const { webFetchService } = await import(mod('web-fetch.js'));

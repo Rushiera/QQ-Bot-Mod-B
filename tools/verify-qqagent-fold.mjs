@@ -15,9 +15,10 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
-const UI = path.join(APP, 'ui', 'app', '02-sse-sessions.js');
-const ROUTES = path.join(APP, 'src', 'routes.js');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
+const UI = path.join(BIZ, 'ui', '02-sse-sessions.js');
+const ROUTES = path.join(BIZ, 'routes.js');
 
 const results = [];
 function check(name, ok, detail) {
@@ -49,14 +50,18 @@ for (const file of [UI, ROUTES]) {
 check('3b 两个改动文件语法检查通过', syntaxOk, syntaxDetail || 'node --check 全过');
 
 // ── 补丁幂等 ───────────────────────────────────────────────────────────────
+// R2-L2 给 20 个补丁加了退役守卫：默认输出 `RETIRED: 已被 R2 吸收…`（非 JSON）。
+// 判据升级（R2-L4）：RETIRED 也算「无需再打」——但**必须出声**，不能把「被退役」当「幂等通过」吞掉。
 let patchOut = '';
 try {
   patchOut = execFileSync(process.execPath, [path.join(HERE, 'patch-qqagent-sessions-fold.mjs')], { encoding: 'utf8' });
 } catch (error) {
   patchOut = 'ERR ' + String(error?.message ?? error);
 }
-check('3c 补丁脚本可重放（幂等：applied 0 / 全部跳过）',
-  patchOut.includes('applied 0') && patchOut.includes('skipped 7'), patchOut.split('\n')[0]);
+const foldRetired = patchOut.startsWith('RETIRED');
+check('3c 补丁脚本可重放（幂等 / 已退役）',
+  foldRetired || (patchOut.includes('applied 0') && patchOut.includes('skipped 7')),
+  (foldRetired ? 'RETIRED（R2 已吸收，打补丁动作转验终态文件）' : patchOut.split('\n')[0]));
 
 // ── 判据 1 / 2 / 3：折叠逻辑（从 UI 源码抽出，纯函数沙箱）──────────────────
 const start = uiText.indexOf('function sessionGroupOrder');

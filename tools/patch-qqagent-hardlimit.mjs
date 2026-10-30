@@ -1,3 +1,11 @@
+// ── 退役守卫（R2 · 2026-10-30）──────────────────────────────────────────────
+// 本补丁已由 R2 Step 1 吸收进 app/src/business/，默认不再对 _unpack 打任何补丁。
+// 默认：打印 RETIRED 并 exit 0（零副作用）；确需复现旧行为时加 --force。
+if (!process.argv.includes('--force')) {
+  console.log('RETIRED: 已被 R2 吸收，见 app/src/business/');
+  process.exit(0);
+}
+
 // patch-qqagent-hardlimit.mjs — QQ Agent v0.4.0「发言硬限制」幂等补丁
 //
 // 用法：node patch-qqagent-hardlimit.mjs [--dry]

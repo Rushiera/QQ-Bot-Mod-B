@@ -30,7 +30,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 const DATA = path.resolve(HERE, '..', 'runtime', '.quiet-selftest');
 const SRC_CFG = path.resolve(HERE, '..', '_unpack', 'data', 'config.json');
 
@@ -72,7 +73,7 @@ fs.writeFileSync(CFG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
 
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { getConfig } = await import(mod('config.js'));
 const {
   quietEnabled, quietChats, isQuietChat, quietIntervalMs, quietHint
@@ -128,11 +129,11 @@ const PRIVATE = 'private:10001';
     'rollover-append', 'rollover-finish-reason'
   ];
   const srcFiles = ['quiet-mode.js', 'config.js', 'orchestrator.js'];
-  const all = srcFiles.map((f) => fs.readFileSync(path.join(APP, 'src', f), 'utf8')).join('\n');
+  const all = srcFiles.map((f) => fs.readFileSync(path.join(BIZ, f), 'utf8')).join('\n');
   const missing = marks.filter((m) => !all.includes('[qqagent-quiet-patch:' + m + ']'));
   check('补丁标记齐全（16 个源码点）', missing.length === 0, missing.join(',') || '16/16');
 
-  const ui = fs.readFileSync(path.join(APP, 'ui', 'app', '05-memory-settings.js'), 'utf8');
+  const ui = fs.readFileSync(path.join(BIZ, 'ui', '05-memory-settings.js'), 'utf8');
   // 2026-10-25 五档改造：UI 的「安静模式」单按钮被五档选择器取代
   // （patch-qqagent-level-ui.mjs）。老的 6 个 quiet UI 标记将随改造退场，
   // 这里只核 quiet 语义仍在的落点 + 五档 UI 的 8 个新落点。
@@ -145,7 +146,7 @@ const PRIVATE = 'private:10001';
   const levelUiMissing = levelUi.filter((m) => !ui.includes('[qqagent-level-patch:ui-' + m + ']'));
   check('记忆页五档选择器落点齐全（8 个 UI 点）', levelUiMissing.length === 0, levelUiMissing.join(',') || '8/8');
 
-  const orch = fs.readFileSync(path.join(APP, 'src', 'orchestrator.js'), 'utf8');
+  const orch = fs.readFileSync(path.join(BIZ, 'orchestrator.js'), 'utf8');
   check('提示词拼接含 quietLine', orch.includes('+ browseLine + quietLine'));
   check('安静整理轮强制收工语义', orch.includes('quietOrganize || shouldRollover(chatKey, pendingChars)'));
   check('收工指令区分 quiet / rollover', orch.includes("rolloverInstruction(quietOrganize ? 'quiet' : 'rollover')"));

@@ -20,7 +20,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 const DATA = path.resolve(HERE, '..', 'runtime', '.readcompact-selftest');
 const SRC_CFG = path.resolve(HERE, '..', '_unpack', 'data', 'config.json');
 
@@ -29,7 +30,7 @@ fs.mkdirSync(DATA, { recursive: true });
 if (fs.existsSync(SRC_CFG)) fs.copyFileSync(SRC_CFG, path.join(DATA, 'config.json'));
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { DEFAULT_CONFIG, deepMerge, setRuntimeConfig } = await import(mod('config.js'));
 const { ChatStore } = await import(mod('store.js'));
 const { MemoryStore } = await import(mod('memory.js'));
@@ -279,7 +280,7 @@ try {
 check('7a 补丁脚本可重放（幂等：本轮 0 应用 / 全跳过）',
   patchReport && patchReport.ok === true && (patchReport.applied || []).length === 0 && (patchReport.skipped || []).length >= 30,
   'applied=' + JSON.stringify(patchReport && patchReport.applied) + ' skipped=' + ((patchReport && patchReport.skipped) || []).length);
-const srcText = fs.readFileSync(path.join(APP, 'src', 'orchestrator.js'), 'utf8');
+const srcText = fs.readFileSync(path.join(BIZ, 'orchestrator.js'), 'utf8');
 check('7b 源码改动带补丁标记（可追溯 / 可重装复现）',
   srcText.includes('[qqagent-readcompact-patch:orchestrator-methods]')
   && srcText.includes('[qqagent-readcompact-patch:orchestrator-hook]'));

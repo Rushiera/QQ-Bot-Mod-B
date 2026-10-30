@@ -20,7 +20,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 const DATA = path.resolve(HERE, '..', 'runtime', '.botguard-selftest');
 const SRC_CFG = path.resolve(HERE, '..', '_unpack', 'data', 'config.json');
 
@@ -43,7 +44,7 @@ fs.writeFileSync(CFG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
 
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const { getConfig } = await import(mod('config.js'));
 const { SendQueue } = await import(mod('sender.js'));
 
@@ -181,10 +182,10 @@ resetWindow();
     ['orchestrator.js', '[qqagent-botguard-patch:orchestrator-run-target]'],
     ['orchestrator.js', '[qqagent-botguard-patch:orchestrator-run-target-clear]']
   ];
-  const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(APP, 'src', rel), 'utf8').includes(m));
+  const missing = marks.filter(([rel, m]) => !fs.readFileSync(path.join(BIZ, rel), 'utf8').includes(m));
   check('补丁标记齐全（src 六处）', missing.length === 0, missing.map((x) => x.join(':')).join(', ') || '全部命中');
 
-  const ui = fs.readFileSync(path.join(APP, 'ui', 'app', '05-memory-settings.js'), 'utf8');
+  const ui = fs.readFileSync(path.join(BIZ, 'ui', '05-memory-settings.js'), 'utf8');
   const uiMarks = [
     '[qqagent-botguard-patch:ui-mem-bot-list]',
     '[qqagent-botguard-patch:ui-mem-bot-handler]',

@@ -17,7 +17,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
 const DATA = path.resolve(HERE, '..', 'runtime', '.memory-reach-selftest');
 const SRC_CFG = path.resolve(HERE, '..', '_unpack', 'data', 'config.json');
 
@@ -26,7 +27,7 @@ fs.mkdirSync(DATA, { recursive: true });
 if (fs.existsSync(SRC_CFG)) fs.copyFileSync(SRC_CFG, path.join(DATA, 'config.json'));
 process.env.QQ_AGENT_DATA_DIR = DATA;
 
-const mod = (rel) => pathToFileURL(path.join(APP, 'src', rel)).href;
+const mod = (rel) => pathToFileURL(path.join(BIZ, rel)).href;
 const ss = await import(mod('session-state.js'));
 const gm = await import(mod('group-memory.js'));
 
@@ -73,12 +74,25 @@ check('4c 同 kind 同内容不重复', gm.listGroupEntries(CHAT).filter((x) => 
 check('4d 非法 kind 拒绝', gm.appendGroupEntry(CHAT, 'nope', 'x') === null);
 
 // ── 5 补丁幂等 ───────────────────────────────────────────────────────────────
+// R2-L2 退役守卫后，补丁默认输出 `RETIRED: 已被 R2 吸收…`（非 JSON）。
+// 判据升级（R2-L4）：RETIRED = 「已吸收，无需再打」；打补丁动作的等价验证改由终态文件断言承担。
 for (const script of ['patch-qqagent-session.mjs', 'patch-qqagent-navigator.mjs']) {
-  let report = null;
+  let out = '';
   try {
-    report = JSON.parse(execFileSync(process.execPath, [path.join(HERE, script), '--dry'], { encoding: 'utf8' }));
+    out = execFileSync(process.execPath, [path.join(HERE, script), '--dry'], { encoding: 'utf8' });
   } catch (error) {
     check('5 ' + script + ' --dry', false, String(error?.message ?? error).slice(0, 140));
+    continue;
+  }
+  if (out.startsWith('RETIRED')) {
+    check('5 ' + script + ' 已退役（R2 吸收）', true, out.split('\n')[0].slice(0, 80));
+    continue;
+  }
+  let report = null;
+  try {
+    report = JSON.parse(out);
+  } catch (error) {
+    check('5 ' + script + ' --dry', false, '输出既非 RETIRED 也非 JSON：' + String(error?.message ?? error).slice(0, 100));
     continue;
   }
   const applied = Array.isArray(report.applied) ? report.applied.length : Number(report.applied) || 0;

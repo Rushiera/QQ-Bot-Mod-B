@@ -13,13 +13,15 @@
 // 说明：语法层（node --check）与真链路（set_group_card 实测）不在此脚本范围内。
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.resolve(HERE, '..', '_unpack', 'resources', 'app');
-const SRC = path.join(APP, 'src');
-const UI_MEM = path.join(APP, 'ui', 'app', '05-memory-settings.js');
+const APP = path.resolve(HERE, '..', 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
+const SRC = path.resolve(APP, 'src/business');
+const UI_MEM = path.join(BIZ, 'ui', '05-memory-settings.js');
 
 let pass = 0;
 const fails = [];
@@ -30,6 +32,10 @@ function ok(name, cond, detail = '') {
 function readOf(file) {
   try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
 }
+
+// 数据根隔离（R2-L4）：balance.js 顶层 import config.js，而 config.js 未注入 QQ_AGENT_DATA_DIR 即抛
+// （D4 的「不静默回落」）。这里给一个临时空目录——本脚本只验纯函数与源码断言，不读生产数据。
+process.env.QQ_AGENT_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'qqbotb-balance-'));
 
 const mod = await import(new URL('file:///' + path.join(SRC, 'balance.js').replace(/\\/g, '/')).href);
 const MARK = { marker: '@余额' };

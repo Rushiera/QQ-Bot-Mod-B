@@ -14,15 +14,17 @@
 // 说明：语法层（node --check）与真链路（群内发一句 → 收到语音）不在此脚本范围内。
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
-const APP = path.join(ROOT, '_unpack', 'resources', 'app');
-const SRC = path.join(APP, 'src');
+const APP = path.join(ROOT, 'app');
+const BIZ = path.resolve(APP, 'src/business');   // 业务面（R2 归位）
+const SRC = path.resolve(APP, 'src/business');
 const MONO = path.join(ROOT, 'app', 'src');
-const UI_MEM = path.join(APP, 'ui', 'app', '05-memory-settings.js');
+const UI_MEM = path.join(BIZ, 'ui', '05-memory-settings.js');
 
 let pass = 0;
 const fails = [];
@@ -33,6 +35,10 @@ function ok(name, cond, detail = '') {
 function readOf(file) {
   try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
 }
+
+// 数据根隔离（R2-L4）：voice-reply.js 顶层 import config.js，未注入 QQ_AGENT_DATA_DIR 即抛。
+// 本脚本验纯函数 + 源码断言，不读生产数据 → 临时空目录足够。
+process.env.QQ_AGENT_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'qqbotb-voicereply-'));
 
 const mod = await import(new URL('file:///' + path.join(SRC, 'voice-reply.js').replace(/\\/g, '/')).href);
 

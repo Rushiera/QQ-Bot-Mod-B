@@ -1,6 +1,6 @@
 ﻿# QQBot mod B — 项目档案
 
-> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v0.97 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
+> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v0.98 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
 > Git：GitHub `Rushiera/QQ-Bot-Mod-B`（单远程 · 收工推送）
 > 创建：2026-09-26
 > 缘起：模式 A（QQ 官方 Bot 开放平台通道）受「每条用户消息最多 4 次被动回复」约束，无法支撑「猫的会话内容随时推送到 QQ」。模式 B 改为专用 QQ 号 + OneBot 11 协议端，自主收发、无被动预算。
@@ -67,7 +67,8 @@ NapCat.Shell（独立协议端 + 自带 NTQQ）── OneBot 11 HTTP/WS ──�
 | `ref-navigator-map.md` | 功能全景索引 | **领航员模式一页看全**——九大能力簇 / 业务面工具 14 件 / 单体 API 15 条 / `navigator.*` 配置全表（17 键）/ 会话态字段 / 代码落点 / 未竟 N6-N8 / 设计文档口径漂移核对 / **§十 一次派活的端到端时序 + 闸门汇总**（导读件，口径仍以 `design-qqbotb-navigator.md` 为准） |
 | `git-profile.md` | Git 档案 | 本项目 Git 实例——仓库 / 上传模式 / 同步范围 / 上次同步（收工更新） |
 | `tasks/R1.md` · `tasks/R2.md` | 并发任务卡 | **B+C 迁移**（业务面搬进自研单体）的任务卡与主干裁决 D1–D4；汇总位记录各线状态 |
-| `reports/_index.md` | 报告索引（B+C 迁移） | R1 Step 0 五线 + R2 Step 1/2/3 五线——每线报告指针与一句话结论 |
+| `reports/_index.md` | 报告索引（B+C 迁移 + N6） | R1 Step 0 五线 + R2 Step 1/2/3 五线 + N6 六条——每线报告指针与一句话结论 |
+| `reports/N6-验收清单.md` | 人工验收（N6） | 重启即生效 / 影子观察 / 逐类切换 / 拍板四类——N6 迁移的生效面全部在这三页 |
 
 ## 目录结构
 

@@ -62,3 +62,17 @@
 | R5 预置线 | 五线七段式骨架 | `tasks/R4.md` §五 | ✅ 待解禁 |
 
 > R5 主线 = N6 切 live（D6-1 ①）+ 附带 B21 构造降分验证（D6-1 ③）。R4 零代码改动。
+
+## R5 — 单体 UI 补齐原版 7 页 + 文档面收口（2026-10-31 · 16 线并发 · 进行中）
+
+| 件 | 内容 | 产出 | 状态 |
+|:--|:--|:--|:--|
+| 任务卡 | 16 线七段式 + 写面所有权表 + 冲突矩阵 | `tasks/R5.md` | ✅ 已建 |
+| 前端写面声明 | `app/ui/views/` 分块归属与分块契约 | `app/ui/views/_index.md` | ✅ 已建 |
+| 桩件 | 八块 + 外壳 + 代理层 + 契约自测全部落盘（每件头顶带开工清单） | `app/ui/views/*.js` · `app/src/web/business-proxy.js` · `tools/verify-ui-contract.mjs` | ✅ 已建 · 自测 33/35 |
+| L1–L8 UI 面 | 骨架 + 会话 / 存档 / 用量 / 记忆 / 技能 / 插件 / 业务设置 | `app/ui/views/*.js` | ⏳ 待派（桩在盘） |
+| L9 代理层 | 单体 → 业务面（:3210）单一出口 | `app/src/web/business-proxy.js` | ⏳ 待派（桩在盘，未接线） |
+| L10–L14 文档面 | 勘误落盘 / 总纲档案 / 模块口径 / 术语参考 | `todo.md` · `design-*` · `glossary.md` 等 | ⏳ 待派 |
+| L15–L16 验收面 | 群内验收表重编 · 自测索引 | `reports/R5-群内验收表.md` · `reports/R5-L16.md` | ⏳ 待派 |
+
+> 主干独占写面：`tasks/R5.md` · `design-qqbotb_log.md` · `design-status.md` · `CHANGELOG.md` · `reports/_index.md` · `app/ui/views/_index.md`——任何执行线不得写这六件。

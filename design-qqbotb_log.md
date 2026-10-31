@@ -13,7 +13,10 @@
 | 日志时间戳对齐 | 日志页协议端行的外层时间戳为**转发时刻**（同批历史日志挤同一秒）；原始时间在行内——可按原行时间戳对齐 | ⏳ 待定 |
 | 群 361820329 静默不回 | ✅ 已闭合（2026-10-14）——清会话恢复（20:51 实测恢复发言）+ 轮转阈值 300000→160000 + 端点降级守卫（补丁点 `degrade-guard`）；诊断见 §五十二 · 修复见 §五十五 | ✅ 已闭合 |
 | 领航员会话截图群内实测 | v0.66「截全」+ `nav_shot`——自测 51/51 · 业务面 10/10 · 单体真实出图已验（含 24691px 超长卡）；**群内真发群**（R喵 调 `nav_shot` 回群）待群内 @ 触发（§五十六） | ⏳ 待实测 |
-| 群内生成能力真实群触发 | v0.79 MOSS 生图 / IrodoriTTS 语音 / WD Tagger 反推——守门 8/8 + live 三项各 10/10（mock 出站）；**真实群 @ 触发**（业务面判断 → 工具 → 单体 → ComfyDock → 产物回群）待重启后实测（§六十七） | ⏳ 待实测 |
+| 群内生成能力真实群触发 | v0.79 MOSS 生图 / IrodoriTTS 语音 / WD Tagger 反推——守门 8/8 + live 三项各 10/10（mock 出站）；**真实群 @ 触发**（业务面判断 → 工具 → 单体 → ComfyDock → 产物回群）待群内触发（§六十七） | ⏳ 待实测 |
+| 语音伴随真链路 | v0.86——业务面 `voiceReply.chats` 五群（940257985 / 512942437 / 1128540749 / 1124336393 / 1097492606）；R4 实测 10-29~31 日志 `voice` **0 命中**，因当日发言全在 361820329（**不在五群内**）——样本为零不构成反证 | ⏳ 待实测 |
+| 回应参数落盘 | v0.74——R4 侦察判定 **非缺陷（Inferred）**：8 次 `adjust_rapport` 全为 `delta=0` 早退（自愈日志 10-27 后 0 行是一致证据，若真降过分 5 分钟自愈必留行）；`_rapport.json` 只写 `score<100` 条目、回满即删 | ⏳ 待构造验证 |
+| hub 冒烟 D | v0.96/97/98——R4 实测 `bound=true` / `received=75` / `dispatched=148` / `duplicates=0` / `failures=0` → A/B/C 已实锤；仅剩 D（崩溃 3→6→12s 退避重启） | ⏳ 待测 |
 
 ## 一、运行形态（design §三）
 
@@ -3021,7 +3024,7 @@ R喵喵：交接摘要已注入，等待确认
 | checkpoint 训练窗口就是 30 秒 | `irodori_tts/config.py:190-194` `max_latent_steps = 750` · `fixed_target_latent_steps = 750`；`configs/train_v4_small.yaml:72-88` 同；750 × 1920 / 48000 = **30.000s** |
 | 越过时的后果 | `inference_runtime.py:1347-1355` 运行时自己警告「Long-tail stability may degrade」——不是不出声，是音质垮 |
 | 产物实锤 | 17 条 `app/data/media-out/*.wav` 里 9 条恰好 **30.000s / 2,880,044 字节 / 48 kHz**（有内容可念却停在 30s = 被夹，不是句末） |
-| 语速实测 | `tools/probe-tts-length.mjs`：日语 59 字 → 16.88 秒 → **3.495 字/秒**；30 秒 ≈ **104 字**、20 秒 ≈ 69 字 |
+| 语速实测 | 临时脚本 `probe-tts-length.mjs`（跑在 `tools/CatTemp`，**已清理**；现行仪器 = `tools/probe-tts-duration.mjs`）：日语 59 字 → 16.88 秒 → **3.495 字/秒**；30 秒 ≈ **104 字**、20 秒 ≈ 69 字 |
 
 **结论：** 上限抬不动（运行时默认 + 训练窗口两处都在 IrodoriTTS 侧，改 checkpoint 才算越界）。处置改为**先切后念**：`maxChars` 默认 **90 字**（约 26 秒，留停顿余量）；单体 `clipForSpeech(japanese, TTS_MAX_CHARS=100)` 再兜一道，切点优先句末标点（。！？…；）、其次逗号级、最后才硬切。
 
@@ -3057,7 +3060,7 @@ R喵喵：交接摘要已注入，等待确认
 | 补丁复跑 | `skipped 9 · synced 1`（幂等实锤：模块内容变更时同步、其余跳过） |
 | 消费点只读 | `GET /api/tts` → `plan.label = 依田芳乃 · v4.1-Small · 全 GPU` · `runMode=small` · `env.canGenerate=true`；ComfyDock 在线 |
 | 时长探针 | `node tools/probe-tts-duration.mjs` → 17 条 wav · 48 kHz · 2.08~30s · 其中 9 条恰好停在 30.000s（夹取实锤） |
-| 语速实测 | `node tools/probe-tts-length.mjs`（临时脚本，跑在 `tools/CatTemp`）→ 59 字 / 16.88s = **3.495 字/秒** |
+| 语速实测 | `node tools/probe-tts-length.mjs`（临时脚本，跑在 `tools/CatTemp`，**已清理**）→ 59 字 / 16.88s = **3.495 字/秒**；现行仪器 = `tools/probe-tts-duration.mjs` |
 
 ### D · 遗留
 
@@ -3572,3 +3575,75 @@ R2-L4 基线 `verify-suite` 9/24，`verify-qqagent-boot` 是失败项。根因�
 2. **切换未开**：配置停在 `ingress.mode='shadow'`；影子基线跑出后按「四、渐变切换」逐类推 live，或直接用 `POST /api/nav/ingress` 临时试。
 3. `verify-qqagent-boot` 要跑需先停业务面（单实例锁），批跑时按 FAIL 记、不静默跳过。
 4. 清单 #15（补丁脚本三点退役）随 #13 / #14 一起走，本轮**不动**——补丁链默认 RETIRED 已能挡住重放。
+
+## 八十五、R4 待办偏移检查 + D6 拍板（v0.99 · 2026-10-31 · 只侦察不实现）
+
+> 触发：Rushiera「开工qqbotb，你先检查下todo有没有文档偏移」；收尾「拍板项按推荐来，猫指令用到的时候再测」。
+> 定位：todo 与实况的偏移全量核对 + 待拍板项证据补齐；**零代码改动**。成果卡 → `tasks/R4.md`。
+
+### A · 运行态基线（2026-10-31 00:42–00:52 实测）
+
+| 面 | 实况 | 证据 |
+|:--|:--|:--|
+| 单体 | electron PID 29972，启动 **00:21:33**；业务面 worker PID 18820（00:21:34，`mode:'child'`） | `Win32_Process` CreationDate |
+| 启动日志 | 00:21:34 `main.js 已加载` → 00:21:47 `已注入协议端控制台凭据` **仅 1 行**（此前 14:13-14:14 每 50ms 刷 ~40 行） | `app/data/boot.log:916-922` |
+| 协议端 | `onebot.connected=true` · self `2405997337 / Shieraru` | `GET :3210/api/status` |
+| 白名单 | `allowAllWhenEmpty=false` · `allow.groups` **12 群** | `_unpack/data/config.json:93-107` · `GET :3280/api/groups` |
+| N6 ingress | `mode=shadow` · `allow=null` · `seen=25` · `shadow=25` · `live=0` · `dispatched=0` · `bufferedChats=3` | `GET :3280/api/nav/ingress` |
+| N6 hub | `bound=true` · `mode=child` · `received=75` · `dispatched=148` · `duplicates=0` · `failures=0` · `droppedOverflow=0` | `GET :3280/api/nav/hub` |
+| 领航员 | `enabled=false` · `activeChat=1097492606` · `openedBy=app` | `GET :3280/api/nav/status` |
+| 影子采集 | `intent-2026-10-31.jsonl` 27 行：`kind` 全 `chat` · `action` 全 `none` · `via` 全 `rule` · `result` 全 `shadow` | `app/data/metrics/` |
+| 缓存采集 | `cache-2026-10-31.jsonl` 在产，`headGapSec` 有值（null / 8 / 0.9） | `_unpack/data/metrics/` |
+| 当日发言 | 6 条，**全在群 361820329** | `_unpack/data/logs/qq-agent-2026-10-31.log:1-33` |
+
+### B · A 类勘误十处（当场落盘，不留痕）
+
+| # | 位点 | 原写 | 实况 | 处置 |
+|:--:|:--|:--|:--|:--|
+| A1 | `todo.md` §五 N6 行 | 「已落地（v0.98）· 生效需重启」 | 单体已重启、三路由可达 | 改「已落地 + 已生效（R4 实测）」 |
+| A2 | 五处 `tools/probe-tts-length.mjs` 引用 | 文件存在 | 该文件是 `tools/CatTemp` 临时脚本**已清理**，现行仪器 = `probe-tts-duration.mjs` | `design-qqbotb-engage.md:403` / `design-qqbotb_log.md:3024` `:3060` / `app/src/navigator/media.js:29` 四改指（`CHANGELOG` 属保留面不改） |
+| A3 | `todo.md` §十 / §十一 / §十二 / §十三 / §十四 五节标题 | 「待生效 + 待验收」 | 单体 00:21 已重启 | 五节标题改「已生效 · 待群内验收」 |
+| A4 | `todo.md` B29 / B43 | 「重启使生效」 | 重启面已完成 | 改「界面复验」/「生效确认」 |
+| A5 | `reports/_index.md:28` | 「R3 — … · 进行中」 | 七线全 ✅ 已交 | 改「✅ 已收线」 |
+| A6 | `reports/R3-验收清单.md` §六 | R3-4/5/6/7 列待解禁 | v0.98 已全部落地 | 移出并加勘误注（指向 log §八十四 四、） |
+| A7 | `project.md` 文档索引 | 只列 `tasks/R1.md` · `tasks/R2.md` | 实际有 R3 / R4 | 补两行 |
+| A8 | `tools/verify-suite.mjs:1` | 「28 个 verify 脚本」 | 目录实有 35 个 | 去写死计数（改「由目录自证」） |
+| A9 | `todo.md` B49 摘要 | 「约 7,500 字符」 | R3 实测两群 12,853 / 3,517 | 摘要同步实测值 |
+| A10 | `design-qqbotb_log.md` §七十四 两处 | 语速行引 `probe-tts-length` / 「临时脚本」未标 | 已清理 | 标「已清理；现行仪器 = probe-tts-duration」 |
+
+### C · B 类状态更新（12 条，三条改变判断）
+
+| # | 条目 | 侦察实锤 | 判定 |
+|:--:|:--|:--|:--|
+| B1 | B29 五档 + v0.84 界面 | `boot.log:922` 起凭据注入仅 1 行 | 代码面达成；界面三项待人眼 |
+| B2 | B46 缓存采集面 | `cache-2026-10-31.jsonl` 在产、22 字段有值 | ✅ 核销（剩 B47 数据积累） |
+| B3 | N6-1 重启使 N6 生效 | 三路由 200 · `hub.bound=true` | ✅ 核销 |
+| B4 | N6-2 影子基线 | 27 行全 `chat` / `action=none` | **零派活样本**，切 live 判据未可判 |
+| B5 | B34 余额后缀 | 10-25 曾成功（0.00→3.00）· 10-27 失败 = `get_group_member_info` retcode 200 Timeout `NodeIKernelProfileService/fetchUserDetailInfo` · 10-30/31 无 `balance` 行 | **判据无落点**：`balance.js:138-147` 两条 skipped 路径不写日志 → 判据改为读 `POST /api/balance/sync` 返回值 |
+| B6 | B36 语音伴随 | `voiceReply.chats` 五群与当日发言群 361820329 **不交集** | 样本为零不构成反证；验收须在 voice 五群内触发 |
+| B7 | B21 回应参数 | `_rapport.json` 全仓 0 命中；`adjust_rapport` 计数 = 8；自愈日志 10-25/26 有 38 行、**10-27 后 0 行**；`app.js:1677` 已调 `startRapportHeal()`；`rapport.js:101-114` 只写 `score<100`、回满即删；`tools.js:285-289` 的 `delta=0` 早退不落盘 | **非缺陷（Inferred）**——若 8 次中有一次真降分，5 分钟自愈必留行；实际 0 行 ⇒ 全为 `delta=0` |
+| B8 | R3-1 hub 冒烟 A–D | `received=75 / dispatched=148 / duplicates=0 / failures=0` | A/B/C 实锤；D 未证 |
+| B9 | R3-3 shadow-diff 层 2 | `shadow-diff.mjs:276-281` 恒抛「需 WS fan-out」 | 显式 TODO，非静默缺 |
+| B10 | B27 reply-rescue | `reply.*` 注册点全仓 0 处；`_unpack/resources/app/src` 原版同样 0 处 | **能力层从未存在**（非搬运丢失）→ 补 = 从零建包 |
+| B11 | skills / plugins 加载面 | `plugin-loader.js:40-42` SKILLS_DIR = `app/skills`；`qq-agent-2026-10-31.log:13-16` 明示两目录不存在已跳过；工具来自 `business/tools` 不依赖此机制 | 已知空面非缺陷；解释了 B27 的补做成本 |
+| B12 | balance 定时器 | `qq-agent-2026-10-31.log:19`「定时器就绪：1 个群 · 每 30 分钟」；`balance.js:138-147` skipped 不写日志 | **非停摆**——值未变走 skipped（手动来源余额是常量） |
+
+### D · D6 拍板（Rushiera 2026-10-31 · 全按推荐）
+
+| # | 决策 | 定论 |
+|:--:|:--|:--|
+| D6-1 | R5 主线 | **① N6 切 live 为主 + ③ B21 构造降分验证附带** |
+| D6-2 | M6 47 点 | **延后** |
+| D6-3 | 群内十条验收 | **我出「逐条照做」清单，你按表打勾**（须先修 B34 判据落点） |
+| D6-4 | B27 补不补 | **保持空转**（成本 = 从零建 `app/skills/` 包） |
+| D6-5 | `engage.signals` | **继续只采集**（10-31 仅 11 条 roll 行） |
+| D6-6 | N6 样本不足 | **群内派活指令造样本**（`@bot 截一下 X 的会话` / `画三视图`） |
+
+> 「猫指令用到的时候再测」——群内触发类（B19/B21/B25/B26/B30/B34/B36/B41/B44/B39/B40）按需现场验，不集中开验收轮。
+
+### E · 遗留
+
+1. **R5 前置**：N6 切 live 需先有 instruct/generate 影子样本（现 27 行全闲聊）；切 live 顺序 readonly/shot → switch → generate → session → send，单类失败即停。
+2. **B34 判据落点缺口**：`balance.js` 的两条 skipped 路径需补一行日志（或验收改读 API 返回值）——R5-L5 出表前先处理。
+3. **R3-1 冒烟 D**（崩溃退避重启）与 **R3-3 层 2**（WS fan-out）仍未开始，非阻塞。
+4. **`verify-suite` 实跑基线**本轮未跑（纪律禁起子进程），R5 单车执行。

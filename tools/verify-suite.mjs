@@ -1,4 +1,4 @@
-// verify-suite.mjs — 28 个 verify 脚本的批量跑测入口（R2 Step 3 · 单体版验收）
+// verify-suite.mjs — verify 脚本的批量跑测入口（R2 Step 3 · 单体版验收；全量清单由 tools/verify-*.mjs 目录自证，不写死计数）
 //
 // 用法：
 //   node tools/verify-suite.mjs                # 跑「守门」档（默认——不触网、不生成、不弹窗）

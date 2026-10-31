@@ -26,7 +26,7 @@ const TAGGER_TIMEOUT_MS = 3 * 60 * 1000;
 /**
  * 单次语音合成的**字数窗口**——由 30 秒硬上限反推。
  *
- * 实测（2026-10-25 · `tools/probe-tts-length.mjs`，日语 59 字 → 16.88 秒）：
+ * 实测（2026-10-25 · `tools/probe-tts-duration.mjs`，日语 59 字 → 16.88 秒）：
  *   **3.5 字/秒** → 30 秒 ≈ 104 字。取 100 留一点余量（标点、停顿、语速波动）。
  *
  * 上限为什么是 30 秒：IrodoriTTS 的 `SamplingRequest.max_seconds` 默认 30.0

@@ -400,7 +400,7 @@
 
 **超长发言（30 秒硬上限）：** 单次合成上限就是 **30 秒**，两处都改不了——① IrodoriTTS 运行时 `SamplingRequest.max_seconds` 默认 30.0，ComfyDock 的 worker 构造请求时没传该字段；② checkpoint 的训练窗口正是 30 秒（`max_latent_steps = fixed_target_latent_steps = 750` · hop 1920 · 48 kHz = 30.000s），越过它运行时自己会警告音质退化。
 
-实测语速（`tools/probe-tts-length.mjs`：日语 59 字符 → 16.88 秒）= **3.5 字/秒** → 30 秒 ≈ **100 个日语字符**。中文原句译成日语口语后字符数略增，故字幕窗口按**中文**取 **60 字**（≈80 上下日语字 ≈ 23 秒，留足停顿余量）；单体侧再兜一道 `clipForSpeech(japanese, 100)`。切点优先落在句末标点（。！？…；），切点太靠前退逗号级，仍不行才硬切——避免音频在半句话上戛然而止。
+实测语速（`tools/probe-tts-duration.mjs`：日语 59 字符 → 16.88 秒）= **3.5 字/秒** → 30 秒 ≈ **100 个日语字符**。中文原句译成日语口语后字符数略增，故字幕窗口按**中文**取 **60 字**（≈80 上下日语字 ≈ 23 秒，留足停顿余量）；单体侧再兜一道 `clipForSpeech(japanese, 100)`。切点优先落在句末标点（。！？…；），切点太靠前退逗号级，仍不行才硬切——避免音频在半句话上戛然而止。
 
 **上限为什么不抬（取证完毕）：** 运行时默认 `max_seconds = 30.0`（`irodori-tts/inference_runtime.py:218`）＋ checkpoint 训练窗口 `max_latent_steps = fixed_target_latent_steps = 750`（750 × 1920 ÷ 48000 = 30.000s，`irodori_tts/config.py`）——两处都在 IrodoriTTS 侧；越过训练窗口运行时自己警告「Long-tail stability may degrade」。产物侧实锤：`app/data/media-out` 里 17 条 wav 有 9 条恰好停在 30.000s / 2,880,044 字节。要「整段念完」只有拆多条语音（现状即如此）或改运行时并接受尾部音质退化（未做）。
 

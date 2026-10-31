@@ -2,19 +2,19 @@
 //
 // 归属：R5 任务卡 §二.1 —— 本文件唯一写者 = **L5**；R7 任务卡 §二 —— 写操作面（L2）· 切换视图与要点区（L3）
 // 契约：`app/ui/views/_index.md` §三（运行时只读 `window.__ui`；块内不发裸请求，一律走 `api()`）
-// 状态：✅ R5-L5 交付基础版 · R7-L2 补写操作面（六入口；切换视图归 R7-L3）
+// 状态：✅ R5-L5 交付基础版 · R7-L2 补写操作面（六入口）· R8-L2 补「现行 / 归档」切换 + 会话要点区
 //
 // 面：左栏 = 记忆文件列表（`/api/biz/memory-files` 全量，条数 = `files.length`，不截断）；
-//     右栏 = 选中会话的记忆详情：群记（按 `kind` 分组）+ 群友印象（含回应参数）+
-//            「重整」按钮 + 两个按群开关面（💰 余额后缀 / 🔊 语音伴随）。
-// 取数：`/api/biz/memory-files` · `/api/biz/memory-files/<group_xxx>` · `/api/biz/chats`（群名）
-//       `/api/biz/config`（开关现值；写后**再读一次**核对，不做本地乐观更新）
+//     右栏 = 选中会话的记忆详情：**会话要点（顶部只读）** + 群记（按 `kind` 分组，**现行 / 归档**切换）+
+//            群友印象（含回应参数）+「重整」按钮 + 两个按群开关面（💰 余额后缀 / 🔊 语音伴随）。
+// 取数：`/api/biz/memory-files` · `/api/biz/memory-files/<group_xxx>` · `/api/biz/memory-files/<group_xxx>/summary`（R8-L2 新增端点）
+//       `/api/biz/chats`（群名）· `/api/biz/config`（开关现值；写后**再读一次**核对，不做本地乐观更新）
 // 写面：`POST /api/biz/memory-files/consolidate` · `POST /api/biz/config` · `POST /api/biz/balance/sync`
 //       R7-L2 写操作面（六入口）：`POST|PUT|DELETE /api/biz/memory-files/<seg>/group[/<id>]`（加 / 改 / 删群记）
 //       `PUT|DELETE /api/biz/memory-files/<seg>/members/<uid>`（存 / 删群友印象）· `DELETE /api/biz/memory-files/<seg>`（删本会话记忆）
 //       `POST /api/biz/config`（🤖 bot 指定 / 🎚 发言档位——写 `engage.*`）
-// 🔴 代理层方法白名单只有 GET / POST / DELETE（`app/src/web/business-proxy.js:17`）→ 经单体发出的 PUT 恒 405；
-//    群记「改」已在 `updateGroupEntry` 内实现「删旧 + 加新」等价回落，成员「存」无等价通道（见报告 §未取证）。
+// 🔴 代理层方法白名单 = GET / POST / PUT / DELETE（`app/src/web/business-proxy.js:17`）→ PUT 经单体可达；
+//    群记「改」另有「删旧 + 加新」等价回落（`rewriteGroupEntry`，PUT 被拒时自动走）；成员「存」走 PUT，无回落通道。
 // 口径：`design-qqbotb-memory.md` §3.1（两轴三分 / `kind` 枚举）/ §3.5（记忆页：群记 + 群友印象）
 // 空态 / 失败态：走 `empty()` / `fail()`，失败文案带 3210。
 // 降级：`window.__ui` 缺成员时用本块本地实现兜底——页面不白屏、不抛错。
@@ -71,7 +71,14 @@
     note: '',
     editor: null,
     loadingDetail: false,
-    updatedAt: 0
+    updatedAt: 0,
+    // ── R8-L2 新增 ────────────────────────────────────────────────────────
+    /** 会话要点（`GET /api/biz/memory-files/<seg>/summary` 的 `summary` 字段；null = 本会话还没产出）。 */
+    summary: null,
+    /** 会话要点取数失败原因（与「还没产出」区分开）。 */
+    summaryError: '',
+    /** 群记区视图：`current`（现行池）/ `archived`（归档只读）。 */
+    view: 'current'
   };
 
   /**
@@ -387,32 +394,91 @@
   }
 
   /**
+   * 归档条目 → 行（只读：归档池是 JSONL 追加文件，`group-memory.js:153` 只给读面，无写路由）。
+   *
+   * @param {object} entry 归档条目（`{id, kind, content, createdAt, updatedAt, archivedAt, reason}`）
+   * @returns {Element} 行元素
+   */
+  function archivedGroupRow(entry) {
+    const when = Number((entry && entry.archivedAt) || 0) || Number((entry && entry.updatedAt) || 0);
+    return el('div', { class: 'field' },
+      el('div', { class: 'control' },
+        el('span', { text: plain(entry && entry.content) }),
+        el('span', { class: 'note', text: when ? '归档于 ' + fmtTime(when) : '' })));
+  }
+
+  /**
+   * 「现行 / 归档」切换控件（分段控件：两个 `btn small`，选中态用 `primary`）。
+   *
+   * 归档数据源 = 详情端点的 `groupArchived`（`routes.js:1335` 只给 500 条上限）；
+   * 计数取 `archiveStats.group`（不受 limit 影响），故两者可能不等 —— 显示时以条数为准并注明。
+   *
+   * @param {number} curCount 现行条数
+   * @param {number} archCount 归档计数
+   * @returns {Element[]} 两个按钮
+   */
+  function viewTabs(curCount, archCount) {
+    const mk = (mode, text, count) => {
+      const on = state.view === mode;
+      const btn = el('button', { class: 'btn small' + (on ? ' primary' : ''), text: text + ' ' + count });
+      btn.title = mode === 'current' ? '看现行群记（可增删改）' : '看已归档群记（只读；归档池按天追加）';
+      btn.onclick = () => {
+        if (state.view === mode) return;
+        state.view = mode;
+        state.editor = null;
+        state.note = '';
+        renderDetail();
+      };
+      return btn;
+    };
+    return [mk('current', '现行', curCount), mk('archived', '归档', archCount)];
+  }
+
+  /**
    * 群记区（按 `kind` 分组，顺序 `KIND_ORDER`；未知 kind 归到末尾）。
    *
-   * @param {object[]} entries 群记条目列表
-   * @param {object} detail 详情（取归档计数）
+   * 两态共用一个区块：`state.view = 'current'` 走现行池（可增删改），
+   * `'archived'` 走归档池（只读，无编辑按钮、无「＋ 添加」）。
+   *
+   * @param {object[]} entries 现行群记条目列表（详情端点的 `group`）
+   * @param {object} detail 详情（取归档条目 `groupArchived` 与计数 `archiveStats`）
    * @returns {Element} 区块元素
    */
   function groupSection(entries, detail) {
     const list = Array.isArray(entries) ? entries.slice() : [];
-    const archived = Number((detail && detail.archiveStats && detail.archiveStats.group) || 0);
+    const archivedList = Array.isArray(detail && detail.groupArchived) ? detail.groupArchived : [];
+    const archivedCount = Number((detail && detail.archiveStats && detail.archiveStats.group) || archivedList.length || 0);
+    const showingArchived = state.view === 'archived';
+    const shown = showingArchived ? archivedList : list;
+
     const addBtn = el('button', { class: 'btn small', text: '＋ 添加群记' });
     addBtn.onclick = () => openEditor({ mode: 'group-new', entryId: '', kind: KIND_ORDER[0], content: '', error: '' });
+    const tabs = viewTabs(list.length, archivedCount);
     const head = el('div', { class: 'pane-head' },
       el('span', { class: 'title', text: '群记' }),
-      el('span', { text: list.length + ' 条' + (archived ? ' · 归档 ' + archived + ' 条' : '') }),
+      tabs[0],
+      tabs[1],
       el('span', { class: 'spacer' }),
-      addBtn);
+      showingArchived ? null : addBtn);
 
     const body = el('div', { class: 'pane-body' });
-    if (state.editor && state.editor.mode === 'group-new') body.appendChild(groupEditor(state.editor));
-    if (!list.length) {
+    if (showingArchived) {
+      body.appendChild(el('p', { class: 'hint', text: '归档池只读（按天追加的 JSONL）——要改请从现行池操作；归档 = 现行池之外的历史条目。' }));
+      if (!shown.length) {
+        empty(body, '本会话还没有归档群记');
+        return el('div', { class: 'pane' }, head, body);
+      }
+    } else if (state.editor && state.editor.mode === 'group-new') {
+      body.appendChild(groupEditor(state.editor));
+    }
+    if (!shown.length && !showingArchived) {
       empty(body, '还没有群记（梗 / 群规 / 关系 / 项目 / 在聊什么）——点「重整」让模型从聊天记录里提炼');
       return el('div', { class: 'pane' }, head, body);
     }
+    if (!shown.length) return el('div', { class: 'pane' }, head, body);
 
     const groups = new Map();
-    for (const entry of list) {
+    for (const entry of shown) {
       const kind = String((entry && entry.kind) || '');
       if (!groups.has(kind)) groups.set(kind, []);
       groups.get(kind).push(entry);
@@ -423,11 +489,41 @@
       const rows = groups.get(kind) || [];
       body.appendChild(el('div', { class: 'hint', text: (KIND_LABEL[kind] || kind || '未分类') + '（' + rows.length + '）' }));
       for (const entry of rows) {
+        if (showingArchived) { body.appendChild(archivedGroupRow(entry)); continue; }
         const editing = state.editor && state.editor.mode === 'group' && String(state.editor.entryId) === String(entry && entry.id);
         body.appendChild(editing ? groupEditor(state.editor) : groupRow(entry));
       }
     }
     return el('div', { class: 'pane' }, head, body);
+  }
+
+  /**
+   * 会话要点区（顶部只读；`design-qqbotb-memory.md` §3.5「顶部只读显示会话要点」）。
+   *
+   * 三态必须可区分：有要点（正文）/ 还没产出（空态文案）/ 端点取不到（失败态，带原因）。
+   *
+   * @returns {Element} 区块元素
+   */
+  function summarySection() {
+    const box = el('div', { class: 'pane-body' });
+    const sum = state.summary;
+    if (state.summaryError) {
+      fail(box, UNREACHABLE + '：' + state.summaryError);
+    } else if (!sum || !String(sum.summary || '').trim()) {
+      empty(box, '本会话还没有会话要点（收工轮产出后出现在这里）');
+    } else {
+      for (const line of String(sum.summary).split(/\r?\n/)) {
+        const t = line.trim();
+        if (t) box.appendChild(el('p', { text: t }));
+      }
+      box.appendChild(el('p', { class: 'hint', text: '产出 ' + fmtTime(sum.createdAt)
+        + ' · 轮转 ' + (Number(sum.rollovers) || 0) + ' 次 · ' + (Number(sum.messages) || 0) + ' 条消息' }));
+    }
+    return el('div', { class: 'pane' },
+      el('div', { class: 'pane-head' },
+        el('span', { class: 'title', text: '会话要点' }),
+        el('span', { class: 'hint', text: '只读' })),
+      box);
   }
 
   /**
@@ -734,7 +830,10 @@
       if (r && r.userId != null) rapportMap[String(r.userId)] = r;
     }
 
-    // 群记区（群轴）
+    // 会话要点区（顶部只读，`design-qqbotb-memory.md` §3.5）
+    refs.bodyEl.appendChild(summarySection());
+
+    // 群记区（群轴；现行 / 归档切换在区块头部）
     refs.bodyEl.appendChild(groupSection(detail.group, detail));
 
     // 群友印象区（人轴）
@@ -784,7 +883,11 @@
     state.detailError = '';
     renderDetail();
 
-    const res = await api('/api/biz/memory-files/' + pathKeyOf(key));
+    // 详情 + 会话要点并行取：两个端点互不依赖，串行会把首屏拖成两跳
+    const [res, sumRes] = await Promise.all([
+      api('/api/biz/memory-files/' + pathKeyOf(key)),
+      api('/api/biz/memory-files/' + pathKeyOf(key) + '/summary')
+    ]);
     if (token !== detailSeq) return;                 // 迟到响应：已切会话，丢弃
     state.loadingDetail = false;
     if (!res || res.ok === false) {
@@ -792,6 +895,14 @@
       state.detail = null;
     } else {
       state.detail = res;
+    }
+    // 要点端点自成三态：取不到只让要点区报错，不牵连整个详情面
+    if (!sumRes || sumRes.ok === false) {
+      state.summary = null;
+      state.summaryError = String((sumRes && (sumRes.error || ('HTTP ' + sumRes.status))) || '未知错误');
+    } else {
+      state.summaryError = '';
+      state.summary = sumRes.summary || null;
     }
     renderDetail();
   }
@@ -808,9 +919,12 @@
     state.currentKey = key;
     state.note = '';
     state.editor = null;
+    state.view = 'current';          // 切会话回到「现行」——归档视图属单会话语境，跟人不跟页
     if (!same) {
       state.detail = null;
       state.detailError = '';
+      state.summary = null;
+      state.summaryError = '';
     }
     renderList();
     return loadDetail(key);
@@ -1021,14 +1135,14 @@
   }
 
   /**
-   * 失败原因文本（带 HTTP 语义提示；405 单独点名——代理层方法白名单不含 PUT）。
+   * 失败原因文本（带 HTTP 语义提示；405 单独点名——代理层方法白名单不收该方法）。
    *
    * @param {object} res 端点返回
    * @returns {string} 原因
    */
   function errOf(res) {
     const raw = String((res && (res.error || res.status)) || '-');
-    if (res && res.status === 405) return raw + '（单体代理层方法白名单只有 GET / POST / DELETE）';
+    if (res && res.status === 405) return raw + '（单体代理层方法白名单不含该方法）';
     return raw;
   }
 
@@ -1112,8 +1226,8 @@
     }));
     const res = await api(basePathOf(state.currentKey) + '/group', { method: 'PUT', body: { entries } });
     if (!res || res.ok === false) {
-      // 单体代理层 `business-proxy.js:17` 的方法白名单只有 GET / POST / DELETE → PUT 恒 405。
-      // 回落到「删旧 + 加新」两步（语义等价：内容换新，id 会重建）——两条都被放行。
+      // 代理层方法白名单 = GET / POST / PUT / DELETE（`business-proxy.js:17`）→ PUT 已可经单体送达；
+      // 此处 405 回退保留为防御路径（旧进程 / 白名单回退时仍可用）：删旧 + 加新两步（语义等价：内容换新，id 会重建）。
       if (res && res.status === 405) return await rewriteGroupEntry(entryId, target, c);
       state.note = '改群记失败 · ' + errOf(res);
       return false;
@@ -1375,6 +1489,9 @@
       state.currentKey = keys.length ? keys[0] : null;
       state.detail = null;
       state.detailError = '';
+      state.summary = null;
+      state.summaryError = '';
+      state.view = 'current';
     }
     renderList();
     if (state.currentKey) await loadDetail(state.currentKey);

@@ -36,7 +36,8 @@ import { detectDialect as detectThinkingDialect } from './thinking.js';
 // 群记（群级记忆）——[qqagent-memory-patch:routes-import]
 import { listGroupEntries, appendGroupEntry, replaceGroupEntries, removeGroupEntry, groupMemoryStats, listArchivedGroupEntries } from './group-memory.js';
 // 每会话状态（群会话一级列表：会话起点 / 轮转次数 / 前文规模）——[qqagent-fold-patch:routes-import]
-import { getSessionState } from './session-state.js';
+// 会话要点（记忆页顶部只读展示）——[qqagent-memory-patch:routes-import-summary]
+import { getSessionState, readSessionSummary } from './session-state.js';
 // 回应参数（记忆页展示 / 手动查看）——[qqagent-rapport-patch:routes-import]
 import { listRapport } from './rapport.js';
 // 已读前情摘要统计（B22）——[qqagent-readcompact-patch:routes-import]
@@ -1340,6 +1341,17 @@ export function createRoutes(deps) {
           // [qqagent-rapport-patch:routes-detail]
           rapport: listRapport(chatKey)
         });   // [qqagent-memory-patch:routes-detail]
+      }
+    },
+    {
+      // 会话要点（收工轮产出，单条覆盖式）——记忆页顶部只读展示。
+      // 数据源 `data/memory/<chat>/_session.json`（`session-state.js:184 readSessionSummary`）。
+      // 无要点时返回 `{ chatKey, summary: null }`——「还没产出」与「端点不可用」在界面上必须能区分。
+      // [qqagent-memory-patch:routes-summary]
+      method: 'GET', pattern: /^\/api\/memory-files\/(group|private)_(\d+)\/summary$/,
+      handler: async ({ res, json, match }) => {
+        const chatKey = `${match[1]}:${match[2]}`;
+        return json(res, 200, { chatKey, summary: readSessionSummary(chatKey) });
       }
     },
     {

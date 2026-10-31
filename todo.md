@@ -129,11 +129,10 @@
 
 > R3-4 / R3-5 / R3-6 / R3-7 已由 v0.98 落盘核销（见 `CHANGELOG.md` v0.98）：navigator 改由 hub 单点扇出（`viaHub`）· topic-words 实现体并入 group-memory（原文件留转发壳）· 同名并存判定不改（ESM 显式扩展名已足够）· 成本看板修 `deepseek-v4.1-flash` 显式价格条目。
 
-## 十七之二、N6 迁移待办（v0.98 · 代码已落，生效面待人）
+## 十七之二、N6 迁移待办（R5 开工依据：D6-1 ① = 逐类切 live 为主 · 详见 `tasks/R4.md` §四）
 
 | # | 项 | 说明 |
 |:--:|:--|:--|
-| N6-1 | ✅ **已完成（R4 实测）** | 单体 10-31 00:21:33 重启后 `/api/nav/{ingress,status,hub}` 三路由均 200、`hub.bound=true`、`ingress.mode=shadow` |
 | N6-2 | **影子基线采集（采集中 · 样本不足）** | R4 实测 27 行（`intent-2026-10-31.jsonl`）：`kind` 全 `chat`、`action` 全 `none`、`via` 全 `rule`——**零派活样本**。切 live 的唯一依据（误判率）尚未可判；需在群里发 `@bot 截一下 X 的会话` / `画三视图` 等派活指令造 instruct/generate 样本（§二 · R4 §四 D6-6） |
 | N6-3 | **逐类切 live** | `POST /api/nav/ingress` 按 readonly/shot → switch → generate → session → send 顺序切，每类切完群里试一次；回退 `{"mode":"shadow"}`（§三） |
 | N6-4 | **判断器 LLM 兜底拍板** | `navigator.intent.llm` 现 false（判不动落 chat 不投递）；待影子记录里出现成批误判再开（§四-1） |

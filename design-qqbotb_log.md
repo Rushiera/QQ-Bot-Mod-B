@@ -3400,7 +3400,7 @@ R喵喵：交接摘要已注入，等待确认
 
 | 面 | 文件 |
 |:--|:--|
-| 配置 | `app/src/config.js` —— `navigator.rescueCat: 'nav_rescue'`（`navigator.*` 16 → **17 键**） |
+| 配置 | `app/src/config.js` —— `navigator.rescueCat: 'nav_rescue'`（`navigator.*` 键数以默认段实读为准，本行原记「16 → 17 键」属当时读数） |
 | 主流程 | `app/src/navigator/index.js` —— `rescueCatKey` 读取 · `pickRescueCat` 固定猫优先 · `rescueSummary` 开工清场 + 代读 · `resetSession` 固定走代读、`rescue` 退役（`void rescue`） |
 | 业务面工具 | `tools/navigator/nav-tools.js` —— `nav_reset` 描述 / `rescue` 参数说明 / 回执文案；补丁 `patch-qqagent-navigator.mjs` 落 `module-nav-tools: updated` |
 | 教材 | `tools/apply-qqagent-config.mjs`（`NAV_RULES` + `NAV_QUICK` 第 185 行）· `role/nav-rules.md` 两条 + 「别拿 nav_reset 顶」一条；`roleTextChars` 5271 → **5322**（`--roletext-only` 已落盘 `_unpack/data/config.json`） |
@@ -3437,7 +3437,7 @@ R喵喵：交接摘要已注入，等待确认
 
 | 面 | 实测源 | 结果 |
 |:--|:--|:--|
-| 配置 | `app/src/config.js` `navigator.*` | **17 键**（含 `rescueCat`）——与 `ref-navigator-map.md` §五 一致 |
+| 配置 | `app/src/config.js` `navigator.*` | 键数以默认段实读为准（原记「17 键（含 `rescueCat`）」，2026-10-31 实读为 **20 个顶层键**，漏记 `intent` / `ingress` / `persona` 三组；与 `ref-navigator-map.md` §五 一致） |
 | 工具面 | `tools/navigator/nav-tools.js` 14 处 `name:` | **14 件**（10 件 `nav_*` + 改图 / 生图 / 语音 / 反推）——与 §三 一致 |
 | 单体 API | `app/src/navigator/index.js` 路由表 | **15 条**——与 §四 一致 |
 | 会话态 | `app/src/navigator/state.js` 初值 | **10 字段** + `COMMAND_LOG_LIMIT=50`——与 §六 一致 |

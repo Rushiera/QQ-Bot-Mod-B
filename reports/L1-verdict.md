@@ -66,6 +66,7 @@
 1. **报告回执④ 的变更请求仍在盘**：`app/ui/views/memory.js` 里按旧白名单描述代理层的位置共 **7 处**——`:16`（头部注释）· `:1145`（405 提示文案）· `:1229`（注释）· `:1138` / `:1231` / `:1248` / `:1270`（405 回退路径段）。报告记「5 处」又在末句写「6 处」，计数偏软。该面属 L2 写面（`app/ui/**`），本线不改，已记 `todo.md`。
 2. **工作树里另外两处改动属 L2，不是 L1 越界**：`git status --porcelain` 显示 `app/ui/views/memory.js`（133 增 16 删）与 `app/src/business/routes.js`（13 增 1 删，新增 `/api/memory-files/(group|private)_<id>/summary` 路由 + `readSessionSummary` 导入），与 R8 卡 §二 L2 行一致。L1 声明的两处改动与 `git diff` 逐字对应，**零越界**。
 3. **判据 5 的 `symbolsChecked` 报告 416 / 实测 417**：同期 L1 新增 `methodHasBody`（`server.js`）与 L2 新增 `readSessionSummary` 导入（`routes.js`）叠加所致；`problems` 仍 `[]`，判据不受影响。报告跑该脚本的时刻早于 L2 落盘。
+4. **`reports/_index.md` 未写**：卡 §二 声明该件为「主干独占」，本线按卡执行、不越界。`reports/_index.md` 的 R8 节登记归主干（逐线模式下由主干或最后一条线收线时统一登记，避免两条验证猫互覆盖同一节）。
 
 ---
 

@@ -6,15 +6,21 @@
 //   · 纯前缀替换——`/api/biz/chats/group_123/messages` → `/api/chats/group_123/messages`；
 //     路径参数原样进路径，本文件**不解析、不拆参**（业务面自己有正则路由表）。
 //   · 不逐条枚举业务面路由（73 条，枚举必漏）——一条通配覆盖全族。
-//   · 只放行 GET / POST / DELETE，其余 405。
+//   · 只放行 GET / POST / PUT / DELETE，其余 405（PATCH 不加：业务面 routes.js 未注册任何 PATCH 路由）。
 //   · 失败一律出声：业务面不可达回 502 + 原因（含 3210），**不吐空数组冒充成功**；
 //     超时回 504。业务面自己回的 4xx / 5xx 原样透传，不翻译、不改写。
 //   · 地址解析归 business 客户端（business.js 唯一一处：端口段探测 + 身份校验 + 一次重试），
 //     本文件只缓存它解出来的根地址，转发失败即清缓存由它重解——不在此复制一套探测。
 //   · 不转发 cookie、不改路径大小写、不改方法、不带自己的 query 重排（原样透传 `url.search`）。
 
-/** 允许透传的方法——其余一律 405。 */
-const ALLOWED_METHODS = new Set(['GET', 'POST', 'DELETE']);
+/** 允许透传的方法——其余一律 405。`PATCH` 不加：业务面 `routes.js` 只注册了 GET / POST / PUT / DELETE。 */
+const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
+
+/** 带请求体的方法——只有这些方法需要读体、也只有这些方法转发时要带 body。 */
+const BODY_METHODS = new Set(['POST', 'PUT']);
+
+/** 405 文案里的方法清单——从 `ALLOWED_METHODS` 派生，白名单一改文案跟着变，永不脱节。 */
+const ALLOWED_HINT = [...ALLOWED_METHODS].join(' / ');
 
 /** 单次转发超时毫秒（业务面 `session/compact` 这类会慢，8 秒外一律 504）。 */
 const TIMEOUT_MS = 8000;
@@ -126,7 +132,7 @@ export function createBusinessProxy({ business, log, token = '', timeoutMs = TIM
   async function send({ verb, pathname, search, body }) {
     const root = await resolveBase();
     const target = targetUrl(root, pathname, search);
-    const payload = verb === 'POST' && body && typeof body === 'object' ? JSON.stringify(body) : undefined;
+    const payload = BODY_METHODS.has(verb) && body && typeof body === 'object' ? JSON.stringify(body) : undefined;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -167,8 +173,8 @@ export function createBusinessProxy({ business, log, token = '', timeoutMs = TIM
   async function __bizProxy({ method, pathname, search = '', body } = {}) {
     const verb = String(method ?? '').toUpperCase();
     if (!ALLOWED_METHODS.has(verb)) {
-      warn(`拒绝方法 ${verb || '未知'}：${pathname}（只允许 GET / POST / DELETE）`);
-      return fail(405, `不支持的方法：${verb || '未知'}（只允许 GET / POST / DELETE）`);
+      warn(`拒绝方法 ${verb || '未知'}：${pathname}（只允许 ${ALLOWED_HINT}）`);
+      return fail(405, `不支持的方法：${verb || '未知'}（只允许 ${ALLOWED_HINT}）`);
     }
 
     try {

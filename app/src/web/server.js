@@ -49,6 +49,22 @@ export function createWebServer({ port, uiDir, api, log }) {
   }
 
   /**
+   * 方法是否带请求体。
+   *
+   * `PUT` 与 `POST` 一样带体——业务面的成员「存」、群记「改」都是 `PUT`；
+   * 只按 `POST` 读体时这些方法拿到的恒是 `{}`（R7-L2 报出的双闸第②闸）。
+   * `GET` / `DELETE` / `HEAD` 不读体：读了会挂住等待 `end`，且业务面这两类也不看体。
+   * `PATCH` 不在名单里——业务面 `routes.js` 未注册任何 PATCH 路由，代理侧也 405（`business-proxy.js`），
+   * 两面口径一致。
+   *
+   * @param {string} method 请求方法
+   * @returns {boolean} 需要读体
+   */
+  function methodHasBody(method) {
+    return method === 'POST' || method === 'PUT';
+  }
+
+  /**
    * 读取请求体。
    *
    * @param {object} req 请求对象
@@ -115,7 +131,7 @@ export function createWebServer({ port, uiDir, api, log }) {
       const bizProxy = api.__bizProxy;
       if (bizProxy && (url.pathname === '/api/biz' || url.pathname.startsWith('/api/biz/'))) {
         try {
-          const body = req.method === 'POST' ? await readBody(req) : {};
+          const body = methodHasBody(req.method) ? await readBody(req) : {};
           const result = await bizProxy({ method: req.method, pathname: url.pathname, search: url.search, body });
           sendJson(res, result?.status ?? 200, result?.body ?? result ?? { ok: true });
         } catch (error) {
@@ -129,7 +145,7 @@ export function createWebServer({ port, uiDir, api, log }) {
     }
 
     try {
-      const body = req.method === 'POST' ? await readBody(req) : {};
+      const body = methodHasBody(req.method) ? await readBody(req) : {};
       const result = await handler({ query: url.searchParams, body });
       sendJson(res, result?.status ?? 200, result?.body ?? result ?? { ok: true });
     } catch (error) {

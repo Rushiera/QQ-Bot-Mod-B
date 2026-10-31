@@ -2270,12 +2270,25 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
   }
 
   // 合并各维度：已完结日按天文件 + 今天实时
+  // ⚠️ 数值字段必须逐项显式归零：初始化用 `{ key, ...g }` 会把首见那一天的
+  //    整组数值带进来，随后又被下面的 += 累加一遍 —— 表现为「各维度求和 > 合计」，
+  //    而且差额恒等于「每个 key 首见日的组值」（不随窗口增长，最难察觉）。
+  const USAGE_SUM_FIELDS = [
+    'cost', 'peakCost', 'offPeakCost', 'peakTokens', 'offPeakTokens',
+    'promptTokens', 'completionTokens', 'cachedTokens', 'totalTokens', 'runs', 'exactCalls'
+  ];
   const mergeGroups = (groupsList) => {
     const map = new Map();
     for (const groups of groupsList) {
       for (const g of groups || []) {
         const key = String(g.key ?? '');
-        if (!map.has(key)) map.set(key, { key, ...g, runs: 0, exactCalls: 0, cost: 0 });
+        if (!map.has(key)) {
+          // 保留 vendor / model 这类非数值身份字段，数值字段一律显式归零
+          const init = { ...g, key };
+          for (const f of USAGE_SUM_FIELDS) init[f] = 0;
+          init.hasPeakModel = false;
+          map.set(key, init);
+        }
         const t = map.get(key);
         t.cost += Number(g.cost) || 0;
         t.peakCost += Number(g.peakCost) || 0;
@@ -2288,7 +2301,13 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
         t.totalTokens += Number(g.totalTokens) || 0;
         t.runs += Number(g.runs) || 0;
         t.exactCalls += Number(g.exactCalls) || 0;
+        if (g.hasPeakModel) t.hasPeakModel = true;
       }
+    }
+    // 派生比率不能相加，合并后按累计值重算（同 totals 的处理）
+    for (const t of map.values()) {
+      t.cacheHitRate = t.promptTokens ? Math.min(1, t.cachedTokens / t.promptTokens) : 0;
+      t.peakRatio = (t.peakTokens + t.offPeakTokens) ? t.peakTokens / (t.peakTokens + t.offPeakTokens) : 0;
     }
     let out = [...map.values()];
     out.sort((a, b) => b.cost - a.cost || b.totalTokens - a.totalTokens);

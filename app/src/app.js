@@ -13,6 +13,7 @@ import { createLogTail } from './napcat/logtail.js';
 import { createOnebotClient } from './onebot/client.js';
 import { createWebServer } from './web/server.js';
 import { createGroupsApi } from './web/groups-api.js';
+import { createBusinessProxy } from './web/business-proxy.js';
 import { createCompanion } from './companion.js';
 import { createBusinessClient, createBusinessHub } from './business.js';
 import { createNavigator } from './navigator/index.js';
@@ -103,6 +104,8 @@ export async function createApp() {
       // 群名单（业务面的 allow / deny）——读写都经业务面自己的 /api/config：
       // 它在内存里持有一份活配置，直改磁盘文件不生效。三条接口的实现见 web/groups-api.js。
       ...createGroupsApi({ business, log }),
+      // 业务面通配代理：`/api/biz/*` → `127.0.0.1:3210/api/*`（前缀兜底在 web/server.js）
+      ...createBusinessProxy({ business, log, token: config.business.token }),
       'POST /api/napcat/start': async () => ({ body: await napcat.start() }),
       'POST /api/napcat/stop': async () => ({ body: await napcat.stop() }),
       // QQ 登录面——账号掉登录后的恢复入口（状态 / 已存账号 / 快速登录）

@@ -1,6 +1,6 @@
 ﻿# QQBot mod B — 项目档案
 
-> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v0.99 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
+> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v1.02 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
 > Git：GitHub `Rushiera/QQ-Bot-Mod-B`（单远程 · 收工推送）
 > 创建：2026-09-26
 > 缘起：模式 A（QQ 官方 Bot 开放平台通道）受「每条用户消息最多 4 次被动回复」约束，无法支撑「猫的会话内容随时推送到 QQ」。模式 B 改为专用 QQ 号 + OneBot 11 协议端，自主收发、无被动预算。
@@ -64,10 +64,14 @@ NapCat.Shell（独立协议端 + 自带 NTQQ）── OneBot 11 HTTP/WS ──�
 | `ref-qqagent-features.md` | 外部参考 | qq-agent **功能清单与实现落点**（编号索引 → 源码文件:行号；配取舍建议） |
 | `ref-prompt-baseline.md` | 实测基线 | 前文结构读数基线（分段占比 / 注入文件归组 / 两条收缩链路 / 组装链路代码位置）——B22·B23 攻坚入口 |
 | `ref-cache-hit.md` | 实测基线 | **缓存命中基线**（2026-10-26 重置口径）——数据面现状 / 模型口径 / 测量口径 / 三条已验证结论 / 推荐使用方式 / 数据收集通道缺口 / 优化候选排序 |
-| `ref-navigator-map.md` | 功能全景索引 | **领航员模式一页看全**——九大能力簇 / 业务面工具 14 件 / 单体 API 15 条 / `navigator.*` 配置全表（17 键）/ 会话态字段 / 代码落点 / 未竟 N6-N8 / 设计文档口径漂移核对 / **§十 一次派活的端到端时序 + 闸门汇总**（导读件，口径仍以 `design-qqbotb-navigator.md` 为准） |
+| `ref-navigator-map.md` | 功能全景索引 | **领航员模式一页看全**——九大能力簇 / 业务面工具 14 件 / 单体 API 20 条路径（21 个键，含 N6 新增 5 条） / `navigator.*` 配置全表（顶层 20 键）/ 会话态字段 / 代码落点 / 未竟 N6-N8 / 设计文档口径漂移核对 / **§十 一次派活的端到端时序 + 闸门汇总**（导读件，口径仍以 `design-qqbotb-navigator.md` 为准） |
 | `git-profile.md` | Git 档案 | 本项目 Git 实例——仓库 / 上传模式 / 同步范围 / 上次同步（收工更新） |
-| `tasks/R1.md` · `tasks/R2.md` · `tasks/R3.md` · `tasks/R4.md` · `tasks/R5.md` | 并发任务卡 | **B+C 迁移**（业务面搬进自研单体）的 R1/R2/R3 卡与主干裁决 D1–D5；**R4 = 待办偏移检查 + D6 拍板表**（只侦察不实现）；**R5 = 单体 UI 补齐原版 7 页 + 文档面收口（16 线并发，写面所有权表 / 冲突矩阵 / 冻结契约）· 队列编号 Q-001** |
-| `reports/_index.md` | 报告索引（B+C 迁移 + N6） | R1 Step 0 五线 + R2 Step 1/2/3 五线 + N6 六条——每线报告指针与一句话结论 |
+| `tasks/R1.md` | 并发任务卡 | Step 0 五线（B+C 迁移调研）——`app/src/business/` 装配面取证 · UI 13 段归属表 · 数据根实测（**L5 的报告同时是 R5-L13 的 13 段归属表落点**） |
+| `tasks/R2.md` | 并发任务卡 | Step 1/2/3 五线——取证 / 吸收归位 / 装配 / 验收方案四步（`app/src/business/` 51 文件 · 346 点 = 292 吸收 / 7 退役 / 47 待裁） |
+| `tasks/R3.md` | 并发任务卡 | 落地 R2 遗留七线——缺失模块全量补搬 / hub 五处接线 / 依赖齐备 / shadow-diff 层 1 |
+| `tasks/R4.md` | 并发任务卡 | 待办偏移检查（A 类十项 + B 类十二条）+ D6 六项拍板表——**只侦察不实现** |
+| `tasks/R5.md` | 并发任务卡 | **单体 UI 补齐原版 7 页 + 文档面收口**——16 线并发，含写面所有权表 / 冲突矩阵 / 冻结契约 `window.__ui` 11 成员 · `/api/biz/*` 代理层口径 · **队列编号 Q-001** |
+| `reports/_index.md` | 报告索引（B+C 迁移 + N6） | R1 Step 0 五线 + R2 Step 1/2/3 五线 + N6 六条——每线报告指针与一句话结论；**R5 十六线报告**落 `reports/R5-L*.md` 与 `reports/R5-群内验收表.md`，索引由主干维护 |
 | `reports/N6-验收清单.md` | 人工验收（N6） | 重启即生效 / 影子观察 / 逐类切换 / 拍板四类——N6 迁移的生效面全部在这三页 |
 
 ## 目录结构
@@ -80,12 +84,15 @@ QQBotB/
 ├── 启动QQAgent-仅业务面.bat / .vbs  回落路径（只起业务面——单体起不来时用）· 同上生成
 ├── project.md / todo.md / CHANGELOG.md / glossary.md
 ├── design-qqbotb*.md          设计（总纲 + 模块：session / engage / memory）· design-status.md
-├── role/                      角色设定按需文件（nav-rules.md / blocked-rules.md）——B23 上工式
+├── role/                      角色设定按需文件（nav-rules.md / blocked-rules.md / media-rules.md）——B23 上工式
 ├── design-qqbotb_log.md       兑现明细（唯一证据承载处）
 ├── ref-qqagent.md             外部参考拆解（qq-agent v0.4.0）
 ├── ref-qqagent-features.md    功能清单与实现落点（编号 → 源码行号）
 ├── app/                       自研单体（Electron）——协议端宿主 / 协议端登录面 / OneBot 连接 / 界面
-│   └── ui/views/              界面分块（R5）——`_shell.js` 外壳 + 7 个页面块，归属见其 `_index.md`
+│   └── ui/views/              界面分块（R5）——`_shell.js`（外壳：导航接管 + `window.__ui` 11 成员）
+│       ├── _index.md          分块写面归属 + 冻结契约（`__ui` 签名 / mount+refresh / `/api/biz/*` 代理口径）
+│       ├── sessions.js        会话（L2）· chats.js 存档（L3）· usage.js 用量（L4）· memory.js 记忆（L5）
+│       └── skills.js          技能（L6）· plugins.js 插件（L7）· settings.js + settings-sections.js 业务设置（L8）
 ├── src/QQBotB.Collector/      卫星程序——OneBot WS 事件收集器（M1 落地）
 ├── runtime/                   运行区
 │   ├── NapCat/NapCat.52230.Shell/  协议端（自带 NTQQ 9.9.33）

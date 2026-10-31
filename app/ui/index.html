@@ -19,15 +19,36 @@
   </header>
 
   <nav class="tabs">
+    <button class="tab" data-view="sessions">会话</button>
+    <button class="tab" data-view="chats">存档</button>
+    <button class="tab" data-view="memory">记忆</button>
+    <button class="tab" data-view="usage">用量</button>
+    <button class="tab" data-view="skills">技能</button>
+    <button class="tab" data-view="plugins">插件</button>
+    <button class="tab" data-view="bizsettings">业务设置</button>
     <button class="tab active" data-view="overview">概览</button>
     <button class="tab" data-view="webui">协议端控制台</button>
     <button class="tab" data-view="logs">日志</button>
     <button class="tab" data-view="nav">领航员</button>
     <button class="tab" data-view="groups">群名单</button>
-    <button class="tab" data-view="settings">设置</button>
+    <button class="tab" data-view="settings">本地设置</button>
   </nav>
 
   <main>
+    <section id="view-sessions" class="view"></section>
+
+    <section id="view-chats" class="view"></section>
+
+    <section id="view-memory" class="view"></section>
+
+    <section id="view-usage" class="view"></section>
+
+    <section id="view-skills" class="view"></section>
+
+    <section id="view-plugins" class="view"></section>
+
+    <section id="view-bizsettings" class="view"></section>
+
     <section id="view-overview" class="view active">
       <div class="cards">
         <div class="card">
@@ -173,6 +194,15 @@
     </section>
   </main>
 
-  <script src="app.js"></script>
+  <script defer src="views/_shell.js"></script>
+  <script defer src="views/sessions.js"></script>
+  <script defer src="views/chats.js"></script>
+  <script defer src="views/memory.js"></script>
+  <script defer src="views/usage.js"></script>
+  <script defer src="views/skills.js"></script>
+  <script defer src="views/plugins.js"></script>
+  <script defer src="views/settings.js"></script>
+  <script defer src="views/settings-sections.js"></script>
+  <script defer src="app.js"></script>
 </body>
 </html>

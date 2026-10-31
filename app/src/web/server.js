@@ -2,6 +2,8 @@
 //
 // 职责：托管界面静态文件、暴露控制 API、推送日志与状态（SSE）。
 // 边界：只监听回环地址；协议端 WebUI 不在本服务内转发（界面用 iframe 直连其自身端口）。
+//       `/api/biz/*` 是唯一的前缀路由——`api[key]` 精确匹配未命中时才交给 `api.__bizProxy`
+//       （业务面通配代理，装配见 app/src/web/business-proxy.js）。
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -108,6 +110,20 @@ export function createWebServer({ port, uiDir, api, log }) {
 
     const handler = api[key];
     if (!handler) {
+      // 前缀兜底：`/api/biz/*` 交给业务面通配代理（api[key] 是精确匹配，不支持通配——
+      // 业务面 73 条路由不可能逐条枚举，见 web/business-proxy.js 头部）。
+      const bizProxy = api.__bizProxy;
+      if (bizProxy && (url.pathname === '/api/biz' || url.pathname.startsWith('/api/biz/'))) {
+        try {
+          const body = req.method === 'POST' ? await readBody(req) : {};
+          const result = await bizProxy({ method: req.method, pathname: url.pathname, search: url.search, body });
+          sendJson(res, result?.status ?? 200, result?.body ?? result ?? { ok: true });
+        } catch (error) {
+          log.error('web', `业务面代理 ${key} 异常：${error?.message ?? error}`);
+          sendJson(res, 500, { ok: false, error: String(error?.message ?? error) });
+        }
+        return;
+      }
       serveStatic(res, url.pathname);
       return;
     }

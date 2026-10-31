@@ -3,7 +3,7 @@
 > 定位：**一页看完「领航员模式现在有什么」**——能力 / 入口 / 工具 / API / 参数 / 状态 / 代码落点 / 未竟 / 文档漂移。
 > 真相源分工：设计口径在 `design-qqbotb-navigator.md`（20 节，补丁式追加；**节号已被 `app/src/config.js` 注释与 `design-qqbotb_log.md` 引用 → 不重排**）；兑现明细在 `design-qqbotb_log.md`；行动项在 `todo.md` §五。
 > 本文件只是导读与核对结果，不含新口径。
-> 更新：2026-10-28（按当前代码核对 `app/src/config.js` · `app/src/navigator/*` · `tools/navigator/nav-tools.js`）｜2026-10-30 复核：工具 14 件（实跑 19/19）/ 单体路由 15 条 / `navigator.*` 17 键 / 会话态 10 字段逐项吻合，补 §十 端到端时序与闸门汇总；会话重建改为固定代读猫（`rescueCat`）｜2026-10-30 二次核对：`verify-navigator` 实跑 62/62、工具 14 件与 navtools 19/19 实跑吻合；修三处口径漂移（§八 抢救模式 → 代读猫 · §十三 交接报告来源 · §五 猫名示例 `rf` → `rb`）
+> 更新：2026-10-28（按当前代码核对 `app/src/config.js` · `app/src/navigator/*` · `tools/navigator/nav-tools.js`）｜2026-10-30 复核：工具 14 件（实跑 19/19）/ 单体 API 15 条 / `navigator.*` 17 键 / 会话态 10 字段逐项吻合，补 §十 端到端时序与闸门汇总；会话重建改为固定代读猫（`rescueCat`）｜2026-10-30 二次核对：`verify-navigator` 实跑 62/62、工具 14 件与 navtools 19/19 实跑吻合；修三处口径漂移（§八 抢救模式 → 代读猫 · §十三 交接报告来源 · §五 猫名示例 `rf` → `rb`）｜**2026-10-31（R5-L13）**：`navigator.*` **顶层 20 键**（`enabled` · `mainPort` · `vipUser` · `idleCloseMs` · `tourLimit` · `tourKeyinfoMax` · `shotKeyinfoMax` · `shotSegmentHeight` · `shotSegmentMax` · `resetTraceLimit` · `rescueMaxChars` · `rescueCat` · `analyzeDelayMs` · `intent` · `ingress` · `persona` · `summary` · `services` · `comfy` · `media`，按 `app/src/config.js:67-164` 逐键数过；原记 17 漏 `intent` / `ingress` / `persona` 三组）· §四 单体 API 补 N6 新增 5 条路径 → **20 条路径 / 21 个键**（`index.js:3013-3050`）· §七 代码落点补三件（`navigator/intent.js` · `ingress.js` · `persona.js`）· §七 界面行补 R5 分块口径（13 页签 / `app/ui/views/*.js` / `/api/biz/*` 代理）
 
 ---
 
@@ -45,9 +45,11 @@ QQ 群 = CH4 猫群的**外部指挥台**：群内下指令 → 投给某只猫 
 
 ---
 
-## 四、自研单体 API（`app/src/navigator/index.js` · 15 条）
+## 四、自研单体 API（`app/src/navigator/index.js` · **20 条路径 / 21 个 api 键**）
 
-`GET /api/nav/status` · `/health` · `/detail` ｜ `POST /api/nav/open` · `/close` · `/send` · `/say` · `/analyze` · `/shot` · `/reset` · `/new-session` · `/comfy` · `/moss` · `/tts` · `/tagger`
+**主干 15 条（R5 前既有）**：`GET /api/nav/status` · `/health` · `/detail` ｜ `POST /api/nav/open` · `/close` · `/send` · `/say` · `/analyze` · `/shot` · `/reset` · `/new-session` · `/comfy` · `/moss` · `/tts` · `/tagger`
+
+**N6 迁移新增 5 条路径（v0.98，`index.js:3013-3050`）**：`POST /api/nav/intent`（影子判断，只判不发）· `GET /api/nav/persona`（教材快照；`?full=1` 才回全文）· `POST /api/nav/persona/refresh`（刷教材缓存）· `GET /api/nav/hub`（分发中心快照）· `GET` + `POST /api/nav/ingress`（运行时切 mode / allow，不落盘）
 
 依赖方向**单向**：业务面 → 单体（工具调本地 HTTP）；单体出站（截图 / 图 / 语音 / 文字）经自己的 OneBot 直发群，**不经业务面发言闸**（这正是 VIP 免墙的实现方式）。
 
@@ -74,6 +76,9 @@ QQ 群 = CH4 猫群的**外部指挥台**：群内下指令 → 投给某只猫 
 | `services[]` | ApiSiteAnalyzer `/api/sites` · ComfyDock `/api/summary` | 开启回执健康检查清单（apisite 用量只调 `site=__all` 合并口径） |
 | `comfy.*` | `gen` · 5s · 15min · `requireVip` | 改图（v0.51 纠偏：ComfyDock 探 `/api/summary`，非面板首页） |
 | `media.*` | MOSS/TTS 2.5s·10min · Tagger 1.5s·3min · `translate` 快档 | 生图 / 语音 / 反推 + 自动翻译（日语人称 わたし / きみ，代码兜底 `normalizeJapanesePronouns`） |
+| `intent.*` | `llm:false` · 15s · 800 tok | **意图判断（N6 第一刀·影子判断器）**——群消息判 `chat` / `instruct` / `generate`；`llm` = 仅规则判不准时是否交 LLM 复核（影子期默认关 = 零外部调用）。落点 `app/src/navigator/intent.js` |
+| `ingress.*` | `mode:'shadow'` · `allow:[]` · `viaHub:true` | **群消息接入（N6 第二刀）**——`shadow` 只落采集行（`app/data/metrics/intent-<日期>.jsonl`）零行为；`live` 由判断器直调领航员，切换前须先跑出影子基线；`allow` 逐类放行（`switch` / `readonly` / `shot` / `generate` / `session` / `send`，空 = 全放行）；`viaHub` = 事件入口由业务面分发中心单点扇出（两条 `onEvent` 订阅会跑两遍判断） |
+| `persona.*` | `roleDir:'role'` | **话术 / 教材自持（N6 清单 #4）**——三级回落：业务面 `roleText` → `role/*.md` → 内置最小集；换源一律 `log.warn` 出声，不静默降级 |
 
 ---
 
@@ -94,11 +99,14 @@ QQ 群 = CH4 猫群的**外部指挥台**：群内下指令 → 投给某只猫 
 | 截图渲染（CH4 会话卡同源样式） | `navigator/shot.js` · `md.js` · `chat-card.css` · `fonts/` |
 | 改图 | `navigator/comfy.js` |
 | 生图 / 语音 / 反推 / 翻译 / 人称归一 | `navigator/media.js` |
+| 意图判断器（N6 第一刀·影子判断） | `navigator/intent.js` |
+| 群消息接入（N6 第二刀·shadow / live 分流） | `navigator/ingress.js` |
+| 话术 / 教材三级回落 | `navigator/persona.js` · `role/nav-rules.md` |
 | 业务面工具 | `tools/navigator/nav-tools.js` |
 | 业务面补丁（VIP 免闸 / 教材） | `tools/patch-qqagent-navigator.mjs` · `apply-qqagent-config.mjs`（`NAV_QUICK`） |
 | 领航员完整教材（按需文件） | `role/nav-rules.md`（B23 后 roleText 只留路由索引，模型用 `read_file` 取件） |
-| 界面 | `app/ui/`（「领航员」页签 + 活动流 40 条） |
-| 自测 | `tools/verify-navigator.mjs`（62/62）· `verify-qqagent-navtools.mjs`（19/19）· `verify-comfy.mjs` · `verify-media.mjs` |
+| 界面 | `app/ui/`（「领航员」页签 + 活动流 40 条）；**R5 起界面分块**——13 个页签（7 个新页：会话 / 存档 / 记忆 / 用量 / 技能 / 插件 / 业务设置归 `app/ui/views/*.js` 各一块，`_shell.js` 挂 `window.__ui` 并接管导航），既有 6 页仍是 `app/ui/app.js`；业务面数据经单体 `/api/biz/*` 代理层取（`app/src/web/business-proxy.js`） |
+| 自测 | `tools/verify-navigator.mjs`（62/62，v0.98 后 63/63）· `verify-qqagent-navtools.mjs`（19/19）· `verify-comfy.mjs` · `verify-media.mjs` · `verify-intent.mjs`（41/41）· `verify-ingress.mjs`（33/33）· `verify-persona.mjs`（27/27）· **R5 新增** `tools/verify-ui-contract.mjs`（前端分块契约静态断言） |
 
 ---
 

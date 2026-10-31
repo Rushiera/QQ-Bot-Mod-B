@@ -289,7 +289,10 @@ const navReset = createNavigator({
   config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
   onebot: { call: async () => ({}), status: () => ({ self: { userId: 2405997337 } }) }
 });
-const resetBody = await navReset.api['POST /api/nav/reset']({ body: { key: 'no-such-cat-selftest', text: '__selftest__ 告诉他 Y' } });
+// 🔴 dryRun 必传（2026-10-31 修）：不传即真跑 resetSession——它会挑一只空闲猫当代读猫并先
+//    `cat.new-session` 清掉那只猫的前文。目标 key 是假名也拦不住（resolveKey 解析不到原样返回）。
+//    本用例只证「入口没丢 text 参数」，干跑回执同样回显 text，断言无需改。
+const resetBody = await navReset.api['POST /api/nav/reset']({ body: { key: 'no-such-cat-selftest', text: '__selftest__ 告诉他 Y', dryRun: true } });
 check('nav_reset·带 text 回执回显', resetBody?.body?.text === '__selftest__ 告诉他 Y', JSON.stringify(resetBody?.body ?? {}).slice(0, 90));
 const resetSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
 check('nav_reset·源码投递段在位', resetSrc.includes('ch4.send(resolved, userText)') && resetSrc.includes('用户原话已投递'));

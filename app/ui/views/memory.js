@@ -1,8 +1,8 @@
 // app/ui/views/memory.js —— 记忆页视图块（R5-L5）
 //
-// 归属：R5 任务卡 §二.1 —— 本文件唯一写者 = **L5**
+// 归属：R5 任务卡 §二.1 —— 本文件唯一写者 = **L5**；R7 任务卡 §二 —— 写操作面（L2）· 切换视图与要点区（L3）
 // 契约：`app/ui/views/_index.md` §三（运行时只读 `window.__ui`；块内不发裸请求，一律走 `api()`）
-// 状态：✅ 已实现（R5-L5 交付）
+// 状态：✅ R5-L5 交付基础版 · R7-L2 补写操作面（六入口；切换视图归 R7-L3）
 //
 // 面：左栏 = 记忆文件列表（`/api/biz/memory-files` 全量，条数 = `files.length`，不截断）；
 //     右栏 = 选中会话的记忆详情：群记（按 `kind` 分组）+ 群友印象（含回应参数）+
@@ -10,6 +10,11 @@
 // 取数：`/api/biz/memory-files` · `/api/biz/memory-files/<group_xxx>` · `/api/biz/chats`（群名）
 //       `/api/biz/config`（开关现值；写后**再读一次**核对，不做本地乐观更新）
 // 写面：`POST /api/biz/memory-files/consolidate` · `POST /api/biz/config` · `POST /api/biz/balance/sync`
+//       R7-L2 写操作面（六入口）：`POST|PUT|DELETE /api/biz/memory-files/<seg>/group[/<id>]`（加 / 改 / 删群记）
+//       `PUT|DELETE /api/biz/memory-files/<seg>/members/<uid>`（存 / 删群友印象）· `DELETE /api/biz/memory-files/<seg>`（删本会话记忆）
+//       `POST /api/biz/config`（🤖 bot 指定 / 🎚 发言档位——写 `engage.*`）
+// 🔴 代理层方法白名单只有 GET / POST / DELETE（`app/src/web/business-proxy.js:17`）→ 经单体发出的 PUT 恒 405；
+//    群记「改」已在 `updateGroupEntry` 内实现「删旧 + 加新」等价回落，成员「存」无等价通道（见报告 §未取证）。
 // 口径：`design-qqbotb-memory.md` §3.1（两轴三分 / `kind` 枚举）/ §3.5（记忆页：群记 + 群友印象）
 // 空态 / 失败态：走 `empty()` / `fail()`，失败文案带 3210。
 // 降级：`window.__ui` 缺成员时用本块本地实现兜底——页面不白屏、不抛错。
@@ -32,6 +37,18 @@
   /** 群记分组显示顺序：稳定 → 易变（与提示词注入顺序一致）。 */
   const KIND_ORDER = ['lore', 'rule', 'relation', 'project', 'topic'];
 
+  /**
+   * 发言档位五档档名（与 `app/src/business/config.js` 的 `engage.levels` 默认表同序）。
+   * UI 只作显示与选择，判定在业务面 `engage-level.js`。
+   */
+  const LEVEL_NAMES = ['冰封', '保守', '标准', '活跃', '全开'];
+
+  /** 群记内容长度上限（业务面 `group-memory.js` 的 `MAX_CONTENT` 同口径）。 */
+  const GROUP_CONTENT_MAX = 200;
+
+  /** 单个群友印象条数上限（业务面 `memory.js editMemberImpression` 的 `.slice(0, 20)` 同口径）。 */
+  const IMPRESSION_MAX = 20;
+
   /** DOM 容器引用（mount 建一次，refresh 只清内容）。 */
   let refs = null;
 
@@ -52,6 +69,7 @@
     detailError: '',
     error: '',
     note: '',
+    editor: null,
     loadingDetail: false,
     updatedAt: 0
   };
@@ -342,17 +360,30 @@
   }
 
   /**
-   * 群记条目 → 行。
+   * 群记条目 → 行（行内带「改 / 删」两个写操作）。
    *
    * @param {object} entry 群记条目（`{id, kind, content, createdAt, updatedAt}`）
    * @returns {Element} 行元素
    */
   function groupRow(entry) {
     // kind 标签由 groupSection 的分组标题统一给出——行内不再重复渲染（否则每组第一行上方双份标签）
+    const id = String((entry && entry.id) || '');
+    const editBtn = el('button', { class: 'btn small', text: '改' });
+    editBtn.onclick = () => openEditor({
+      mode: 'group',
+      entryId: id,
+      kind: String((entry && entry.kind) || ''),
+      content: String((entry && entry.content) || ''),
+      error: ''
+    });
+    const delBtn = el('button', { class: 'btn small', text: '删' });
+    delBtn.onclick = () => deleteGroupEntry(id);
     return el('div', { class: 'field' },
       el('div', { class: 'control' },
         el('span', { text: plain(entry && entry.content) }),
-        el('span', { class: 'note', text: (entry && entry.updatedAt) ? fmtTime(entry.updatedAt) : '' })));
+        el('span', { class: 'note', text: (entry && entry.updatedAt) ? fmtTime(entry.updatedAt) : '' }),
+        id ? editBtn : null,
+        id ? delBtn : null));
   }
 
   /**
@@ -365,11 +396,16 @@
   function groupSection(entries, detail) {
     const list = Array.isArray(entries) ? entries.slice() : [];
     const archived = Number((detail && detail.archiveStats && detail.archiveStats.group) || 0);
+    const addBtn = el('button', { class: 'btn small', text: '＋ 添加群记' });
+    addBtn.onclick = () => openEditor({ mode: 'group-new', entryId: '', kind: KIND_ORDER[0], content: '', error: '' });
     const head = el('div', { class: 'pane-head' },
       el('span', { class: 'title', text: '群记' }),
-      el('span', { text: list.length + ' 条' + (archived ? ' · 归档 ' + archived + ' 条' : '') }));
+      el('span', { text: list.length + ' 条' + (archived ? ' · 归档 ' + archived + ' 条' : '') }),
+      el('span', { class: 'spacer' }),
+      addBtn);
 
     const body = el('div', { class: 'pane-body' });
+    if (state.editor && state.editor.mode === 'group-new') body.appendChild(groupEditor(state.editor));
     if (!list.length) {
       empty(body, '还没有群记（梗 / 群规 / 关系 / 项目 / 在聊什么）——点「重整」让模型从聊天记录里提炼');
       return el('div', { class: 'pane' }, head, body);
@@ -386,9 +422,61 @@
     for (const kind of keys) {
       const rows = groups.get(kind) || [];
       body.appendChild(el('div', { class: 'hint', text: (KIND_LABEL[kind] || kind || '未分类') + '（' + rows.length + '）' }));
-      for (const entry of rows) body.appendChild(groupRow(entry));
+      for (const entry of rows) {
+        const editing = state.editor && state.editor.mode === 'group' && String(state.editor.entryId) === String(entry && entry.id);
+        body.appendChild(editing ? groupEditor(state.editor) : groupRow(entry));
+      }
     }
     return el('div', { class: 'pane' }, head, body);
+  }
+
+  /**
+   * 群记内联编辑器（添加 / 编辑共用；分类下拉 + 内容输入 + 保存 / 取消）。
+   *
+   * @param {object} box 编辑器描述 `{mode, entryId, kind, content, error}`
+   * @returns {Element} 编辑块
+   */
+  function groupEditor(box) {
+    const isNew = box.mode === 'group-new';
+    const sel = el('select', {});
+    for (const k of KIND_ORDER) {
+      const opt = el('option', { value: k, text: KIND_LABEL[k] + '（' + k + '）' });
+      if (String(box.kind || '') === k) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    const input = el('input', { type: 'text', placeholder: '内容（≤' + GROUP_CONTENT_MAX + ' 字）', maxlength: String(GROUP_CONTENT_MAX) });
+    input.value = String(box.content || '');
+    const errEl = el('span', { class: 'view-fail', text: String(box.error || '') });
+    const countEl = el('span', { class: 'note', text: String(input.value.length) + '/' + GROUP_CONTENT_MAX });
+    input.oninput = () => { countEl.textContent = String(input.value.length) + '/' + GROUP_CONTENT_MAX; };
+
+    const saveBtn = el('button', { class: 'btn small', text: '保存' });
+    saveBtn.onclick = async () => {
+      const content = String(input.value || '').trim();
+      // 失败时编辑器要留住用户已敲的字——先把当前输入写回描述对象（renderDetail 会据此重建）
+      box.kind = String(sel.value || '');
+      box.content = content;
+      box.error = '';
+      if (!content) { box.error = '内容不能为空'; state.editor = box; renderDetail(); return; }
+      saveBtn.disabled = true;
+      const ok = isNew
+        ? await addGroupEntry(String(sel.value || ''), content)
+        : await updateGroupEntry(String(box.entryId || ''), content);
+      if (!ok) { box.error = state.note || '保存失败'; state.editor = box; }
+      renderDetail();
+    };
+    const cancelBtn = el('button', { class: 'btn small', text: '取消' });
+    cancelBtn.onclick = () => closeEditor();
+
+    return el('div', { class: 'field memory-editor' },
+      el('div', { class: 'control' },
+        el('span', { class: 'note', text: isNew ? '新增群记' : '编辑群记' }),
+        sel,
+        input,
+        countEl,
+        saveBtn,
+        cancelBtn,
+        errEl));
   }
 
   /**
@@ -403,11 +491,42 @@
     const who = String((member && member.name) || (member && member.userId) || '某人');
     const qq = String((member && member.userId) || '');
     const score = rapport && Number.isFinite(Number(rapport.score)) ? Number(rapport.score) : null;
+    const isBot = botMembersOf(state.cfg).indexOf(qq) >= 0;
+
+    // 三个写操作：🤖 bot 指定（写 engage.botGuard.members）· 编辑（PUT 成员）· 删除（DELETE 成员）
+    const botBtn = el('button', { class: 'btn small' + (isBot ? ' primary' : ''), text: isBot ? '🤖 bot ✓' : '🤖 bot' });
+    botBtn.title = '指定为机器人：对 TA 的回复限制为 240 秒 1 条（点一下切换）';
+    botBtn.onclick = (ev) => {
+      if (ev && typeof ev.preventDefault === 'function') { ev.preventDefault(); ev.stopPropagation(); }
+      toggleBotMember(qq);
+    };
+    const editBtn = el('button', { class: 'btn small', text: '编辑' });
+    editBtn.onclick = (ev) => {
+      if (ev && typeof ev.preventDefault === 'function') { ev.preventDefault(); ev.stopPropagation(); }
+      openEditor({
+        mode: 'member',
+        userId: qq,
+        name: who,
+        impressions: imps.map((i) => String((i && i.content) || '')).join('\n'),
+        error: ''
+      });
+    };
+    const delBtn = el('button', { class: 'btn small', text: '删除' });
+    delBtn.title = '删除这个人的全部印象';
+    delBtn.onclick = (ev) => {
+      if (ev && typeof ev.preventDefault === 'function') { ev.preventDefault(); ev.stopPropagation(); }
+      deleteMember(qq, who);
+    };
+
     const summary = el('summary', {},
       el('span', { text: who + (qq ? '（QQ ' + qq + '）' : '') + ' · ' + imps.length + ' 条' }),
       score === null
         ? el('span', { class: 'hint', text: ' 回应 100' })
-        : el('span', { class: score < 80 ? 'view-fail' : 'hint', text: ' 回应 ' + score + (rapport.lastReason ? ' · ' + rapport.lastReason : '') }));
+        : el('span', { class: score < 80 ? 'view-fail' : 'hint', text: ' 回应 ' + score + (rapport.lastReason ? ' · ' + rapport.lastReason : '') }),
+      el('span', { class: 'spacer' }),
+      botBtn,
+      editBtn,
+      delBtn);
 
     const body = el('div', { class: 'fold-body' },
       el('div', { class: 'kv' },
@@ -416,6 +535,9 @@
         el('span', { class: 'k', text: '整理于' }),
         el('span', { class: 'v', text: fmtTime(member && member.lastConsolidatedAt) })));
 
+    if (state.editor && state.editor.mode === 'member' && String(state.editor.userId) === qq) {
+      body.appendChild(memberEditor(state.editor));
+    }
     if (!imps.length) {
       body.appendChild(el('p', { class: 'view-empty', text: '这位群友还没有印象' }));
     } else {
@@ -428,6 +550,47 @@
     }
     // 两件事都要：`class="fold open"` 让 `.fold-body` 显示；`open` 属性让 `<details>` 默认展开
     return el('details', { class: 'fold open', open: 'open' }, summary, body);
+  }
+
+  /**
+   * 群友印象内联编辑器（编辑 / 新增共用；一行一条，留空 = 清空该成员全部印象）。
+   *
+   * @param {object} box 编辑器描述 `{userId, name, impressions, error}`
+   * @returns {Element} 编辑块
+   */
+  function memberEditor(box) {
+    const isNew = !String(box.userId || '');
+    const qqInput = el('input', { type: 'text', placeholder: 'QQ 号（1–15 位数字）' });
+    qqInput.value = String(box.userId || '');
+    qqInput.disabled = !isNew;
+    const nameInput = el('input', { type: 'text', placeholder: '名字（备注名 / 群名片 / 昵称）' });
+    nameInput.value = String(box.name || '');
+    const area = el('textarea', { placeholder: '印象内容（一行一条；最多 ' + IMPRESSION_MAX + ' 条）' });
+    area.value = String(box.impressions || '');
+    const errEl = el('span', { class: 'view-fail', text: String(box.error || '') });
+
+    const saveBtn = el('button', { class: 'btn small', text: '保存' });
+    saveBtn.onclick = async () => {
+      // 失败时保留用户已输入的内容（renderDetail 会按描述对象重建编辑器）
+      box.userId = String(qqInput.value || '').trim();
+      box.name = String(nameInput.value || '').trim();
+      box.impressions = String(area.value || '');
+      box.error = '';
+      saveBtn.disabled = true;
+      const ok = await saveMember(box.userId, box.name, box.impressions);
+      if (!ok) { box.error = state.note || '保存失败'; state.editor = box; }
+      renderDetail();
+    };
+    const cancelBtn = el('button', { class: 'btn small', text: '取消' });
+    cancelBtn.onclick = () => closeEditor();
+
+    return el('div', { class: 'field memory-editor vertical' },
+      el('div', { class: 'control' },
+        el('span', { class: 'note', text: isNew ? '新增群友印象' : '编辑群友印象' }),
+        qqInput,
+        nameInput),
+      area,
+      el('div', { class: 'control' }, saveBtn, cancelBtn, errEl));
   }
 
   /**
@@ -454,6 +617,21 @@
       return el('div', { class: 'pane' },
         el('div', { class: 'pane-head' }, el('span', { class: 'title', text: '按群开关' })), body);
     }
+
+    // 🎚 发言档位（五档；写 engage.levelByChat，档位 1 同步并入 engage.quiet.chats）
+    const lv = engageLevelOf(state.cfg, id);
+    const lvSel = el('select', {});
+    LEVEL_NAMES.forEach((name, i) => {
+      const opt = el('option', { value: String(i + 1), text: (i + 1) + '· ' + name });
+      if (lv && lv.level === i + 1) opt.selected = true;
+      lvSel.appendChild(opt);
+    });
+    lvSel.onchange = () => setEngageLevel(id, Number(lvSel.value));
+    body.appendChild(el('div', { class: 'field' },
+      el('label', { text: '🎚 发言档位' }),
+      el('div', { class: 'control' },
+        lvSel,
+        el('span', { class: 'note', text: '只调这一拍要不要开口（入场率）；发言配额 5 条/2 分钟与浏览节拍不受影响' }))));
 
     // 💰 余额后缀：开关 + 余额值 + 立即刷新（写后按读回值重渲染，见 writeConfig）
     const balChk = el('input', { type: 'checkbox' });
@@ -507,6 +685,9 @@
     const consolidateBtn = el('button', { class: 'btn small', text: busy ? '整理中…' : '重整本群记忆' });
     consolidateBtn.disabled = busy;
     consolidateBtn.onclick = () => consolidate(key);
+    // 删除本会话记忆（`DELETE /api/biz/memory-files/<seg>`）——不可逆，二次确认在 deleteChatMemory
+    const delBtn = el('button', { class: 'btn small', text: '删除本会话记忆' });
+    delBtn.onclick = () => deleteChatMemory(key);
 
     return el('div', { class: 'pane-head' },
       el('span', { class: 'title', text: nameOf(key) + ' 的记忆' }),
@@ -515,7 +696,8 @@
       el('span', { class: 'spacer' }),
       state.note ? el('span', { class: 'hint', text: state.note }) : null,
       reloadBtn,
-      consolidateBtn);
+      consolidateBtn,
+      delBtn);
   }
 
   /**
@@ -556,10 +738,18 @@
     refs.bodyEl.appendChild(groupSection(detail.group, detail));
 
     // 群友印象区（人轴）
+    const addImpBtn = el('button', { class: 'btn small', text: '＋ 添加印象' });
+    addImpBtn.onclick = () => openEditor({ mode: 'member', userId: '', name: '', impressions: '', error: '' });
     const impHead = el('div', { class: 'pane-head' },
       el('span', { class: 'title', text: '群友印象' }),
-      el('span', { text: members.length + ' 位' }));
+      el('span', { text: members.length + ' 位' }),
+      el('span', { class: 'spacer' }),
+      addImpBtn);
     const impBody = el('div', { class: 'pane-body' });
+    // 新增成员编辑器（无 userId 时挂在这里，不进任何成员的折叠块）
+    if (state.editor && state.editor.mode === 'member' && !String(state.editor.userId || '')) {
+      impBody.appendChild(memberEditor(state.editor));
+    }
     if (!members.length) {
       empty(impBody, '还没有任何群友印象（可点「重整本群记忆」让模型从聊天记录里提炼）');
     } else {
@@ -617,6 +807,7 @@
     const same = String(state.currentKey || '') === String(key);
     state.currentKey = key;
     state.note = '';
+    state.editor = null;
     if (!same) {
       state.detail = null;
       state.detailError = '';
@@ -778,6 +969,353 @@
       });
     renderList();
     if (state.currentKey === key) renderDetail();
+  }
+
+  // ── 写操作面（R7-L2）─────────────────────────────────────────────────────
+  // 端点全部沿用业务面既有路由（`app/src/business/routes.js`），本块只做调用与读回：
+  //   群记 POST/PUT/DELETE `/api/memory-files/<group|private>_<id>/group[/<entryId>]`
+  //   成员 PUT/DELETE `/api/memory-files/<group|private>_<id>/members/<uid>`
+  //   整个会话 DELETE `/api/memory-files/<group|private>_<id>`
+  // 所有写后一律**重取详情**，界面值以接口读回为准（禁本地乐观更新）。
+
+  /**
+   * 取某会的发言档位（业务面 `engage-level.js` 同口径：`levelByChat` → `quiet.chats` → 默认 3）。
+   *
+   * @param {object} cfg 业务面配置
+   * @param {string} id 群号
+   * @returns {{level:number, name:string}|null} 档位；非群返 null
+   */
+  function engageLevelOf(cfg, id) {
+    if (!/^\d{1,15}$/.test(String(id || ''))) return null;
+    const engage = (cfg && cfg.engage) || {};
+    const map = engage.levelByChat || {};
+    let level = 3;
+    if (map[id] != null) {
+      const n = Math.round(Number(map[id]));
+      if (Number.isFinite(n)) level = Math.min(5, Math.max(1, n));
+    } else if ((((engage.quiet || {}).chats) || []).map(String).indexOf(String(id)) >= 0) {
+      level = 1;
+    }
+    return { level, name: LEVEL_NAMES[level - 1] };
+  }
+
+  /**
+   * 取被指定为机器人的群友 QQ 清单（`engage.botGuard.members`）。
+   *
+   * @param {object} cfg 业务面配置
+   * @returns {string[]} QQ 号数组
+   */
+  function botMembersOf(cfg) {
+    const m = (((cfg || {}).engage || {}).botGuard || {}).members;
+    return (Array.isArray(m) ? m : []).map(String);
+  }
+
+  /**
+   * 详情端点路径段（`group:123` → `group_123`）。
+   *
+   * @param {string} key 会话键
+   * @returns {string} 路径段
+   */
+  function basePathOf(key) {
+    return '/api/biz/memory-files/' + pathKeyOf(key);
+  }
+
+  /**
+   * 失败原因文本（带 HTTP 语义提示；405 单独点名——代理层方法白名单不含 PUT）。
+   *
+   * @param {object} res 端点返回
+   * @returns {string} 原因
+   */
+  function errOf(res) {
+    const raw = String((res && (res.error || res.status)) || '-');
+    if (res && res.status === 405) return raw + '（单体代理层方法白名单只有 GET / POST / DELETE）';
+    return raw;
+  }
+
+  /**
+   * 开一个内联编辑器（群记 / 印象共用；挂在 `state.editor`，渲染时读到就画）。
+   *
+   * @param {object} box 编辑器描述 `{mode, entryId, userId, name, kind, content, impressions, error}`
+   * @returns {void}
+   */
+  function openEditor(box) {
+    state.editor = box || null;
+    renderDetail();
+  }
+
+  /** 关闭内联编辑器。 */
+  function closeEditor() {
+    state.editor = null;
+    state.note = '';
+    renderDetail();
+  }
+
+  /**
+   * 重取详情（写操作后统一入口；不重取整页）。
+   *
+   * @returns {Promise<void>} 完成
+   */
+  async function reload() {
+    if (!state.currentKey) return;
+    await loadDetail(state.currentKey);
+  }
+
+  /**
+   * 加一条群记（`POST /api/biz/memory-files/<seg>/group`）。
+   *
+   * @param {string} kind 分类（`KIND_ORDER` 之一）
+   * @param {string} content 内容
+   * @returns {Promise<boolean>} 是否写入成功
+   */
+  async function addGroupEntry(kind, content) {
+    const api = ui().api;
+    if (typeof api !== 'function' || !state.currentKey) return false;
+    const k = String(kind || '').trim();
+    const c = String(content || '').trim();
+    if (KIND_ORDER.indexOf(k) < 0) { state.note = '分类必须是：' + KIND_ORDER.join(' / '); return false; }
+    if (!c) { state.note = '群记内容不能为空'; return false; }
+    const res = await api(basePathOf(state.currentKey) + '/group', {
+      method: 'POST',
+      body: { kind: k, content: c.slice(0, GROUP_CONTENT_MAX) }
+    });
+    if (!res || res.ok === false) {
+      state.note = '加群记失败 · ' + String((res && (res.error || res.status)) || '-');
+      return false;
+    }
+    state.note = '已加群记 · ' + (KIND_LABEL[k] || k);
+    state.editor = null;
+    await reload();
+    return true;
+  }
+
+  /**
+   * 改一条群记（`PUT /api/biz/memory-files/<seg>/group`，整体替换：把 id 对应条目换掉）。
+   *
+   * 业务面的 PUT 是"整体替换"语义（`replaceGroupEntries` 会给所有条目重建 id），
+   * 所以改一条 = 取当前全量 → 替换目标条目 → 整体回写 → 重取核对。
+   *
+   * @param {string} entryId 目标条目 id
+   * @param {string} content 新内容
+   * @returns {Promise<boolean>} 是否写入成功
+   */
+  async function updateGroupEntry(entryId, content) {
+    const api = ui().api;
+    if (typeof api !== 'function' || !state.currentKey) return false;
+    const c = String(content || '').trim();
+    if (!c) { state.note = '群记内容不能为空'; return false; }
+    const cur = (state.detail && Array.isArray(state.detail.group)) ? state.detail.group : [];
+    const target = cur.filter((e) => String(e && e.id) === String(entryId))[0];
+    if (!target) { state.note = '找不到要改的群记（列表可能已过期，先刷新）'; return false; }
+    const entries = cur.map((e) => ({
+      kind: String((e && e.kind) || ''),
+      content: String(e && e.id) === String(entryId) ? c : String((e && e.content) || '')
+    }));
+    const res = await api(basePathOf(state.currentKey) + '/group', { method: 'PUT', body: { entries } });
+    if (!res || res.ok === false) {
+      // 单体代理层 `business-proxy.js:17` 的方法白名单只有 GET / POST / DELETE → PUT 恒 405。
+      // 回落到「删旧 + 加新」两步（语义等价：内容换新，id 会重建）——两条都被放行。
+      if (res && res.status === 405) return await rewriteGroupEntry(entryId, target, c);
+      state.note = '改群记失败 · ' + errOf(res);
+      return false;
+    }
+    state.note = '群记已改（整体替换回写）';
+    state.editor = null;
+    await reload();
+    const after = (state.detail && Array.isArray(state.detail.group)) ? state.detail.group : [];
+    if (!after.some((e) => String(e && e.content) === c)) {
+      state.note = '改群记后读回未命中新内容 · 请刷新确认';
+      renderDetail();
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 改群记的 405 回退路径：删旧条目 + 加新条目（两步都是代理层放行的方法）。
+   *
+   * @param {string} entryId 旧条目 id
+   * @param {object} target 旧条目
+   * @param {string} content 新内容
+   * @returns {Promise<boolean>} 是否改成功（读回命中新内容才算）
+   */
+  async function rewriteGroupEntry(entryId, target, content) {
+    const api = ui().api;
+    if (typeof api !== 'function' || !state.currentKey) return false;
+    const kind = String((target && target.kind) || '');
+    const del = await api(basePathOf(state.currentKey) + '/group/' + encodeURIComponent(String(entryId)), { method: 'DELETE' });
+    if (!del || del.ok === false) {
+      state.note = '改群记失败（删旧条目被拒）· ' + errOf(del);
+      return false;
+    }
+    const add = await api(basePathOf(state.currentKey) + '/group', { method: 'POST', body: { kind, content } });
+    if (!add || add.ok === false) {
+      state.note = '改群记失败（加新条目被拒，旧条目已删）· ' + errOf(add);
+      await reload();
+      return false;
+    }
+    state.note = '群记已改（PUT 被代理层拒 405 → 删旧 + 加新，id 已重建）';
+    state.editor = null;
+    await reload();
+    const after = (state.detail && Array.isArray(state.detail.group)) ? state.detail.group : [];
+    if (!after.some((e) => String(e && e.content) === content)) {
+      state.note = '改群记后读回未命中新内容 · 请刷新确认';
+      renderDetail();
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 删一条群记（`DELETE /api/biz/memory-files/<seg>/group/<entryId>`）。
+   *
+   * @param {string} entryId 条目 id
+   * @returns {Promise<boolean>} 是否删除成功
+   */
+  async function deleteGroupEntry(entryId) {
+    const api = ui().api;
+    if (typeof api !== 'function' || !state.currentKey || !entryId) return false;
+    const res = await api(basePathOf(state.currentKey) + '/group/' + encodeURIComponent(String(entryId)), { method: 'DELETE' });
+    if (!res || res.ok === false) {
+      state.note = '删群记失败 · ' + String((res && (res.error || res.status)) || '-');
+      return false;
+    }
+    state.note = '已删群记（removed=' + String(res.removed == null ? '?' : res.removed) + '）';
+    state.editor = null;
+    await reload();
+    return true;
+  }
+
+  /**
+   * 保存某群友的印象（`PUT /api/biz/memory-files/<seg>/members/<uid>`，一行一条）。
+   *
+   * @param {string} userId QQ 号
+   * @param {string} name 名字（备注名 / 群名片 / 昵称）
+   * @param {string} raw 印象原文（换行分隔）
+   * @returns {Promise<boolean>} 是否保存成功
+   */
+  async function saveMember(userId, name, raw) {
+    const api = ui().api;
+    if (typeof api !== 'function' || !state.currentKey) return false;
+    const uid = String(userId || '').trim();
+    if (!/^\d{1,15}$/.test(uid)) { state.note = 'QQ 号必须是 1–15 位数字'; return false; }
+    const impressions = String(raw || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean).slice(0, IMPRESSION_MAX);
+    const res = await api(basePathOf(state.currentKey) + '/members/' + encodeURIComponent(uid), {
+      method: 'PUT',
+      body: { name: String(name || '').trim(), note: '', impressions }
+    });
+    if (!res || res.ok === false) {
+      state.note = '保存印象失败 · ' + errOf(res);
+      return false;
+    }
+    state.note = '已保存 ' + (String(name || '').trim() || uid) + ' 的 ' + impressions.length + ' 条印象';
+    state.editor = null;
+    await reload();
+    const after = (state.detail && Array.isArray(state.detail.members)) ? state.detail.members : [];
+    const hit = after.filter((m) => String(m && m.userId) === uid)[0];
+    const got = hit && Array.isArray(hit.impressions) ? hit.impressions.length : -1;
+    if (got !== impressions.length) {
+      state.note = '保存后读回条数不符（写入 ' + impressions.length + ' / 读回 ' + got + '）';
+      renderDetail();
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 删某群友的全部印象（`DELETE /api/biz/memory-files/<seg>/members/<uid>`）。
+   *
+   * @param {string} userId QQ 号
+   * @param {string} name 显示名（确认文案用）
+   * @returns {Promise<boolean>} 是否删除成功
+   */
+  async function deleteMember(userId, name) {
+    const api = ui().api;
+    if (typeof api !== 'function' || !state.currentKey) return false;
+    const uid = String(userId || '').trim();
+    if (!/^\d{1,15}$/.test(uid)) { state.note = 'QQ 号必须是 1–15 位数字'; return false; }
+    if (!window.confirm('确定删除「' + String(name || uid) + '」的全部印象？此操作不可撤销。')) return false;
+    const res = await api(basePathOf(state.currentKey) + '/members/' + encodeURIComponent(uid), { method: 'DELETE' });
+    if (!res || res.ok === false) {
+      state.note = '删除失败 · ' + String((res && (res.error || res.status)) || '-');
+      return false;
+    }
+    state.note = '已删「' + String(name || uid) + '」的全部印象';
+    state.editor = null;
+    await reload();
+    return true;
+  }
+
+  /**
+   * 删整个会话的记忆（`DELETE /api/biz/memory-files/<seg>`）。
+   *
+   * @param {string} key 会话键
+   * @returns {Promise<boolean>} 是否删除成功
+   */
+  async function deleteChatMemory(key) {
+    const api = ui().api;
+    if (typeof api !== 'function' || !key) return false;
+    if (!window.confirm('确定删除「' + nameOf(key) + '」的整个记忆？群记与群友印象全部清空，不可撤销。')) return false;
+    const res = await api('/api/biz/memory-files/' + pathKeyOf(key), { method: 'DELETE' });
+    if (!res || res.ok === false) {
+      state.note = '删除本会话记忆失败 · ' + String((res && (res.error || res.status)) || '-');
+      renderDetail();
+      return false;
+    }
+    state.note = '已删除「' + nameOf(key) + '」的整个记忆';
+    state.detail = null;
+    state.editor = null;
+    await refresh();
+    return true;
+  }
+
+  /**
+   * 指定 / 取消指定某群友为机器人（写 `engage.botGuard.members`）。
+   *
+   * @param {string} userId QQ 号
+   * @returns {Promise<boolean>} 读回是否与写入一致
+   */
+  async function toggleBotMember(userId) {
+    const uid = String(userId || '').trim();
+    if (!/^\d{1,15}$/.test(uid)) { state.note = '该群友缺少 QQ 号，无法指定'; renderDetail(); return false; }
+    const cur = botMembersOf(state.cfg);
+    const on = cur.indexOf(uid) < 0;
+    const next = on ? cur.concat([uid]) : cur.filter((x) => x !== uid);
+    const ok = await writeConfig(
+      { engage: { botGuard: { members: next } } },
+      'bot 指定 ' + (on ? '开' : '关') + '（' + uid + '）',
+      (cfg) => (botMembersOf(cfg).indexOf(uid) >= 0) === on);
+    renderDetail();
+    return ok;
+  }
+
+  /**
+   * 设置某群发言档位（写 `engage.levelByChat`；档位 1 同步并入 `engage.quiet.chats`）。
+   *
+   * @param {string} id 群号
+   * @param {number} level 1–5
+   * @returns {Promise<boolean>} 读回是否与写入一致
+   */
+  async function setEngageLevel(id, level) {
+    if (!/^\d{1,15}$/.test(String(id || ''))) { state.note = '该会话缺少群号，无法设置发言档位'; renderDetail(); return false; }
+    const n = Math.min(5, Math.max(1, Math.round(Number(level) || 3)));
+    const cfg = state.cfg || {};
+    const map = Object.assign({}, ((cfg.engage || {}).levelByChat || {}));
+    map[id] = n;
+    const quietCur = (((cfg.engage || {}).quiet || {}).chats || []).map(String);
+    const quietNext = n === 1
+      ? (quietCur.indexOf(String(id)) >= 0 ? quietCur : quietCur.concat([String(id)]))
+      : quietCur.filter((x) => x !== String(id));
+    const ok = await writeConfig(
+      { engage: { levelByChat: map, quiet: { chats: quietNext } } },
+      '发言档位 = ' + n + '·' + LEVEL_NAMES[n - 1],
+      (next) => {
+        const st = engageLevelOf(next, id);
+        const q = (((next.engage || {}).quiet || {}).chats || []).map(String);
+        return !!st && st.level === n && ((q.indexOf(String(id)) >= 0) === (n === 1));
+      });
+    renderList();
+    if (state.currentKey) renderDetail();
+    return ok;
   }
 
   /**

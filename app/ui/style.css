@@ -563,3 +563,36 @@ main { flex: 1; overflow: hidden; display: flex; }
 .settings-menu-item .list-item-sub { font-size: 11px; color: var(--muted); }
 
 .r5-list { flex: 1; min-height: 0; }
+
+/* R7-L2 · 记忆页写操作面（views/memory.js）——内联编辑器 + 行内按钮留白 */
+.memory-editor { align-items: flex-start; flex-wrap: wrap; border-bottom: 1px solid var(--accent); }
+.memory-editor.vertical { flex-direction: column; }
+.memory-editor.vertical > .control { width: 100%; }
+.memory-editor.vertical textarea {
+  width: 100%;
+  min-height: 90px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-family: Consolas, monospace;
+  font-size: 13px;
+  resize: vertical;
+}
+.memory-editor.vertical textarea:focus { outline: none; border-color: var(--accent); }
+.memory-editor input[type="text"],
+.memory-editor select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.memory-editor input[type="text"]:focus,
+.memory-editor select:focus { outline: none; border-color: var(--accent); }
+.memory-editor input[type="text"][disabled] { opacity: .6; }
+.pane-head .btn.small + .btn.small { margin-left: 6px; }
+.fold summary .btn.small { margin-left: 4px; }
+.btn.small.primary { border-color: var(--accent); color: var(--accent); }

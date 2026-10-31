@@ -60,6 +60,10 @@
 | `fail` | `fail(el, error) → void` | 渲染失败态（红字 + 原因），**不是**弹窗 |
 | `registerView` | `registerView(name, {title, mount, refresh}) → void` | 块自注册；`mount` 惰性（首次切页才调） |
 
+> 🔴 **`api()` 返回形态权威口径（CR 3.2 · R7-L4 定）**——代理层**原样透传业务面响应体，不额外包 `{ok, data}`**：成功时返回响应体本体，仅在 `ok` 缺省时补 `ok: true`（实现 `_shell.js:174-186`）。响应体非对象时包成 `{data: <原值>}`。
+> 故**业务面返回裸对象（无 `ok` 字段）时，调用方拿到的就是那个裸对象**（例：`GET /api/config` 返配置本体，`routes.js:738`）。
+> **取数一律按「两形态兼容」写**：先判 `res.ok === false` 为失败；取业务载荷用 `res.ok === undefined ? res : res.data ?? res`——直接读 `res.data` 在裸对象形态下取到 `undefined`，直接当 `res` 是业务对象用又会漏判包装形态（判例：`memory.js:237 pickConfig()` 即此兼容写法）。
+
 ### 3.2 块内必须自带的两个函数
 
 | 函数 | 契约 |

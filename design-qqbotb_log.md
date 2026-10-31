@@ -3400,7 +3400,7 @@ R喵喵：交接摘要已注入，等待确认
 
 | 面 | 文件 |
 |:--|:--|
-| 配置 | `app/src/config.js` —— `navigator.rescueCat: 'nav_rescue'`（`navigator.*` 键数以默认段实读为准，本行原记「16 → 17 键」属当时读数） |
+| 配置 | `app/src/config.js` —— `navigator.rescueCat: 'nav_rescue'`（`navigator.*` 键数以默认段实读为准，本行原记的旧读数已撤） |
 | 主流程 | `app/src/navigator/index.js` —— `rescueCatKey` 读取 · `pickRescueCat` 固定猫优先 · `rescueSummary` 开工清场 + 代读 · `resetSession` 固定走代读、`rescue` 退役（`void rescue`） |
 | 业务面工具 | `tools/navigator/nav-tools.js` —— `nav_reset` 描述 / `rescue` 参数说明 / 回执文案；补丁 `patch-qqagent-navigator.mjs` 落 `module-nav-tools: updated` |
 | 教材 | `tools/apply-qqagent-config.mjs`（`NAV_RULES` + `NAV_QUICK` 第 185 行）· `role/nav-rules.md` 两条 + 「别拿 nav_reset 顶」一条；`roleTextChars` 5271 → **5322**（`--roletext-only` 已落盘 `_unpack/data/config.json`） |
@@ -3437,7 +3437,7 @@ R喵喵：交接摘要已注入，等待确认
 
 | 面 | 实测源 | 结果 |
 |:--|:--|:--|
-| 配置 | `app/src/config.js` `navigator.*` | 键数以默认段实读为准（原记「17 键（含 `rescueCat`）」，2026-10-31 实读为 **20 个顶层键**，漏记 `intent` / `ingress` / `persona` 三组；与 `ref-navigator-map.md` §五 一致） |
+| 配置 | `app/src/config.js` `navigator.*` | 键数以默认段实读为准（2026-10-31 实读为 **20 个顶层键**，原记漏记三组：`intent` / `ingress` / `persona`；与 `ref-navigator-map.md` §五 一致） |
 | 工具面 | `tools/navigator/nav-tools.js` 14 处 `name:` | **14 件**（10 件 `nav_*` + 改图 / 生图 / 语音 / 反推）——与 §三 一致 |
 | 单体 API | `app/src/navigator/index.js` 路由表 | **15 条**——与 §四 一致 |
 | 会话态 | `app/src/navigator/state.js` 初值 | **10 字段** + `COMMAND_LOG_LIMIT=50`——与 §六 一致 |
@@ -3723,3 +3723,41 @@ R2-L4 基线 `verify-suite` 9/24，`verify-qqagent-boot` 是失败项。根因�
 2. **`server.js` 需加前缀兜底**（L9 的前置，6 行）——已写进卡，执行方来落。
 3. **观察数据零积累**——`并发待开工.md` §8.3.3 累计表五项全「未取数」，跑够轮次再升 CCBP。
 4. **认领无原子写**——文件级认领靠「重读 + cat.list」，多主干会话理论上仍有覆盖窗口；Rushiera 2026-10-31 裁：「majordomo 只能有一个」→ 前提不成立，登记为 O-1 观察，不设机制。
+
+## 八十七、R7 档案面收口（v1.05 · 2026-10-31 · 纯文档面）
+
+> 队列 **Q-001** · 轮次 R7 · 线 **L4** · 任务卡 `tasks/R7.md` §三 L4。零代码改动，写面只落文档与计数行。
+
+### A · 卡内冲突订正（`tasks/R6.md`）
+
+| 处 | 改前 | 改后 |
+|:--|:--|:--|
+| `:17` §0-2 第 2 条「禁改清单」 | 七件标「主干独占」，与 §二 写面表「同三件唯一写者 = L4」正面冲突 | 保留主干独占表述，尾补「🔴 **与本卡 §二 写面所有权表冲突时以 §二 为准**（§二 才是唯一权威，本行只表达『默认主干独占』）；**历史版本行永不在授权内**——`CHANGELOG.md` 的既往版本行属台账，改即伪造。」 |
+| `:56` §二「冲突矩阵」下方 | 只有冲突矩阵一句，无优先级声明 | 补引用块「🔴 **本表优先级（R7-L4 订正）**：§0-2 的『主干独占』与上表冲突时，**以本表为准**——上表才是写面唯一权威，§0-2 只表达默认归属。**历史版本行永不在授权内**。」 |
+
+### B · 群记 `kind` 标签显示口径（CR 3.3 · 权威口径）
+
+**口径：分组标题给 `kind`，行内只给 `content`。**
+
+- 原版每行左侧重复渲染一次 `kind` 标签（`_unpack/resources/app/ui/app/05-memory-settings.js:187-193`），与分组标题撞成**双份标签**——首轮实测确实双份。
+- R5-L5 已按最省改法处理：`app/ui/views/memory.js:350-356`（现 `groupRow` 在 `:363-382`）的 `kind` 标签由 `groupSection` 的分组标题统一给出，行内不再重复渲染。
+- **其余分组页面同口径**：凡用分组标题承载分类名的页面，行内不得再渲染同一个分类字段；同一界面里不并存两种排版。
+
+### C · 五面收口清单
+
+| # | 面 | 动作 |
+|:--:|:--|:--|
+| 1 | `tasks/R6.md` | §0-2 与 §二 冲突订正（见 A） |
+| 2 | 本文件 `:3403` / `:3440` | 两处旧读数（配置键数）改指针句，只留「键数以默认段实读为准 + 2026-10-31 实读 20 顶层键」——**本文件旧读数短语命中 0** |
+| 3 | `ref-navigator-map.md:6` | 头部 2026-10-30 复核条删旧键数，只留指针句（同段尾部已有 20 键订正） |
+| 4 | `app/ui/views/_index.md` §3.1 | 补 `api()` 返回形态权威口径（CR 3.2）：代理层原样透传、不额外包 `{ok,data}`，`ok` 缺省补 `ok:true`，非对象包 `{data}`；取数按两形态兼容写 |
+| 5 | `tasks/R5.md` §四 L5「必读」 | 行号订正（CR 3.1）：`:876`/`:1167`/`:1184`（设置页 / persona 选择器 / 健康卡片）→ 记忆页真实位置 `:59` / `:153`（含 `:184-199` · `:203-220` · `:243-258`）+ `routes.js:1326` 详情端点 |
+
+### D · 未动面与理由
+
+| 面 | 理由 |
+|:--|:--|
+| `CHANGELOG.md:104` / `:105` / `:110` | 历史版本行属台账，改即伪造（本轮 `git diff --stat` 该文件仅 `1 +`，历史行逐字未变） |
+| `reports/R5-L13.md:140` | 他人报告（一人一份） |
+| `reports/R5-L14.md:106` | 属 L14 写面，修它要动 `routes.js`（business 面），双越界 → 本轮只登记不修 |
+| `tasks/R5.md:321` | L9 段决策理由（「枚举 73 条 —— 违反枚举必漏，否」），数字不承载计数语义 |

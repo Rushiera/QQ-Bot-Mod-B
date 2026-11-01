@@ -27,7 +27,7 @@
 |:--|:--|:--|
 | `app/`（除 `app/data/`） | 自研单体（Electron）源码 / 界面 / 工具 | 代码真相源 |
 | `src/QQBotB.Collector/` | 卫星收集器（C#） | 代码真相源 |
-| `tools/` | 补丁链 / 生成器 / 自测脚本 | 可复现面 |
+| `tools/` | 补丁链 / 生成器 / 自测脚本 / 判据报表脚本（`engage-metrics-report.mjs` · `intent-metrics-report.mjs` · `audit-signal-wiring.mjs`） | 可复现面 |
 | `启动QQBotB.bat` / `.vbs` · `启动QQAgent.bat` / `.vbs` · `启动QQAgent-仅业务面.bat` / `.vbs` · `tools/entry.cmd` | 入口启动器（含生成器产物与单体启动体） | 入口可复现 |
 | `project.md` / `todo.md` / `CHANGELOG.md` / `glossary.md` / `design-*.md` / `design-*_log.md` / `ref-*.md` / `git-profile.md` | 项目档案面 | workspace 独立立项——档案随仓库走 |
 
@@ -52,9 +52,9 @@
 
 | 字段 | 值 |
 |:--|:--|
-| 上次同步时间 | 2026-11-01 20:1x |
-| 上次同步 commit | 本轮收工链 `907ea30`（代码+档案）→ `38eb61b`（本档案同步）→ `8a25f24`（todo 核销）；之后仅本档案行 |
-| 远程状态 | 与 origin 同步 |
+| 上次同步时间 | 2026-11-01 23:1x |
+| 上次同步 commit | `58ebee4`（v1.17 正文：A7 订正 + B31 重判 + 三支判据脚本）→ `eee2b9c`（todo 存量核销） |
+| 远程状态 | 与 origin 同步（`## main...origin/main` 无偏离） |
 
 ## 五、项目特有规则
 

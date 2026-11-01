@@ -3,10 +3,14 @@
 // 语义（Rushiera 2026-10-25 定）：回应参数只有"有没有人接"一个信号，太单一；
 // 这里把存档里本来就有的事实算成 6 个系数，合起来给参与率乘一个修正。
 //
-// 🔴 默认只采集不参与判定（config.engage.signals.enabled=false）——
-//    先跑几天看分布，确认系数不会把发言压成零，再决定启用。
-//    启用后也只做**乘法修正**（几何平均，下限 floor），不是硬闸：
+// 开关：config.engage.signals.enabled（2026-11-01 起默认 true，B31 甲案「先接线再启用」）。
+//    它只做**乘法修正**（几何平均，下限 floor），不是硬闸：
 //    单个信号偏低不会一票否决，多个同时偏低才平滑收敛。
+//    enabled=false 时调用方给 coef=1，整条链路退化为按档位 rate 掷骰（B31 前的原行为）。
+//
+// 接线点：orchestrator.js 的浏览拍参与判定（[qqagent-level-patch:signals-wiring]）。
+//    数据供给：messages = store.recent()（判定处现取）· hour = 当前时刻 ·
+//    costDay = 今日用量 × estimateCost（与 /api/status 同口径）· missStreak = 客观结算累计的连续未接拍。
 //
 // 六个信号的取值口径（全部只用存档里已有字段，不新增采集面）：
 //   share    我发言占比 = self / 总数。太高（存在感过强）→ 压；太低不奖励（避免抢话）。
@@ -71,9 +75,16 @@ export function computeSignals(messages, env = {}) {
 
 /**
  * 乘性合成：几何平均（六项等权），下限 floor。
- * @returns {number} 0 ~ 1.15 的系数（>1 表示这一拍鼓励开口）
+ *
+ * floor 取值按**实测量级**定（B31 判据 3）：六因子几何平均的最坏组合
+ * （share 0.5 · hour 0.5 · cost 0.7 · miss 0.5，at / ask 取 1）= 0.666；
+ * 单是深夜一项 = 0.891。旧的 0.15 永远够不着 —— 那不是下限，是死参数。
+ * 现取 0.65，落在最坏组合（0.666）正下方：它能兜住的只有「比最坏还坏」的组合
+ * （例如 miss 拍到 0.5 下限再叠深夜），不是为了继续压低。
+ *
+ * @returns {number} floor ~ 1.15 的系数（>1 表示这一拍鼓励开口）
  */
-export function compositeCoefficient(sig, floor = 0.15) {
+export function compositeCoefficient(sig, floor = 0.65) {
   const f = [
     sig && sig.shareFactor,
     sig && sig.atFactor,

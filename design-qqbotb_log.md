@@ -4251,3 +4251,79 @@ Rushiera 2026-11-01 拍 **甲案 = 先接线再启用**（弃乙案「维持 fal
 | `tools/engage-metrics-report.mjs` | engage 分布（roll / hit / 分档 / idle-due / 分群 / blocked）——参数 = metrics 目录 |
 | `tools/intent-metrics-report.mjs` | 影子采集行数与 `kind` / `action` / `via` / `result` 分布 |
 | `tools/audit-signal-wiring.mjs` | `signals` 接线审计——扫指定根下所有 `.js/.mjs` 找三个函数名的出现点 |
+
+---
+
+## 九十五、B31 客观信号接线落地（2026-11-01 · 甲案执行 · 主干直做）
+
+> 触发：Rushiera「上工 QQBotB，按 todo.md §〇-F 第 1 位 + B31 条目执行」；甲案已于 2026-11-01 拍板（§九十四 E），本轮只做接线与启用，不重推方案。
+> 定位：**代码面 + 配置面 + 自测面**。五条判据逐条兑现（判据 5 的一日复核属观察项，见 §D）。
+
+### A · 改动面（六个文件）
+
+| # | 文件 | 改动 |
+|:--:|:--|:--|
+| 1 | `app/src/business/engage-signals.js` | `compositeCoefficient(sig, floor)` 默认值 **0.15 → 0.65**；头部注释从「默认只采集」改为「默认启用 + 接线点 + 数据供给」；floor 段写明取值依据（最坏组合 0.666 / 单深夜 0.891） |
+| 2 | `app/src/business/engage-level.js` | `rollParticipation(chatKey, rand, coef)` 增第三参数；回执从 4 字段扩到 6（`rate` 改为**生效概率**，新增 `baseRate` 档位原值与 `coef` 生效系数）；**全开 / 冰封两端豁免**（rate≥1 与 rate≤0 直接返回，系数不参与——信号的意义是让中间档更省，不是重定义档位）；非法 coef 回落 1 |
+| 3 | `app/src/business/orchestrator.js` | ① import 加 `computeSignals / compositeCoefficient / signalSummary` 与 `todayKey`、`estimateCost` ② 构造函数增 `this.missStreak = new Map()` ③ 新增私有方法 `#signalCoefficient(chatKey)` 与 `#costDay()` ④ 客观结算块（`settleRapportWatch` 旁）写 missStreak ⑤ 判定处接线：`const sgn = this.#signalCoefficient(chatKey)` → `rollParticipation(chatKey, Math.random, sgn.coef)` ⑥ 采集行带 `baseRate` / `coef`，并增 `event:'signal'` 摘要行 ⑦ 未命中日志补「× 信号 0.79 → 48%」 |
+| 4 | `app/src/business/config.js` | 默认 `signals: { enabled: true, floor: 0.65 }`（原 `false` / `0.15`）+ 注释改写 |
+| 5 | `_unpack/data/config.json` | 现值同改 `enabled: true` / `floor: 0.65`（**数据配置不在 `app/` 源码面**，可直接改） |
+| 6 | `app/src/business/engage-metrics.js` | `record()` 注释补 `event` 四态口径（`roll` / `signal` / `blocked` / `sent`），`sent` 标「保留位，当前无产出点」 |
+
+**不动面**：`engage.quota`（5 条 / 2 分钟）· `engage.browse.levels`（240/120/60 秒）· 出站闸顺序 · 发送路径 · 五档 `rate` 配置值 —— 自测 §7 的正则断言仍在守。
+
+### B · 两个未知源的供给侧（判据 2）
+
+| 信号 | 供给方式 | 为什么这样取 |
+|:--|:--|:--|
+| `costDay` | `this.sessions.todayUsage(todayKey())` → `estimateCost(usage, {model})` | 与 `/api/status` 的 `cost` **同一口径**（`routes.js:102-105`），零新采集面。**加 60 秒缓存**：`todayUsage` 每次读盘，而节拍巡检按群逐拍调用——不缓存等于每个群每 1~4 分钟各读一次；成本档位（>50 / >100 元）不会秒级变化 |
+| `missStreak` | `settleRapportWatch()` 的 `hit` 分派：`hit → 0`，`miss → min(20, prev+1)` | 语义取**方案 ①「连续 N 拍 hit 但无回应」**（Rushiera 拍板）：没被接话才是要压的信号，纯拍不理会。判定不另建一套——回应参数的客观结算看的正是「@ / 引用 / 拍」，同一事实两处消费 |
+
+**missStreak 的两条边界**：① 只有「上一轮真发过话（`noteRapportOutbound` 有记录）且这一批到货被结算」时才动计数——没发过话就没有「接不接」可言；② 内存态，重启归零 = 该信号回到「不罚」，属可接受退化（不写盘、不新增采集面）。
+
+### C · floor 取值（判据 3）
+
+六因子几何平均的分布（实测推演，非采样）：
+
+| 组合 | 几何平均 |
+|:--|--:|
+| 全 1（理想） | 1.000 |
+| 单深夜项（hour 0.5，占八日样本 16%） | **0.891** |
+| 最坏组合（share 0.5 · hour 0.5 · cost 0.7 · miss 0.5） | **0.666** |
+| 实际最低可达（miss 拍到 0.5 下限再叠深夜 + 高成本） | ≈0.61 |
+
+`floor` 定 **0.65**：落在最坏组合（0.666）正下方——它兜住的只有「比最坏还坏」的组合，不是为了继续压低。旧的 0.15 永远够不着，是死参数（§九十四 D 已核算）。
+
+### D · 判据兑现
+
+| # | 判据 | 状态 | 证据 |
+|:--:|:--|:--:|:--|
+| 1 | 判定处接 `computeSignals → compositeCoefficient`，系数乘到 `rate` | ✅ | 自测 §6b 端到端：假 store 给 share 0.8 → 巡检真跑 → `roll` 行 `coef=0.794` / `baseRate=0.6` / `rate=0.476`；`audit-signal-wiring` 复跑：三函数消费方由 **0 → 5 处**（`orchestrator.js:67` import · `:2144` compute · `:2149` composite · `:2236` summary · `engage-level.js:80` 注释） |
+| 2 | 补 `costDay` / `missStreak` 数据供给 | ✅ | 自测 §7 两条在位断言；`#costDay` 60 秒缓存断言 |
+| 3 | `floor` 按实测量级重定 | ✅ | `0.15 → 0.65`；自测 §5 四断言（最坏 0.666 高于 floor · 默认值 0.65 · 单深夜 0.891 · 传 0.9 生效） |
+| 4 | 自测补接线断言 | ✅ | `verify-qqagent-level.mjs` **58 → 80 条**：新增 §5b（6 条 · 系数×参与率含两端豁免）· §6b（7 条 · 巡检端到端 + 关开关回退）· §7（7 条 · 源码在位），共 20 条新断言，全绿 |
+| 5 | `enabled=true` 后按一日 `roll.hit` 复核未压成零 | ⏳ **观察项** | 启用已落盘（`_unpack/data/config.json` + `config.js` 默认），但**业务面未重启**（见 §E）——新代码要重启才加载；重启前 `roll` 行无 `coef` 字段。复核口径 = 次日读 `node tools/engage-metrics-report.mjs _unpack/data/metrics` 的 `byCoef` / `coefAdjusted`：若 `coefAdjusted` 占比高且 `hitRate` 明显低于档位配置值，即信号在压，回退手段 = 改 `signals.enabled=false` 或抬高 `floor` |
+
+### E · 未做 / 需人的动作
+
+- **业务面未重启**：`app/src/business/**` 是 Node 进程，改代码要重启才生效（`启动QQBotB.vbs`）。本轮**未自行重启**——重启会中断正在跑的群会话，且 `todo.md` §〇-A 已挂着「配可用模型端点 + 重启业务面 + 群内真触发」这条人的动作，两件事并一次做更省。
+- **`_unpack/resources/app/src/engage-signals.js` 未改**：那是上游原版只读副本（`floor=0.15`），改造面在 `app/src/business/`。`audit-signal-wiring` 扫两处只为对照，_unpack 侧命中属预期。
+- **`api.*` 仍为空**（log §九十一）：`costDay` 此刻恒 0（`estimateCost` 无模型匹配 → cost 0 → `costFactor=1`）。这是**正确行为**，不是缺陷——端点补回后自动生效。
+- 🔴 **运行中的业务面内存里仍是旧值**：`GET /api/config` 实读 `signals:{enabled:false,floor:0.15}`——进程持有内存单例，磁盘改动**不热读**。副作用：**重启前若有人从界面点保存配置**，`POST /api/config` 会把内存里的旧值整份写回，覆盖掉本轮的 `true/0.65`。处置 = 重启一次即可（重启读盘拿新值）；若重启前发现被覆盖，改回 `_unpack/data/config.json` 的 `signals` 两行即可。
+
+### F · 判据复跑（本轮全绿）
+
+| 脚本 | 结果 |
+|:--|:--|
+| `node tools/verify-qqagent-level.mjs` | **80/80** ✅（原 58 条 + 新增 22 条） |
+| `node tools/verify-qqagent-browse.mjs` | **49/49** ✅（节拍链路未被接线破坏） |
+| `node tools/verify-import-integrity.mjs` | **98 文件 / 422 符号 / problems []** ✅（原 417，新增 5 个导入符号） |
+| `node tools/check-syntax.mjs` | **73/73 OK** ✅ |
+| `node tools/audit-signal-wiring.mjs app/src _unpack/resources/app/src` | 三函数消费方 **0 → 5**（app/src 侧）✅ |
+| `node tools/engage-metrics-report.mjs _unpack/data/metrics` | 八日 **3,774** 条 roll · hit **63.86%** · `coefAdjusted` **0**（接线前的历史样本，符合预期）· `signal` 行 **0** |
+
+### G · 观察项（下一轮）
+
+1. **一日复核（判据 5）**：重启后看 `event:'signal'` 行是否成对落盘、`byCoef` 分布是否集中在 0.85~1.0（若大面积 <0.8 说明某因子持续在压，需查是哪一个——`signal.avg` 六因子均值直接给答案）。
+2. **missStreak 的冷启动**：重启后前几十拍 `missStreak=0`（内存态），信号只受 share / hour / cost 影响；等客观结算跑起来才完整。
+3. **`event:'sent'` 仍无产出点**：本轮只补了注释说明「保留位」，未新增产出——发言条数看 `roll.hit` 即可，不为此单开采集面。

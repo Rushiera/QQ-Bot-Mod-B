@@ -10,9 +10,9 @@
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
 import { getConfig, storeConfigForChat, personaForChat } from './config.js';
 import { vendorOfConfig } from './model-prices.js';
-import { randInt } from './util.js';
+import { randInt, todayKey } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, resolveContextTier, buildPastState } from './prompt.js';   // buildPastState：B22 压缩判据
-import { chatCompletion, chatCompletionWithRetry, addUsage, isRetryableError, resolveApiKey } from './llm.js';
+import { chatCompletion, chatCompletionWithRetry, addUsage, isRetryableError, resolveApiKey, estimateCost } from './llm.js';   // estimateCost：日成本信号
 import { buildToolDefs, toOpenAiTools, executeTool } from './tools.js';
 // 猫工具链：浏览器实例回收 + timeback 回卷 —— [qqagent-cattools-patch:orchestrator-import]
 import { browserService } from './cdp-browser.js';
@@ -62,6 +62,9 @@ import { isQuietChat, quietIntervalMs, quietHint } from './quiet-mode.js';
 // 发言档位 + 客观采集（[qqagent-level-patch:orchestrator-import]）
 import { paramsFor, rollParticipation, levelHint } from './engage-level.js';
 import { record as recordEngage } from './engage-metrics.js';
+// 客观信号（六因子乘法修正）——[qqagent-level-patch:signals-import]
+// 2026-11-01 B31 甲案接线：此前三函数零消费方，改 enabled 是空操作。
+import { computeSignals, compositeCoefficient, signalSummary } from './engage-signals.js';
 // 节拍巡检的诊断必须能进日志文件 —— console 在 GUI 外壳（无控制台窗口）里看不见，
 // 巡检抛错会被 setInterval 的 catch 吞成"静默不工作"（判例：缺 decayBrowse 导入）。
 // [qqagent-browse-patch:orchestrator-logger-import]
@@ -130,6 +133,12 @@ export class Orchestrator {
     this.sessionAbortMarks = new Set(); // 用户请求中止的 sessionId（abortSession 打标记，#runAgent 每轮检查）
     this.sessionAbortControllers = new Map(); // sessionId -> AbortController（中止时中断在途 LLM 请求）
     this.runSeq = new Map();           // chatKey -> 第几次处理（跨重启清零即可）
+    // ── 客观信号：连续未接拍计数（[qqagent-level-patch:signals-miss-streak]）──
+    // 语义（Rushiera 2026-11-01 拍：「没人接话」才是要压的）：我发了话，下一批里没人
+    // @ / 引用 / 拍 → +1；有人接 → 归零。判定不另建一套——直接复用回应参数的客观结算
+    // （rapport.settleRapportWatch 的 hit），它看的正是这三件事。
+    // 内存态：重启归零 = 该信号回到「不罚」，是可接受的退化（不写盘、不新增采集面）。
+    this.missStreak = new Map();       // chatKey -> 连续未接拍数
     // ── 活跃模式（chatActive）──
     // chatKey -> { topic, until }：活跃期状态（话题锚点 + 到期时间）。
     // 1/2/3 档触发响应且模型 finish 时带回 activeTopic → 进入活跃期：
@@ -759,6 +768,13 @@ export class Orchestrator {
       if (settled && settled.settled && settled.delta) {
         logger.info('rapport', '客观结算：' + (settled.hit ? '有人接话 → +' : '没人接话 → ')
           + Math.abs(settled.delta) + '（' + (settled.userId || '') + ' · 现 ' + settled.score + '）');
+      }
+      // ── 客观信号 · 连续未接拍（[qqagent-level-patch:signals-miss-streak]）──
+      // 只有"上一轮真发过话、这一批到货被结算"时才动计数——没发过话就没有"接不接"可言。
+      // 结算只在上一轮 noteRapportOutbound 过时存在（rapport.watch 记录），语义正好对齐。
+      if (settled && settled.settled) {
+        const prev = this.missStreak.get(chatKey) || 0;
+        this.missStreak.set(chatKey, settled.hit ? 0 : Math.min(20, prev + 1));
       }
     } catch (e) {
       logger.warn('rapport', '客观结算出错：' + (e && e.message ? e.message : e));
@@ -2103,6 +2119,64 @@ export class Orchestrator {
     return (Number(now) || Date.now()) - last >= ms;
   }
 
+  /**
+   * 客观信号系数（[qqagent-level-patch:signals-coefficient] · B31 甲案接线）。
+   *
+   * 数据供给（判据 2：costDay / missStreak 原先两项都无来源）：
+   *   messages   = store.recent(chatKey, {limit:80}) —— 判定处现取一次内存切片（不读盘）
+   *   hour       = 当前小时（computeSignals 内部取，传了也可）
+   *   costDay    = 今日 token 用量 × 单价（todayUsage → estimateCost，与 /api/status 同口径）
+   *   missStreak = 客观结算累计的连续未接拍（本类内存态，见构造函数）
+   *
+   * 关掉开关（engage.signals.enabled=false）时返回 coef=1 —— 调用方行为退化为 B31 前。
+   * 任何一步出错都给 coef=1：信号是修正项，不是发言的前置（失败可见靠日志，不靠吞掉发言）。
+   *
+   * @returns {{enabled:boolean, coef:number, sig:object|null}}
+   */
+  #signalCoefficient(chatKey) {
+    let cfg;
+    try { cfg = getConfig().engage?.signals || {}; } catch { return { enabled: false, coef: 1, sig: null }; }
+    if (cfg.enabled !== true) return { enabled: false, coef: 1, sig: null };
+    const floor = Number.isFinite(Number(cfg.floor)) ? Number(cfg.floor) : undefined;
+    try {
+      let messages = [];
+      try { messages = this.store.recent(chatKey, { limit: 80 }) || []; } catch { messages = []; }
+      const sig = computeSignals(messages, {
+        hour: new Date().getHours(),
+        costDay: this.#costDay(),
+        missStreak: this.missStreak.get(chatKey) || 0
+      });
+      return { enabled: true, coef: compositeCoefficient(sig, floor), sig };
+    } catch (e) {
+      logger.warn('engage', chatKey + ' 客观信号计算失败，本拍按系数 1 处理：' + (e && e.message ? e.message : e));
+      return { enabled: true, coef: 1, sig: null };
+    }
+  }
+
+  /**
+   * 今日成本（元）—— 与 `/api/status` 的 cost 同口径（用量 × 现行模型单价）。
+   * 取不到（无端点 / 无用量 / 模型未匹配）一律返 0：0 在 costFactor 里就是「不压」。
+   *
+   * 60 秒缓存：`todayUsage` 每次读盘，而节拍巡检按群逐拍调用——不缓存等于每 1~4 分钟
+   * 每个群各读一次 usage 文件。成本档位（>50 / >100 元）不会秒级变化，60 秒足够。
+   */
+  #costCache = { at: 0, day: '', value: 0 };
+
+  #costDay() {
+    const day = todayKey();
+    const now = Date.now();
+    if (this.#costCache.day === day && now - this.#costCache.at < 60000) return this.#costCache.value;
+    let value = 0;
+    try {
+      const usage = this.sessions.todayUsage(day);
+      const model = getConfig().api?.model;
+      const c = estimateCost(usage, { model });
+      value = Number(c?.cost) || 0;
+    } catch { value = 0; }
+    this.#costCache = { at: now, day, value };
+    return value;
+  }
+
   /** 记下该群下一拍的时间点（force=true 重设相位 —— 运行结束回节拍用）。 */
   #noteBrowsePending(chatKey, force = false) {
     if (!browseEnabled()) return;
@@ -2161,13 +2235,22 @@ export class Orchestrator {
       // 位置必须在 markIdleFired / logger.info 之前：那两行都宣告"这批已经给过它了"。
       if (!quiet) {
         const p = paramsFor(chatKey);
-        const r = rollParticipation(chatKey);
+        // ── 客观信号接线（[qqagent-level-patch:signals-wiring] · B31 甲案）──
+        // 档位 rate 只是"这个群爱说多少"的静态意愿；这一拍合不合适由六因子乘法修正。
+        // 系数乘在 rate 上（rollParticipation 内部做），全开/冰封两端不受影响。
+        const sgn = this.#signalCoefficient(chatKey);
+        const r = rollParticipation(chatKey, Math.random, sgn.coef);
         try {
-          recordEngage({ chat: chatKey, event: 'roll', level: p.level, rate: p.rate, roll: r.roll, hit: r.participate, unread, idle });
+          recordEngage({ chat: chatKey, event: 'roll', level: p.level, baseRate: r.baseRate, rate: r.rate, coef: r.coef, roll: r.roll, hit: r.participate, unread, idle });
+          // 采集面同时留一行信号摘要（[qqagent-level-patch:signals-collect]）——
+          // 只在信号启用且有实算结果时落：B31 判据 5 的一日复核靠它看「系数把发言压成零了吗」。
+          if (sgn.enabled && sgn.sig) recordEngage({ chat: chatKey, event: 'signal', ...signalSummary(sgn.sig, sgn.coef) });
         } catch { /* 采集是旁路 */ }
         if (!r.participate) {
           logger.info('engage', chatKey + ' 参与判定未命中（档 ' + p.level + '/' + p.levelCount
-            + ' · 入场率 ' + Math.round(p.rate * 100) + '%）—— ' + unread + ' 条留存，等下一拍');
+            + ' · 入场率 ' + Math.round(p.rate * 100) + '%'
+            + (sgn.enabled && sgn.coef !== 1 ? ' × 信号 ' + sgn.coef.toFixed(2) + ' → ' + Math.round(r.rate * 100) + '%' : '')
+            + '）—— ' + unread + ' 条留存，等下一拍');
           continue;
         }
       }

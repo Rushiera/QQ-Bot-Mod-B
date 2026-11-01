@@ -445,8 +445,11 @@ export const DEFAULT_CONFIG = {
     ],
     levelByChat: {},
     // 客观信号（发言占比 / 被点名率 / 提问密度 / 时段 / 日成本 / 连续未接）
-    // enabled=false → 只采集不参与判定（默认）。启用后做乘法修正，下限 floor。
-    signals: { enabled: false, floor: 0.15 },
+    // 六因子几何平均乘到档位 rate 上（[qqagent-level-patch:signals-wiring] · B31 甲案 2026-11-01）。
+    //   enabled=false → 系数恒 1，判定退化为纯档位掷骰（B31 前的原行为）；排查时一键关。
+    //   floor：系数下限——按实测量级定（六因子最坏组合 ≈0.666，单深夜项 0.891）。
+    //     旧值 0.15 永远够不着，等于死参数；现 0.65 落在最坏组合正下方。
+    signals: { enabled: true, floor: 0.65 },
     // ── 余额后缀（2026-10-25）── [qqbotb-balance:config]
     // 按群把本号的**群名片**尾部刷成「@余额xx.xx」，每 intervalMs 刷一次（默认 30 分钟）。
     //   chats：开了后缀的群号清单（记忆页「💰 余额」开关写这里）；空 = 全关（默认不开）。

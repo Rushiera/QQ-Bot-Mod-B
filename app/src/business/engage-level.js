@@ -76,14 +76,27 @@ export function paramsFor(chatKey) {
 
 /**
  * 参与率掷骰（纯判定，不改状态）。
- * @returns {{participate:boolean, rate:number, roll:number, level:number}}
+ *
+ * `coef` = 客观信号修正系数（`engage-signals.compositeCoefficient` 的结果）。
+ * 乘法修正只作用于**中间三档**：rate≥1（全开 = 不做入场判定）与 rate≤0（冰封 =
+ * 非 @ 不进）两端保持原语义，系数不参与——否则「全开档」会被信号压回概率入场，
+ * 那就不是开关了。信号的意义是让中间档在「现在不太合适」时更省，不是把档位重定义。
+ *
+ * @param {string} chatKey 会话键
+ * @param {() => number} rand 随机源（自测注入）
+ * @param {number} coef 信号系数（默认 1 = 不修正）
+ * @returns {{participate:boolean, rate:number, baseRate:number, coef:number, roll:number, level:number}}
+ *   rate = 本拍实际生效概率；baseRate = 档位原值；coef = 生效系数
  */
-export function rollParticipation(chatKey, rand = Math.random) {
+export function rollParticipation(chatKey, rand = Math.random, coef = 1) {
   const p = paramsFor(chatKey);
-  if (p.rate >= 1) return { participate: true, rate: p.rate, roll: 0, level: p.level };
-  if (p.rate <= 0) return { participate: false, rate: p.rate, roll: 1, level: p.level };
+  if (p.rate >= 1) return { participate: true, rate: p.rate, baseRate: p.rate, coef: 1, roll: 0, level: p.level };
+  if (p.rate <= 0) return { participate: false, rate: p.rate, baseRate: p.rate, coef: 1, roll: 1, level: p.level };
+  const n = Number(coef);
+  const c = Number.isFinite(n) && n > 0 ? Math.min(1.15, n) : 1;
+  const eff = Math.min(1, Math.max(0, p.rate * c));
   const roll = Number(rand()) || 0;
-  return { participate: roll < p.rate, rate: p.rate, roll, level: p.level };
+  return { participate: roll < eff, rate: eff, baseRate: p.rate, coef: c, roll, level: p.level };
 }
 
 /**

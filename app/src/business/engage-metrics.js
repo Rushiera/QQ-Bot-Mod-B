@@ -41,7 +41,11 @@ let lastPruneDay = '';
 
 /**
  * 记一条事件。
- * @param {object} entry { chat, event:'roll'|'blocked'|'sent', ... }
+ * @param {object} entry { chat, event:'roll'|'signal'|'blocked'|'sent', ... }
+ *   roll   每拍参与判定（level / baseRate / rate / coef / roll / hit / unread / idle）
+ *   signal 信号摘要（仅 engage.signals.enabled=true 时，与 roll 同一拍成对落）
+ *   blocked 出站闸拦截（noteBlocked，见 sender.js）
+ *   sent   自我发言落库（保留位；当前无产出点，发言计数看 roll.hit 与会话 sent）
  */
 export function record(entry) {
   const ts = Date.now();

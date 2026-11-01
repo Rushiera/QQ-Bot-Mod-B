@@ -3816,3 +3816,49 @@ CHANGELOG 膨胀的三层原因与对应处置（判据 → `ccbp:L1/Wisdom.md` 
 3. **一份表背三份职能**（版本摘要 / 变更清单 / 判例档案）。处置：判例归 `history/` 与 `reports/`，变更明细归本文件，版本摘要留 CHANGELOG。
 
 ---
+
+---
+
+## 八十九、R9 建卡 + 记忆写面零校验缺陷（2026-11-01 · 建卡轮 · 无代码改动）
+
+> Rushiera 2026-11-01 11:0x：「建合龙后真链路验收新卡」。本轮只做建卡与队列动作，**不改 `app/**` 任何代码**——缺陷修复进 `tasks/R9.md` 判据 1–3，交执行线。
+
+### A · 建卡依据与卡面结构
+
+- **为什么必须新建卡**：队列 §三 已裁定「Q-001 到此收口；合龙真链路验收走新卡（D-16：不再挂在本卡的待派线上）」——R8 的 L3 已随 Q-001 收口失效，不复活。
+- **卡**：`tasks/R9.md`（v1.0 · 131 行 · 12,604 B · **N = 1 单线**）。头注声明队列编号 Q-001、上游（R8 §三 L3 / 两份判定卡 / todo §〇-A）、本轮定位。
+- **判据分三段**：
+  - 判据 1–3：修 `impressions` 非字符串形态被静默落成 `[object Object]`——**磁盘写测试强制用隔离键 `group_000000001`**（禁碰真实群），跑完 `file-delete` 清理；另附全库 `[object Object]` 零命中作回归哨兵。
+  - 判据 4–6：**页面级验收**——13 页签逐页 `window.__errs.length === 0`（页内先挂 `error` / `unhandledrejection` / `console.error` 三钩子）· 取数四页各 ≥1 行真数据 · 六写入口各点一次（成员「存」须真成功，读回是真实中文、非 405、非 `[object Object]`，写后逐字还原）。
+  - 判据 7–9：契约 58/58 · `verify-import-integrity` `problems: []` 且 `filesScanned ≥ 98` · 两改动文件 `node --check` exit 0。
+- **档案面**：本轮收回给**验证猫**（R8 卡把档案面给了执行线，判据 3 是页面级验收——执行猫既改动又写档案，判定卡无法独立复核）。
+
+### B · 建卡时撞见的缺陷（实锤，非推断）
+
+- **现象**：建卡前在 `http://127.0.0.1:3280/` 页面内 `eval` 探测时，对 `group:361820329/members/1286860918` 发过一次 `PUT`，请求体按 GET 返回的成员对象原样回传（`impressions` 是 `[{content,createdAt}]` 对象数组）→ 落盘 **6 条 `content` 全为字面量 `"[object Object]"`**（`_unpack/data/memory/group_361820329/1286860918.json`，mtime 11-01 11:15）。
+- **根因**：`app/src/business/memory.js:293-297`（`editMemberImpression`）与 `:333-337`（`replaceMember`）对 `impressions` 元素做 `String(s ?? '').trim()`——对象被字符串化为 `[object Object]`，**零校验、零报错**。GET 返回形态（对象数组）与 PUT 接受形态（字符串数组）不对称，回传即中招。
+- **处置**：按 `_unpack/data/memory/backups/group_361820329/1286860918.json`（10-31 20:26，3 条真实中文文本）还原，`curl -X PUT --data-binary @<json>` 回写并 `text-read` 复核——现 3 条中文、mtime 11:17；全库 `text-grep "[object Object]"` 命中 **0**。
+- **定性**：`ccbp:AGENTS.md` §一-4「失败必须可见」的直接反例——非法输入被静默降级成看似合法的字符串。写进 `tasks/R9.md` §六 补充段与判据 1–3。
+
+### C · 队列与档案面的同步动作
+
+| # | 动作 | 落点 |
+|:--:|:--|:--|
+| 1 | 队列行 Q-001 六字段回写：N **2 → 1** · 卡 **R8 → R9** · 状态 `✅ 已核销` → `待开工` | `workspace:tools/并发协议/并发待开工.md` §三 |
+| 2 | 派生推进留痕一行 | 同上 §四 |
+| 3 | `state/queue.json` Q-001 行：`n=1` · `card=…/tasks/R9.md` · `status=待开工` | `workspace:tools/并发协议/state/queue.json` |
+| 4 | `state/profiles.json` Q-001 档案：persona 换 R9 文案（含隔离键约束）+ toolNames 补 `browser-*` 五件 / `image-analyze` / `image-inject`（页面级验收要用） | `workspace:tools/并发协议/state/profiles.json` |
+| 5 | 项目哨兵归零：`n=1` · `status=待开工` · `nextIndex=1` · `closed=0` | `tasks/.concurrency.json` |
+| 6 | `todo.md` §〇-A 改写（建卡完成 + 新缺陷登记 + 前置复测值）· §〇-F 优先序第 1 条核销 | `todo.md` |
+| 7 | `project.md` 文档索引补 R9 行、R8 行补核销结论 | `project.md` |
+
+### D · 建卡前提复核（18 行现读，摘要）
+
+3280 全部端点 200（`/api/biz/config` 19,056 B · `memory-files` 2,121 B · 详情 `group_361820329` 165,672 B · `summary` 200）· `PUT /api/biz/__probe_nonexistent__` → **404（非 405）**（R8-L1 已生效）· 首页 200 / 8,690 B · 页签 **13**（`index.html:21-35`）· 脚本 **10**（`:197-206`）· 契约 **PASS 58/58** · import **98 文件 / 417 符号 / problems []** · 两文件 `node --check` exit 0 · 工作树干净（`17c613c`）· 哨兵 `status=已核销`（非 running）· `_unpack/data/memory` 的 `[object Object]` 残留 0。全文逐行见 `tasks/R9.md` §六。
+
+### E · 待裁（2 条 · 写进卡 §七，收工报告点条数）
+
+| # | 事项 | 推荐 |
+|:--:|:--|:--|
+| 1 | `impressions` 非法形态处置口径 | **容错 `{content}` 对象 + 其余非字符串抛错**——GET/PUT 形态不对称本身就是缺陷源头，严格只收字符串会让 GET 结果无法直接回传 |
+| 2 | 该缺陷是否单独开卡 | **挂在验收线内**（两函数 + 一处调用，成本低；判据已压成可复跑断言） |

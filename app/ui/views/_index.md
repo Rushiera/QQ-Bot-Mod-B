@@ -32,6 +32,8 @@
 
 > 🔴 **`settings.js` 是「业务设置」（页签 `bizsettings` / `#view-bizsettings`）**，不是既有「本地设置」（`#view-settings`，归 `app/ui/app.js` 管，改单体自己的端口 / 协议端目录 / 账号）。两者并存不合并。
 
+> 🔴 **`plugins.js` 的写面判据已反转**——插件页按 `design-qqbotb_log.md` §九十二 整页移除（Rushiera 硬约束：**不得重建**）。`tools/verify-ui-contract.mjs` 组 ① 对这一件断言的是**不存在**：谁把它建回来，自测立刻红。功能由技能页双市场按钮替代。
+
 **禁**：任何线不得新增本表之外的文件；需要新文件先报主干登记（未登记 = 无写权）。
 
 > 🔴 **状态列是 R5 建卡时快照，不是实况**——R5–R9 五轮之后各块均已实现（基线：R5 十六线全交 · R9 判据 4 十三页签 `__errs` 全零，见 `reports/R5-L*.md` · `reports/R9-L1.md`）。后续界面改版记在 `design-qqbotb_log.md` §九十二（会话页 + 业务设置 + 技能页 + 插件页删）· §九十三（记忆页签重做）。本表只在轮次内承载写面归属，不承载实现进度。
@@ -79,7 +81,7 @@
 - 通配前缀转发，**不逐条枚举**（业务面 73 条路由，枚举必漏）。
 - **纯前缀替换**：`/api/biz/chats/group_123/messages` → `http://127.0.0.1:3210/api/chats/group_123/messages`。带路径参数的端点（`/api/sessions/<id>`、`/api/chats/group_<gid>/messages`）直接拼进路径即可——业务面自己有正则路由表，代理层**不解析、不拆参**。
 - 业务面不可达 → `502` + `{ok:false, error:'业务面不可达（127.0.0.1:3210）', status:502}`，**不吐空数据冒充成功**。
-- 只允许 `GET` / `POST` / `DELETE` 透传；请求体与响应体原样转发（`Content-Type: application/json`）。
+- 只允许 `GET` / `POST` / `PUT` / `DELETE` 透传；请求体与响应体原样转发（`Content-Type: application/json`）。🔴 `PUT` 于 R8-L1 纳入（记忆页成员「存」与群记「改」走它）；`PATCH` 仍 405。
 - 超时 8 秒（业务面 `session/compact` 这类会慢，8 秒外一律 504 + 原因）。
 - 🔴 **前提**：单体 `app/src/web/server.js:109` 的路由查找是 `api[key]` **精确匹配**，不支持通配。故 `server.js` 需在「未命中」那一支追加前缀兜底（约 6 行）：`pathname.startsWith('/api/biz/') && api.__bizProxy` → 交给它。`createBusinessProxy` 返回的键就是 `__bizProxy`。
 

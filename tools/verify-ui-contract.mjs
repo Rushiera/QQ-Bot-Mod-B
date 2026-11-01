@@ -10,15 +10,21 @@
 //
 // 判据：全部 PASS → 打印 `PASS n/n` 且退出码 0；任一失败 → 打印失败清单 + 退出码 1。
 //
-// 断言八组（共 57 条，组见下方 GROUPS 常量）：
-//   ① 文件在盘      —— 九件（八块 + 外壳）
-//   ② 视图登记生效  —— 七个视图块都登记到 `window.__views.<name>`
-//   ③ 必备函数      —— 七个视图块都有 `mount` 与 `refresh`
+// 🔴 断言条数以运行输出为准（`PASS n/n` 的 n），本注释不写死——写死过一次，改版后立刻失真。
+//
+// 断言八组（组见下方 GROUPS 常量）：
+//   ① 文件在盘      —— 八件（七块 + 外壳）；**另断言 `plugins.js` 不存在**（见下）
+//   ② 视图登记生效  —— 六个视图块都登记到 `window.__views.<name>`
+//   ③ 必备函数      —— 六个视图块都有 `mount` 与 `refresh`
 //   ④ 零裸 fetch    —— 视图块内不直连（`_shell.js` 豁免：它的 fetch 是 `api()` 实现本体）
 //   ⑤ `__ui` 签名   —— 11 个成员逐个在册 + `stub === false`
-//   ⑥ index.html    —— 13 个页签 · 9 个视图脚本 · 总 10 个 script
+//   ⑥ index.html    —— 11 个页签 · 8 个视图脚本 · 总 9 个 script（口径见 EXPECT 注释）
 //   ⑦ 代理层        —— `app/src/web/business-proxy.js` 在盘且导出 `createBusinessProxy`
-//   ⑧ 无 ESM        —— 九件均为普通脚本（无 `import` / `export`，契约 §三-1）
+//   ⑧ 无 ESM        —— 八件均为普通脚本（无 `import` / `export`，契约 §三-1）
+//
+// 🔴 **`plugins.js` 的判据方向已反转（2026-11-01）**——插件页按 `log §九十二` 整页移除，
+//    Rushiera 硬约束「views/plugins.js 不得重建」。故本脚本对这一件断言的是**不存在**：
+//    只要它被谁新建回来，① 组立刻红。原 R5 期的「文件在盘 / 登记 / 必备函数」三条随之退役。
 //
 // 🔴 登记形态（组 ②）：契约 §三-2 只要求「每块暴露 `window.__views.<name>`」；
 //    `registerView(name, view)` 是 `_shell.js` 提供的等价写法（内部即 `views[name] = view`）。
@@ -34,7 +40,7 @@ const UI = path.join(ROOT, 'app', 'ui');
 const VIEWS = path.join(UI, 'views');
 const JSON_OUT = process.argv.includes('--json');
 
-/** 八块 + 外壳的文件名（与 `_index.md` §二 表一致；`settings-sections.js` 属 L8 同线，不是独立视图块）。 */
+/** 在盘八件（七块 + 外壳；`settings-sections.js` 属 L8 同线，不是独立视图块）。 */
 const BLOCKS = [
   '_shell.js',
   'sessions.js',
@@ -42,19 +48,25 @@ const BLOCKS = [
   'memory.js',
   'usage.js',
   'skills.js',
-  'plugins.js',
   'settings.js',
   'settings-sections.js'
 ];
 
-/** 七个视图块（`<script>` 里除外壳与分节库之外的七件）。 */
-const VIEW_BLOCKS = ['sessions', 'chats', 'memory', 'usage', 'skills', 'plugins', 'settings'];
+/** 已退役块——断言「不存在」（Rushiera 硬约束：不得重建）。 */
+const RETIRED_BLOCKS = ['plugins.js'];
+
+/** 六个视图块（`<script>` 里除外壳与分节库之外的六件）。 */
+const VIEW_BLOCKS = ['sessions', 'chats', 'memory', 'usage', 'skills', 'settings'];
 
 /** `window.__ui` 契约成员（`_index.md` §3.1，11 个，一个不能少）。 */
 const UI_MEMBERS = ['api', '$', '$$', 'el', 'esc', 'fmtTime', 'fmtNum', 'fmtBytes', 'empty', 'fail', 'registerView'];
 
-/** index.html 期望值（`tasks/R5.md` §3.1 表：13 个页签 / 9 个视图脚本 / 含 app.js 共 10 个 script）。 */
-const EXPECT = { tabs: 13, viewScripts: 9, scripts: 10 };
+/**
+ * index.html 期望值（口径见 `log §九十二`：13 页签 − 插件页 − 群名单页签 = 11；
+ * 9 视图脚本 − plugins.js = 8；含 app.js 共 9 个 script）。
+ * 🔴 改界面结构时同步本值——三条断言就是页面结构的守门。
+ */
+const EXPECT = { tabs: 11, viewScripts: 8, scripts: 9 };
 
 const GROUPS = {
   files: '① 文件在盘',
@@ -99,13 +111,18 @@ function read(file) {
   }
 }
 
-// ── 组 ①：九件文件在盘 ────────────────────────────────────────────────────
+// ── 组 ①：在盘八件 + 已退役块不存在 ──────────────────────────────────────
 for (const file of BLOCKS) {
   const full = path.join(VIEWS, file);
   check('files', `views/${file} 存在`, fs.existsSync(full), '文件缺失——该块的执行线未交付');
 }
+for (const file of RETIRED_BLOCKS) {
+  const full = path.join(VIEWS, file);
+  check('files', `views/${file} 不存在（已退役）`, !fs.existsSync(full),
+    `${file} 被重建——Rushiera 硬约束「${file} 不得重建」（插件页已整页移除，功能由技能页双市场按钮替代，见 log §九十二）`);
+}
 
-// ── 组 ②：七个视图块登记生效（两种等价写法） ──────────────────────────────
+// ── 组 ②：六个视图块登记生效（两种等价写法） ──────────────────────────────
 for (const name of VIEW_BLOCKS) {
   const text = read(path.join(VIEWS, `${name}.js`));
   const init = /window\.__views\s*=\s*window\.__views\s*\|\|\s*\{\}/.test(text);
@@ -116,7 +133,7 @@ for (const name of VIEW_BLOCKS) {
     !init ? '缺 window.__views 初始化' : '既无 views.<name>= 也无 registerView(name, …)');
 }
 
-// ── 组 ③：七个视图块都有 mount 与 refresh ────────────────────────────────
+// ── 组 ③：六个视图块都有 mount 与 refresh ────────────────────────────────
 for (const name of VIEW_BLOCKS) {
   const text = read(path.join(VIEWS, `${name}.js`));
   // 允许 `function mount(` 与 `const mount = (` / `mount: (` 三种写法
@@ -163,7 +180,7 @@ if (!html) {
   const scripts = (html.match(/<script[^>]+src=/g) || []).length;
   check('index', `页签数 = ${EXPECT.tabs}`, tabs === EXPECT.tabs, `实测 ${tabs}`);
   check('index', `视图脚本数 = ${EXPECT.viewScripts}`, viewScripts === EXPECT.viewScripts, `实测 ${viewScripts}`);
-  check('index', `script 总数 = ${EXPECT.scripts}（9 视图 + app.js）`, scripts === EXPECT.scripts, `实测 ${scripts}`);
+  check('index', `script 总数 = ${EXPECT.scripts}（8 视图 + settings-sections + _shell + app.js）`, scripts === EXPECT.scripts, `实测 ${scripts}`);
 }
 
 // ── 组 ⑦：代理层在盘且导出 createBusinessProxy ───────────────────────────
@@ -172,7 +189,7 @@ const proxyText = read(proxyPath);
 check('proxy', 'web/business-proxy.js 存在', fs.existsSync(proxyPath), '文件缺失——L9 未交付');
 check('proxy', '导出 createBusinessProxy', /export\s+function\s+createBusinessProxy/.test(proxyText), '未找到 `export function createBusinessProxy`');
 
-// ── 组 ⑧：九件均为普通脚本（无 ESM import / export） ─────────────────────
+// ── 组 ⑧：在盘八件均为普通脚本（无 ESM import / export） ─────────────────
 for (const file of BLOCKS) {
   const text = read(path.join(VIEWS, file));
   // 只认行首语句形态——注释里出现「无 import / export」不误伤

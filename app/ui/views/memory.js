@@ -5,8 +5,9 @@
 // 状态：✅ R5-L5 交付基础版 · R7-L2 补写操作面（六入口）· R8-L2 补「现行 / 归档」切换 + 会话要点区
 //
 // 面：左栏 = 记忆文件列表（`/api/biz/memory-files` 全量，条数 = `files.length`，不截断）；
-//     右栏 = 选中会话的记忆详情：**会话要点（顶部只读）** + 群记（按 `kind` 分组，**现行 / 归档**切换）+
-//            群友印象（含回应参数）+「重整」按钮 + 两个按群开关面（💰 余额后缀 / 🔊 语音伴随）。
+//     右栏 = 选中会话的记忆详情：按群开关（🎚 发言档位 / 💰 余额后缀 / 🔊 语音伴随——群会话排最前，
+//            UI-2 拍板 B，log §九十三 D-1）+ **会话要点（只读）** + 群记（按 `kind` 分组，**现行 / 归档**切换）+
+//            群友印象（含回应参数）+ 群成员表（按需拉取）。
 // 形态：与会话页同构（原版 QQ Agent 两栏）——骨架 `sx-sessions` / `sx-list-pane` / `sx-detail-pane` /
 //       `sx-list` / `sx-row*` / `sx-head*` / `sx-body` 复用，右栏内层卡片用 `sxm-card` / `sxm-head` / `sxm-body`。
 // 取数：`/api/biz/memory-files` · `/api/biz/memory-files/<group_xxx>` · `/api/biz/memory-files/<group_xxx>/summary`（R8-L2 新增端点）
@@ -757,7 +758,7 @@
   }
 
   /**
-   * 两个按群开关面（余额后缀 / 语音伴随）——仅群会话显示。
+   * 按群开关卡（🎚 发言档位 / 💰 余额后缀 / 🔊 语音伴随）——仅群会话显示。
    *
    * @param {string} key 会话键
    * @returns {Element|null} 开关区块；非群会话返 null
@@ -904,6 +905,11 @@
       if (r && r.userId != null) rapportMap[String(r.userId)] = r;
     }
 
+    // 按群开关区（发言档位 / 余额后缀 / 语音伴随）——群会话提到最前（UI-2 拍板 B：
+    // 控件形态一字不动，只改卡片顺序；原版这三组在 detail-header 同一行，见 log §九十三 D-1）
+    const sw = switchSection(key);
+    if (sw) refs.bodyEl.appendChild(sw);
+
     // 会话要点区（顶部只读，`design-qqbotb-memory.md` §3.5）
     refs.bodyEl.appendChild(summarySection());
 
@@ -935,10 +941,6 @@
     // 群成员卡（按需拉取——改备注 / 指定 bot；非群会话不渲染）
     const ms = membersSection(key);
     if (ms) refs.bodyEl.appendChild(ms);
-
-    // 按群开关区（余额后缀 / 语音伴随）
-    const sw = switchSection(key);
-    if (sw) refs.bodyEl.appendChild(sw);
   }
 
   /**

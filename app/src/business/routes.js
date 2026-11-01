@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { getConfig, updateConfig, deepMerge as deepMergeConfig, DATA_DIR } from './config.js';
+import { getConfig, updateConfig, deepMerge as deepMergeConfig, DATA_DIR, personaForChatOf } from './config.js';
 // [qqagent-search-patch:routes-import] 已删除：import { customSearch } from './web-search.js'（自定义搜索下线）
 import { listModels, chatCompletion, resolveApiKey, estimateCost, cacheHitRate } from './llm.js';
 import { resolveOfficialPrice, listOfficialPrices } from './model-prices.js';
@@ -750,12 +750,20 @@ export function createRoutes(deps) {
       // 调用方把"当前工具面板状态"随请求发来，这里先 deepMerge 到临时副本上组装
       // （绝不写回 currentConfig），预览就能立即反映未保存的开关。
       method: '*', pattern: '/api/prompt-preview',
-      handler: async ({ req, res, json }) => {
+      handler: async ({ req, res, json, url }) => {
         const cfg = getConfig();
         let overrides = {};
         try {
           if (req.method === 'POST') overrides = (await bodyOf(req)) || {};
         } catch { overrides = {}; }
+        // chatKey：按该会话实际生效的人设组装（人设页「分会话人设」右侧预览用）。
+        // 不传 = 全局人设（与运行时的 personaForChat(空) 行为一致）。
+        const chatKey = String(
+          (overrides && overrides.__chatKey)
+          || (url && url.searchParams ? url.searchParams.get('chatKey') : '')
+          || ''
+        ).trim();
+        if (overrides && overrides.__chatKey !== undefined) delete overrides.__chatKey;
         const effective = Object.keys(overrides).length
           ? deepMergeConfig(structuredClone(cfg), structuredClone(overrides))
           : cfg;
@@ -767,6 +775,10 @@ export function createRoutes(deps) {
           searchEnabled: effective.webSearch?.enabled !== false,
           runtimeContext: { model: effective.api?.model || '', provider: effective.api?.provider || '', source: 'api' }
         };
+        // 会话人设：personaByChat 覆盖只作用于四个"说话风格"字段，
+        // 与运行时同一条合并函数（不另写一份，避免预览与实发漂移）。
+        // 用 effective（可能带未落盘 overrides）走合并——用户刚点的开关立刻反映。
+        const persona = personaForChatOf(effective, chatKey);
         const { buildSystemPrompt } = await import('./prompt.js');
         const { buildToolDefs } = await import('./tools.js');
         const { getToolAvailability } = await import('./tool-registry.js');
@@ -775,9 +787,71 @@ export function createRoutes(deps) {
           .filter((d) => getToolAvailability(d.id, skillContext).enabled)
           .map((d) => ({ id: d.id, name: d.name, description: d.description, category: d.category }));
         return json(res, 200, {
-          systemPrompt: buildSystemPrompt({ skillContext }),
+          chatKey,
+          // persona 摘要：预览要能 1:1 展示「这个会话实际用的那份」——
+          // roleText 在运行时进**用户消息**的【角色设定】段（不在系统提示词里），
+          // 只在系统提示词上做预览会漏掉它，用户看不到「填了之后前文变了哪一段」。
+          persona: {
+            botName: persona.botName || '',
+            roleText: persona.roleText || '',
+            participation: persona.participation || '',
+            customRules: persona.customRules || '',
+            systemPromptOverride: persona.systemPromptOverride || ''
+          },
+          systemPrompt: buildSystemPrompt({ skillContext, persona }),
           tools
         });
+      }
+    },
+    {
+      // ── 表情包（界面维护面）───────────────────────────────────────────
+      // GET  = 面板数据：每条表情的印象（desc/localNote/tags/usage）+ 使用统计
+      //        + 何时会发的策略文案（与提示词同一份 buildStickerStrategyHint）
+      // POST = 改印象 {id, note, tags, usage}
+      // 删除走 DELETE /api/stickers/<id>。
+      method: 'GET', pattern: '/api/stickers',
+      handler: async ({ res, json, url }) => {
+        if (!deps.stickers) return json(res, 503, { ok: false, error: '表情库未就绪' });
+        // force=1 立即向协议端拉一次（界面上手动「刷新收藏」时用）
+        const force = String(url?.searchParams?.get('force') || '') === '1';
+        if (force) { try { await deps.stickers.sync(true); } catch { /* 同步失败沿用本地库 */ } }
+        const panel = deps.stickers.panel();
+        return json(res, 200, { ok: true, ...panel });
+      }
+    },
+    {
+      method: 'GET', pattern: '/api/stickers/image',
+      handler: async ({ res, json, url }) => {
+        if (!deps.stickers) return json(res, 503, { ok: false, error: '表情库未就绪' });
+        const id = String((url?.searchParams?.get('id') || '')).trim();
+        const r = deps.stickers.imageOf(id);
+        return json(res, r.ok ? 200 : 404, r);
+      }
+    },
+    {
+      method: 'POST', pattern: '/api/stickers',
+      handler: async ({ req, res, json }) => {
+        if (!deps.stickers) return json(res, 503, { ok: false, error: '表情库未就绪' });
+        const body = await bodyOf(req);
+        const id = String(body?.id || '').trim();
+        if (!id) return json(res, 400, { ok: false, error: '缺少表情 id' });
+        const entry = deps.stickers.setNote(id, {
+          note: body?.note,
+          tags: body?.tags,
+          usage: body?.usage
+        });
+        if (!entry) return json(res, 404, { ok: false, error: `未找到表情 ${id}` });
+        return json(res, 200, { ok: true, entry: deps.stickers.panel().items.find((x) => x.id === id) || null });
+      }
+    },
+    {
+      method: 'DELETE', pattern: /^\/api\/stickers\/([^/]+)$/,
+      handler: async ({ res, json, match }) => {
+        if (!deps.stickers) return json(res, 503, { ok: false, error: '表情库未就绪' });
+        const id = decodeURIComponent(String(match?.[1] || '')).trim();
+        if (!id) return json(res, 400, { ok: false, error: '缺少表情 id' });
+        const r = deps.stickers.remove(id);
+        return json(res, 200, { ok: r.ok, removed: r.removed, hidden: (r.hidden || []).length });
       }
     },
     {

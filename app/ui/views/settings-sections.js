@@ -391,6 +391,203 @@
   ];
 
   /**
+   * 表情包实况面板缓存（`GET /api/biz/stickers`）。
+   *
+   * 与 config 不同源：这里读的是**表情库本体**（`data/stickers.json` 合并 QQ 收藏
+   * 后的结果），含每条印象与使用统计——用户在界面里改印象 / 删条目都落在这里。
+   *
+   * @type {{data: object|null, loaded: boolean, loading: boolean, error: string, query: string, openId: string}}
+   */
+  const stickerPanel = { data: null, loaded: false, loading: false, error: '', query: '', openId: '' };
+
+  /**
+   * 拉一次表情库（单飞；失败落错误文案，不渲染空表冒充「没有表情」）。
+   *
+   * @param {object} ctx 渲染上下文
+   * @param {boolean} [force] 是否强制向协议端重拉收藏
+   * @returns {void}
+   */
+  function refreshStickers(ctx, force) {
+    if (stickerPanel.loading) return;
+    stickerPanel.loading = true;
+    const path = `/api/biz/stickers${force ? '?force=1' : ''}`;
+    ctx.api(path).then((r) => {
+      if (r && r.ok !== false) {
+        stickerPanel.data = r;
+        stickerPanel.error = '';
+        stickerPanel.loaded = true;
+      } else {
+        stickerPanel.error = String((r && r.error) || 'unknown');
+      }
+    }).catch((error) => {
+      stickerPanel.error = String((error && error.message) || error);
+    }).then(() => {
+      stickerPanel.loading = false;
+      ctx.reload();
+    });
+  }
+
+  /**
+   * 写一条表情的印象（备注 / 标签 / 用途）后重取面板。
+   *
+   * @param {object} ctx 渲染上下文
+   * @param {string} id 表情 id
+   * @param {object} patch `{note, tags, usage}`
+   * @returns {void}
+   */
+  function saveStickerNote(ctx, id, patch) {
+    ctx.api('/api/biz/stickers', { method: 'POST', body: Object.assign({ id }, patch) })
+      .then((r) => {
+        if (!r || r.ok === false) ctx.notice(`保存表情印象失败：${String((r && r.error) || '无响应')}`, 'fail');
+        else ctx.notice('表情印象已保存');
+        stickerPanel.loaded = false;
+        refreshStickers(ctx);
+      })
+      .catch((error) => ctx.notice(`保存表情印象失败：${String((error && error.message) || error)}`, 'fail'));
+  }
+
+  /**
+   * 删一条表情（只从 AI 认知层删除；QQ 收藏本体不动）。
+   *
+   * @param {object} ctx 渲染上下文
+   * @param {object} item 表情条目
+   * @returns {void}
+   */
+  function removeSticker(ctx, item) {
+    const label = item.label || item.id;
+    const yes = typeof window.confirm === 'function'
+      ? window.confirm(`删除表情「${label}」？\n\n只从 AI 的记忆里删（模型看不到、也不会再发）；QQ 收藏本体不动。`)
+      : true;
+    if (!yes) return;
+    ctx.api(`/api/biz/stickers/${encodeURIComponent(item.id)}`, { method: 'DELETE' })
+      .then((r) => {
+        if (!r || r.ok === false) ctx.notice(`删除失败：${String((r && r.error) || '无响应')}`, 'fail');
+        else ctx.notice(`已删除「${label}」`);
+        stickerPanel.loaded = false;
+        refreshStickers(ctx);
+      })
+      .catch((error) => ctx.notice(`删除失败：${String((error && error.message) || error)}`, 'fail'));
+  }
+
+  /**
+   * 表情包实况面板：印象可改 + 何时会发 + 单条删除。
+   *
+   * @param {object} ctx 渲染上下文
+   * @returns {Element} 面板根
+   */
+  function stickerPanelOf(ctx) {
+    const h = ctx.h;
+    const box = h.el('div', { class: 'sticker-panel', style: { marginTop: '10px' } });
+
+    if (!stickerPanel.loaded && !stickerPanel.loading && !stickerPanel.error) refreshStickers(ctx);
+
+    if (stickerPanel.error) {
+      box.appendChild(h.hint(`表情库读取失败：${stickerPanel.error}`));
+      box.appendChild(h.el('div', { style: { display: 'flex', gap: '8px', marginTop: '6px' } },
+        h.button('重试', () => { stickerPanel.error = ''; stickerPanel.loaded = false; refreshStickers(ctx); })));
+      return box;
+    }
+    if (!stickerPanel.loaded || !stickerPanel.data) {
+      box.appendChild(h.hint('正在读取表情库…'));
+      return box;
+    }
+
+    const data = stickerPanel.data;
+    const items = Array.isArray(data.items) ? data.items : [];
+    const total = Number(data.total) || items.length;
+
+    // ── 头部：计数 + 何时会发（策略文案原文）+ 操作 ──
+    box.appendChild(h.el('div', {
+      class: 'hint',
+      style: { whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: '12px', lineHeight: '1.6' },
+      text: `当前已收集 ${total} 个表情（表情包${data.enabled === false ? '已关闭' : '已开启'} · 积极度 ${data.encourage} 档 · 提示词列举 ${data.promptMax} 个）\n\n`
+        + String(data.hint || '')
+    }));
+    box.appendChild(h.el('div', { style: { display: 'flex', gap: '8px', margin: '8px 0', alignItems: 'center' } },
+      h.button('刷新收藏', () => { stickerPanel.loaded = false; refreshStickers(ctx, true); }),
+      h.input({
+        type: 'text',
+        value: stickerPanel.query,
+        placeholder: '按印象 / 标签过滤',
+        onchange: (v) => { stickerPanel.query = String(v || ''); ctx.reload(); }
+      })));
+
+    const q = String(stickerPanel.query || '').trim().toLowerCase();
+    const shown = q
+      ? items.filter((x) => [x.label, x.desc, x.localNote, x.usage, x.id, ...(x.tags || [])]
+        .join(' ').toLowerCase().includes(q))
+      : items;
+
+    if (!shown.length) {
+      box.appendChild(h.hint(q ? `（没有匹配「${stickerPanel.query}」的表情）`
+        : '（还没有收集到表情——群里有人发表情、或模型收藏后会出现在这里）'));
+      return box;
+    }
+
+    shown.forEach((item) => {
+      const row = h.el('div', { class: 'groups-item' + (item.zombie ? ' missing' : '') });
+      row.appendChild(h.el('div', { class: 'groups-item-main' },
+        h.el('div', { class: 'groups-item-name', text: item.label || '（无备注）' }),
+        h.el('div', {
+          class: 'groups-item-id mono',
+          text: [
+            `用 ${item.useCount || 0} 次`,
+            item.lastUsedAt ? `末次 ${new Date(item.lastUsedAt).toLocaleString('zh-CN', { hour12: false })}` : '还没用过',
+            item.tags && item.tags.length ? `标签 ${item.tags.join('/')}` : '',
+            item.zombie ? '⚠ 只有过期直链，可能发不出去' : ''
+          ].filter(Boolean).join(' · ')
+        })));
+      const openBtn = h.el('button', {
+        class: 'btn small groups-item-btn', type: 'button',
+        text: stickerPanel.openId === item.id ? '收起' : '改印象'
+      });
+      openBtn.addEventListener('click', () => {
+        stickerPanel.openId = stickerPanel.openId === item.id ? '' : item.id;
+        ctx.reload();
+      });
+      const delBtn = h.el('button', { class: 'btn small groups-item-btn', type: 'button', text: '删除' });
+      delBtn.addEventListener('click', () => removeSticker(ctx, item));
+      row.appendChild(h.el('div', { style: { display: 'flex', gap: '6px' } }, openBtn, delBtn));
+      box.appendChild(row);
+
+      if (stickerPanel.openId === item.id) {
+        const panel = h.el('div', {
+          class: 'persona-chat-editor',
+          style: { borderLeft: '2px solid var(--border)', paddingLeft: '10px', margin: '4px 0 10px 0' }
+        });
+        panel.appendChild(h.hint('备注写「这张图是什么 + 什么场合用」——模型下次挑表情就看这段。'
+          + `（末次使用场景：${item.lastContext || '无'}）`));
+        panel.appendChild(textField(ctx, '印象 / 备注', item.localNote || item.desc || '',
+          { placeholder: '如：猫猫捂脸——被夸到不好意思时用' },
+          (v) => saveStickerNote(ctx, item.id, { note: v, tags: item.tags || [], usage: item.usage })));
+        panel.appendChild(textField(ctx, '标签（逗号分隔）', (item.tags || []).join(','),
+          { placeholder: '可爱,认输,猫娘' },
+          (v) => saveStickerNote(ctx, item.id, { note: item.localNote || item.desc || '', tags: splitList(v), usage: item.usage })));
+        panel.appendChild(textField(ctx, '用途（可选）', item.usage || '',
+          { placeholder: '被夸 / 认输 / 打招呼' },
+          (v) => saveStickerNote(ctx, item.id, { note: item.localNote || item.desc || '', tags: item.tags || [], usage: v })));
+        panel.appendChild(h.el('div', { style: { display: 'flex', gap: '8px', marginTop: '6px' } },
+          h.button('看图', () => {
+            ctx.api(`/api/biz/stickers/image?id=${encodeURIComponent(item.id)}`).then((r) => {
+              if (!r || !r.ok || !r.dataUrl) {
+                ctx.notice(`看图失败：${String((r && r.error) || '无图片')}`, 'fail');
+                return;
+              }
+              const win = window.open('', '_blank');
+              if (win) win.document.write(`<title>${item.label || item.id}</title><img src="${r.dataUrl}" style="max-width:96vw;max-height:96vh">`);
+              else ctx.notice('看图窗口被浏览器拦截', 'fail');
+            }).catch((error) => ctx.notice(`看图失败：${String((error && error.message) || error)}`, 'fail'));
+          }),
+          h.button('删除这条', () => removeSticker(ctx, item)),
+          h.hint(`id ${item.id}${item.source === 'manual' ? ' · 人工标注' : ''}`)));
+        box.appendChild(panel);
+      }
+    });
+
+    return box;
+  }
+
+  /**
    * 思考强度：`(thinkingMode, thinkingEffort)` → 一维下拉值。
    *
    * @param {object} api `config.api`
@@ -540,10 +737,12 @@
     }));
 
     // ── 卡 2：表情包 ──
+    // 上半是开关与档位（写 config）；下半是「AI 现在认得哪些表情」的实况面板：
+    // 每条印象 + 使用统计 + 何时会发（策略文案与提示词同一份）+ 可改 + 可删。
     root.appendChild(h.fold({
       icon: '😄',
       title: '表情包',
-      sub: '收藏同步 / 发送积极度 / 提示词列举数',
+      sub: '收藏同步 / 发送积极度 / 已有表情与印象',
       val: sticker.enabled === false ? '关' : '开',
       open: false,
       body: [
@@ -555,7 +754,8 @@
           (v) => push(ctx, { sticker: { encourage: Number(v) } })),
         numField(ctx, '提示词里列举的表情包数量（1~50）',
           sticker.promptMaxStickers === undefined ? 10 : sticker.promptMaxStickers, { min: 1, max: 50 },
-          (n) => push(ctx, { sticker: { promptMaxStickers: n } }))
+          (n) => push(ctx, { sticker: { promptMaxStickers: n } })),
+        stickerPanelOf(ctx)
       ]
     }));
 
@@ -826,6 +1026,16 @@
   ];
 
   /**
+   * 人设页的界面态：当前编辑（同时也是预览）的会话键。
+   *
+   * 空串 = 全局人设。预览与编辑共用同一个键 —— 用户在某个会话上「填了」，
+   * 预览就换成该会话那份（1:1 互换）；清空后回到全局那份。
+   *
+   * @type {{chatKey: string}}
+   */
+  const personaState = { chatKey: '' };
+
+  /**
    * 人设分节：分会话人设 + 提示词预览。
    *
    * 统一人设那张编辑卡已按Rushiera口径删除——人设内容改由 `role/` 系列文件承载；
@@ -850,54 +1060,86 @@
     // 会话清单 = 白名单 ∪ 已配置过独立人设的会话（白名单外的历史条目不能静默丢）
     const chatIds = allowIds.concat(configuredIds.filter((id) => allowIds.indexOf(id) < 0));
 
-    // ── 卡 1：分会话人设（统一开关保留在这里——删掉的是「统一人设」那张编辑卡）──
+    // 当前编辑 / 预览的会话（未选 = 全局）——预览与编辑共用同一个键，
+    // 「填了就 1:1 换掉预览，没填就是预览里的全局人设」由这个键决定。
+    if (personaState.chatKey && chatIds.indexOf(personaState.chatKey) < 0) personaState.chatKey = '';
+    const current = personaState.chatKey;
+
+    // ── 卡 1：分会话人设（群名单式条目 + 编辑区；默认收起）──
     const chatBody = h.el('div', {});
     chatBody.appendChild(boolField(ctx, '为所有的群聊 / 私聊使用同一个人设', unified,
-      unified ? '开启中：各会话跟随统一人设，下面的独立编辑不生效。' : '已关闭：下面给每个会话单独编辑。',
+      unified ? '开启中：各会话的独立设置会保存但不生效——关掉即生效。' : '已关闭：下面每个会话各用一套（留空跟随全局）。',
       (b) => push(ctx, { personaUnified: b })));
 
-    if (unified) {
-      chatBody.appendChild(h.hint('关掉上面的开关后，这里给每个会话单独编辑人设。'));
-    } else if (!chatIds.length) {
+    if (!chatIds.length) {
       chatBody.appendChild(h.hint('（群名单为空——先在「群名单」里添加群聊 / 私聊）'));
     } else {
+      chatBody.appendChild(h.hint('点「编辑」给该会话单独写人设；留空 = 用全局人设（右侧「提示词预览」显示的就是实际会发的那份）。'));
       chatIds.forEach((chatKey) => {
         const conf = perChat[chatKey] || {};
         const hasCustom = Boolean(conf.roleText || conf.participation || conf.customRules || conf.systemPromptOverride);
-        chatBody.appendChild(h.fold({
-          icon: hasCustom ? '●' : '○',
-          title: chatKey,
-          sub: hasCustom ? '已配置独立人设' : '跟随全局',
-          val: conf.participation || '跟随',
-          open: false,
-          body: [
-            selectField(ctx, '参与度（留空跟随全局）', conf.participation || '',
-              [['', '跟随全局']].concat(PARTICIPATION_OPTIONS), '',
-              (v) => savePerChat(ctx, chatKey, { participation: v })),
-            areaField(ctx, '角色设定（留空跟随全局）', conf.roleText || '', { minHeight: '140px' },
-              (v) => savePerChat(ctx, chatKey, { roleText: v })),
-            areaField(ctx, '管理员附加规则（可选）', conf.customRules || '', { minHeight: '80px' },
-              (v) => savePerChat(ctx, chatKey, { customRules: v })),
-            areaField(ctx, '系统提示词覆盖（高级 · 可选）', conf.systemPromptOverride || '', { minHeight: '80px' },
-              (v) => savePerChat(ctx, chatKey, { systemPromptOverride: v })),
-            h.el('div', { style: { display: 'flex', gap: '8px', marginTop: '6px' } },
-              h.button('清空独立人设', () => clearPerChat(ctx, chatKey)),
-              h.hint('机器人名字 / 群内展示名不按会话变化（账号身份，改了会与 @ 判定对不上）。'))
-          ]
-        }));
+        const row = h.el('div', {
+          class: 'groups-item' + (hasCustom ? ' on' : '') + (current === chatKey ? ' selected' : '')
+        });
+        row.appendChild(h.el('div', { class: 'groups-item-main' },
+          h.el('div', { class: 'groups-item-name', text: chatKey }),
+          h.el('div', {
+            class: 'groups-item-id mono',
+            text: (hasCustom ? '独立人设' : '跟随全局') + (conf.participation ? ` · 参与度 ${conf.participation}` : '')
+          })));
+        const editBtn = h.el('button', {
+          class: 'btn small groups-item-btn', type: 'button',
+          text: current === chatKey ? '收起' : '编辑'
+        });
+        editBtn.addEventListener('click', () => {
+          personaState.chatKey = current === chatKey ? '' : chatKey;
+          ctx.reload();
+        });
+        const clearBtn = h.el('button', {
+          class: 'btn small groups-item-btn', type: 'button', text: '清空'
+        });
+        clearBtn.disabled = !hasCustom;
+        clearBtn.addEventListener('click', () => {
+          clearPerChat(ctx, chatKey);
+          if (personaState.chatKey === chatKey) personaState.chatKey = '';
+        });
+        row.appendChild(h.el('div', { style: { display: 'flex', gap: '6px' } }, editBtn, clearBtn));
+        chatBody.appendChild(row);
+
+        // 展开的编辑区：四字段 + 清空；留空即跟随全局
+        if (current === chatKey) {
+          const panel = h.el('div', {
+            class: 'persona-chat-editor',
+            style: { borderLeft: '2px solid var(--border)', paddingLeft: '10px', margin: '4px 0 10px 0' }
+          });
+          panel.appendChild(h.hint(unified
+            ? '⚠ 统一人设开关仍开着——这里保存的内容暂不生效。'
+            : '留空的字段跟随全局人设；填了就以这里为准（提示词预览会同步换成这份）。'));
+          panel.appendChild(selectField(ctx, '参与度（留空跟随全局）', conf.participation || '',
+            [['', '跟随全局']].concat(PARTICIPATION_OPTIONS), '',
+            (v) => savePerChat(ctx, chatKey, { participation: v })));
+          panel.appendChild(areaField(ctx, '角色设定（留空跟随全局）', conf.roleText || '', { minHeight: '140px' },
+            (v) => savePerChat(ctx, chatKey, { roleText: v })));
+          panel.appendChild(areaField(ctx, '管理员附加规则（可选）', conf.customRules || '', { minHeight: '80px' },
+            (v) => savePerChat(ctx, chatKey, { customRules: v })));
+          panel.appendChild(areaField(ctx, '系统提示词覆盖（高级 · 可选）', conf.systemPromptOverride || '', { minHeight: '80px' },
+            (v) => savePerChat(ctx, chatKey, { systemPromptOverride: v })));
+          panel.appendChild(h.hint('机器人名字 / 群内展示名不按会话变化（账号身份，改了会与 @ 判定对不上）。'));
+          chatBody.appendChild(panel);
+        }
       });
     }
     root.appendChild(h.fold({
       icon: '👥',
       title: '分会话人设',
-      sub: '每个会话一套独立人设',
+      sub: '每个会话一套独立人设（留空跟随全局）',
       val: `${Object.keys(perChat).length} 个已配置`,
       open: false,
       body: chatBody
     }));
 
     // ── 卡 2：提示词预览（与分会话人设同节，一屏内可对照）──
-    root.appendChild(promptCard(ctx));
+    root.appendChild(promptCard(ctx, current));
 
     if (!personaTemplates.loaded && !personaTemplates.error) {
       ctx.api('/api/biz/persona-templates').then((r) => {
@@ -1424,17 +1666,30 @@
   //     —— 不再单独成节：作为一张卡挂在「人设」分节内（口径：提示词就是人设的产物）。
   // ══════════════════════════════════════════════════════════════════════
 
-  /** 提示词预览缓存（`GET /api/biz/prompt-preview`）。 */
-  const promptPreview = { text: '', tools: [], loaded: false, error: '' };
+  /** 提示词预览缓存（`GET /api/biz/prompt-preview`；按 chatKey 分区缓存）。 */
+  const promptPreview = { chatKey: null, text: '', tools: [], loaded: false, loading: false, error: '' };
 
   /**
    * 提示词预览卡：按当前启用态组装后的系统提示词 + 可用工具清单（只读）。
    *
+   * `chatKey` 非空时按该会话实际生效的人设组装（后端走运行时同一条
+   * `personaForChatOf`）——会话里填了独立人设，这里看到的就是那份；
+   * 留空看全局。切换会话即重取，不拿旧结果充数。
+   *
    * @param {object} ctx 渲染上下文
+   * @param {string} [chatKey] 会话键（空 = 全局人设）
    * @returns {Element} 折叠卡
    */
-  function promptCard(ctx) {
+  function promptCard(ctx, chatKey) {
     const h = ctx.h;
+    const key = String(chatKey || '');
+    if (promptPreview.chatKey !== key) {
+      promptPreview.chatKey = key;
+      promptPreview.loaded = false;
+      promptPreview.error = '';
+      promptPreview.text = '';
+      promptPreview.tools = [];
+    }
 
     const pre = h.el('pre', {
       class: 'prompt-preview-content',
@@ -1450,35 +1705,49 @@
     const card = h.fold({
       icon: '📜',
       title: '提示词预览',
-      sub: '按当前启停状态实时组装 · 只读',
+      sub: key ? `按会话 ${key} 的实际人设组装 · 只读` : '按全局人设组装 · 只读',
       val: promptPreview.loaded ? `${promptPreview.text.length} 字符 · ${promptPreview.tools.length} 工具` : '未加载',
       open: false,
       body: [
-        h.hint('这份文本由后端用运行时同一套 buildSystemPrompt + getToolAvailability 组装——'
-          + '前端不另拼一份，避免与实际发送的提示词漂移。改开关后点「刷新预览」重取。'),
+        h.hint('这份文本由后端用运行时同一套 buildSystemPrompt + personaForChatOf 组装，并按运行时段序补上'
+          + '【角色设定】（运行时该段进用户消息，不在系统提示词里）——前端不另拼规则，避免与实际发送的提示词漂移。'
+          + '上面某个会话填了独立人设，这里整份换成那份（1:1 互换）。'),
         h.el('div', { style: { display: 'flex', gap: '8px', margin: '8px 0' } },
-          h.button('刷新预览', () => { promptPreview.loaded = false; promptPreview.error = ''; ctx.reload(); })),
+          h.button('刷新预览', () => {
+            promptPreview.loaded = false; promptPreview.error = ''; promptPreview.chatKey = null; ctx.reload();
+          })),
         pre
       ]
     });
 
-    if (!promptPreview.loaded && !promptPreview.error) {
-      ctx.api('/api/biz/prompt-preview').then((r) => {
+    if (!promptPreview.loaded && !promptPreview.error && !promptPreview.loading) {
+      promptPreview.loading = true;
+      const query = key ? `?chatKey=${encodeURIComponent(key)}` : '';
+      ctx.api(`/api/biz/prompt-preview${query}`).then((r) => {
         if (r && r.ok && typeof r.systemPrompt === 'string') {
           const tools = Array.isArray(r.tools) ? r.tools : [];
           const lines = tools.length
             ? tools.map((t) => `- ${t.id}：${t.description || ''}`).join('\n')
             : '（当前没有可用工具）';
-          promptPreview.text = `${r.systemPrompt}\n\n【本次可用工具清单（function calling）】\n${lines}`;
+          // 段序照运行时：系统提示词 → 【角色设定】（用户消息里的会话人设段）→ 工具清单。
+          // 角色设定在运行时进的是**用户消息**，不在系统提示词里——只预览系统提示词会让
+          // 「填了分会话人设但看不到变化」。这里按同一顺序拼，填与不填的差异一眼可见。
+          const persona = r.persona || {};
+          const roleText = String(persona.roleText || '').trim();
+          const roleBlock = roleText
+            ? `\n\n【角色设定（管理员设置，群友不可修改）】\n${roleText}`
+            : '\n\n【角色设定（管理员设置，群友不可修改）】（空——本会话无独立角色设定）';
+          promptPreview.text = `${r.systemPrompt}${roleBlock}\n\n【本次可用工具清单（function calling）】\n${lines}`;
           promptPreview.tools = tools;
           promptPreview.loaded = true;
-          ctx.reload();
         } else {
           promptPreview.error = (r && r.error) || 'unknown';
-          ctx.reload();
         }
       }).catch((error) => {
         promptPreview.error = String((error && error.message) || error);
+      }).then(() => {
+        // 🔴 在途标志必须清：`ctx.reload()` 会重进本节，标志不清则第二次进来又发一遍（自旋）
+        promptPreview.loading = false;
         ctx.reload();
       });
     }
@@ -1486,13 +1755,163 @@
     return card;
   }
 
+  // ══════════════════════════════════════════════════════════════════════
+  // 十一、本地设置（原独立「本地设置」页签并入业务设置——工具与技能之下）
+  //     🔴 与其它分节不同源：打的是**单体自己的** `/api/config`
+  //     （协议端目录 / 登录账号 / 界面端口 / 开机自启 / 关到托盘都是本机动作），
+  //     不是业务面 `/api/biz/config`。所以这一节不用 ctx.save，自己发写回。
+  // ══════════════════════════════════════════════════════════════════════
+
+  /** 本地设置缓存（`GET /api/config` 单体侧）。 */
+  const localConfig = { data: null, loaded: false, loading: false, error: '', saving: false, status: '' };
+
+  /**
+   * 读单体本机配置（单飞；失败落错误文案）。
+   *
+   * 🔴 `loading` 标志不可省：`ctx.reload()` 会重新进本节，没有在途标志时
+   * 每次重绘都再发一次请求，形成「请求 → reload → 请求」的自旋。
+   *
+   * @param {object} ctx 渲染上下文
+   * @returns {void}
+   */
+  function refreshLocal(ctx) {
+    if (localConfig.loaded || localConfig.loading || localConfig.error) return;
+    localConfig.loading = true;
+    ctx.api('/api/config').then((r) => {
+      // 单体这个端点回裸对象 `{config, paths, ...}`（无 ok 字段）——壳层补 ok:true
+      const cfg = r && (r.config || (r.data && r.data.config));
+      if (cfg) {
+        localConfig.data = cfg;
+        localConfig.loaded = true;
+      } else {
+        localConfig.error = String((r && r.error) || '回执为空');
+      }
+    }).catch((error) => {
+      localConfig.error = String((error && error.message) || error);
+    }).then(() => {
+      localConfig.loading = false;
+      ctx.reload();
+    });
+  }
+
+  /**
+   * 写单体本机配置（写后读回核对）。
+   *
+   * @param {object} ctx 渲染上下文
+   * @param {object} patch 补丁（`{napcat:{}, app:{}}`）
+   * @returns {void}
+   */
+  function saveLocal(ctx, patch) {
+    if (localConfig.saving) { ctx.notice('上一笔本机配置保存在途', 'fail'); return; }
+    localConfig.saving = true;
+    localConfig.status = '保存中…';
+    ctx.reload();
+    ctx.api('/api/config', { method: 'POST', body: patch }).then((r) => {
+      localConfig.saving = false;
+      if (!r || r.ok === false) {
+        localConfig.status = `保存失败：${String((r && (r.error || r.status)) || '无响应')}`;
+        ctx.reload();
+        return;
+      }
+      localConfig.loaded = false;
+      localConfig.status = '已保存（目录与账号改动需重启程序生效）';
+      refreshLocal(ctx);
+    }).catch((error) => {
+      localConfig.saving = false;
+      localConfig.status = `保存失败：${String((error && error.message) || error)}`;
+      ctx.reload();
+    });
+  }
+
+  /**
+   * 本地设置分节：协议端目录 / 登录账号 / 界面端口 / 三个开关。
+   *
+   * @param {object} ctx 渲染上下文
+   * @returns {Element} 分节根
+   */
+  function renderLocal(ctx) {
+    const h = ctx.h;
+    const root = h.el('div', { class: 'folds' });
+    if (!localConfig.loaded && !localConfig.error) refreshLocal(ctx);
+    if (localConfig.error) {
+      root.appendChild(h.fold({
+        icon: '🖥',
+        title: '本地设置',
+        sub: '这台机器上的单体（协议端 / 端口 / 自启）',
+        val: '读取失败',
+        open: true,
+        body: [
+          h.hint(`本机配置读取失败：${localConfig.error}`),
+          h.el('div', { style: { marginTop: '6px' } },
+            h.button('重试', () => { localConfig.error = ''; localConfig.loaded = false; ctx.reload(); }))
+        ]
+      }));
+      return root;
+    }
+    if (!localConfig.loaded) {
+      root.appendChild(h.hint('正在读取本机配置…'));
+      return root;
+    }
+
+    const cfg = localConfig.data || {};
+    const nap = cfg.napcat || {};
+    const app = cfg.app || {};
+    // 草稿：每次改动先落到草稿，再把**整份**草稿写回（场记式局部补丁容易漏字段，
+    // 漏一个字段就等于把别处的现值回落成默认值）。
+    const draft = {
+      napcat: { shellDir: nap.shellDir || '', uin: nap.uin || '' },
+      app: {
+        port: Number(app.port) || 3280,
+        autostartNapcat: app.autostartNapcat === true,
+        autoStart: app.autoStart === true,
+        closeToTray: app.closeToTray !== false
+      }
+    };
+    const commit = () => saveLocal(ctx, {
+      napcat: { shellDir: draft.napcat.shellDir, uin: draft.napcat.uin },
+      app: {
+        port: draft.app.port,
+        autostartNapcat: draft.app.autostartNapcat,
+        autoStart: draft.app.autoStart,
+        closeToTray: draft.app.closeToTray
+      }
+    });
+
+    root.appendChild(h.fold({
+      icon: '🖥',
+      title: '本机配置',
+      sub: '改这台机器上的单体（不是业务面那只猫）',
+      val: app.port ? `端口 ${app.port}` : '未设置',
+      open: true,
+      body: [
+        textField(ctx, '协议端目录', nap.shellDir || '',
+          { placeholder: 'NapCat 程序目录（留空 = 自动探测项目内 runtime/NapCat）' },
+          (v) => { draft.napcat.shellDir = String(v || '').trim(); commit(); }),
+        textField(ctx, '登录账号', nap.uin || '',
+          { placeholder: '要登录的 QQ 号' },
+          (v) => { draft.napcat.uin = String(v || '').trim(); commit(); }),
+        numField(ctx, '界面端口（改后需重启程序）', Number(app.port) || 3280, { min: 1, max: 65535 },
+          (n) => { draft.app.port = n; commit(); }),
+        boolField(ctx, '启动时自动拉起协议端', app.autostartNapcat,
+          '', (b) => { draft.app.autostartNapcat = b; commit(); }),
+        boolField(ctx, '开机自启（随系统启动本应用）', app.autoStart,
+          '写 HKCU 的 Run 项', (b) => { draft.app.autoStart = b; commit(); }),
+        boolField(ctx, '点关闭时最小化到托盘', app.closeToTray !== false,
+          '', (b) => { draft.app.closeToTray = b; commit(); }),
+        localConfig.status ? h.hint(localConfig.status) : h.hint('改动即时保存——输入框失焦 / 开关一点即写，无需单独点保存。')
+      ]
+    }));
+    return root;
+  }
+
   // 注册：分节 id → 渲染函数（`settings.js` 按侧栏点击调度；未在此处的分节 = 未接）
   //
-  // 🔴 侧栏只列本表的键。2026-11-01 按Rushiera口径收缩后的现行集：
+  // 🔴 侧栏只列本表的键。2026-11-02 现行集（按Rushiera口径）：
   //    api（模型 API）· memory（记忆）· persona（人设，含提示词预览卡）·
-  //    groups（群名单）· chat（聊天设置）· tools（工具与技能）
+  //    groups（群名单）· chat（聊天设置，含表情包实况面板）· tools（工具与技能）·
+  //    local（本地设置——原独立页签并入，排在工具与技能之下）
   //    已删：search（搜索服务，能力以技能形式存在）· allow（聊天白名单，并入群名单）·
-  //          desktop（桌面端）· onebot（OneBot 不显示）· prompt（并入人设）
+  //          desktop（桌面端，拆进本地设置与业务设置）· onebot（OneBot 不显示）· prompt（并入人设）
   //    renderSearch / renderAllow 已随分节删除而移除；promptCard 由 renderPersona 内部调用。
   window.__settingsSections = Object.assign(window.__settingsSections || {}, {
     api: renderApi,
@@ -1501,6 +1920,7 @@
     groups: renderGroups,
     chat: renderChat,
     tools: renderTools,
+    local: renderLocal,
     stub: false,
     unreachable: UNREACHABLE
   });

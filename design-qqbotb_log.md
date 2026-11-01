@@ -4327,3 +4327,85 @@ Rushiera 2026-11-01 拍 **甲案 = 先接线再启用**（弃乙案「维持 fal
 1. **一日复核（判据 5）**：重启后看 `event:'signal'` 行是否成对落盘、`byCoef` 分布是否集中在 0.85~1.0（若大面积 <0.8 说明某因子持续在压，需查是哪一个——`signal.avg` 六因子均值直接给答案）。
 2. **missStreak 的冷启动**：重启后前几十拍 `missStreak=0`（内存态），信号只受 share / hour / cost 影响；等客观结算跑起来才完整。
 3. **`event:'sent'` 仍无产出点**：本轮只补了注释说明「保留位」，未新增产出——发言条数看 `roll.hit` 即可，不为此单开采集面。
+
+---
+
+## 九十六、界面四处改版 + 表情包维护面（2026-11-02 · 主干直做）
+
+> 触发：Rushiera 一次给四条口径——① 分会话人设默认关闭、群名单式条目不铺开，没填用预览里的提示词、填了与前文 1:1 互换 ② 聊天设置的表情包里要列出**已收集的表情与印象**、展示「什么时候会发」、可改、带删除 ③ 日志落概览 ④ 本地设置进业务设置的「工具与技能」下面。
+> 定位：**界面层结构性改版 + 表情库首次拥有写面（新增 3 条业务面路由）**。后端两条新能力（表情面板 / 按会话预览）都走"与运行时同一个函数"，不另写一份。
+
+### A · 改动面（九个文件）
+
+| # | 文件 | 改动 |
+|:--:|:--|:--|
+| 1 | `app/src/business/config.js` | 新增 `personaForChatOf(cfg, chatKey)` 纯函数版（`personaForChat()` 变成它传 `getConfig()` 的薄壳）；`sticker.hidden` 默认 `[]` |
+| 2 | `app/src/business/routes.js` | `/api/prompt-preview` 支持 `?chatKey=` / body `__chatKey`，按 `personaForChatOf(effective, key)` 合并人设，回执增 `chatKey` + `persona` 摘要；新增 `GET/POST /api/stickers`、`GET /api/stickers/image`、`DELETE /api/stickers/<id>` 四条 |
+| 3 | `app/src/business/sticker-manager.js` | import `updateConfig` / `buildStickerStrategyHint` / `normalizeStickerEntry`；`sync()` 合并时传 `hidden()`；新增 `hidden()` / `panel()` / `imageOf(id)` / `setNote(id, patch)` / `remove(id)` |
+| 4 | `app/src/business/stickers.js` | `mergeStickerLibrary(existing, fetched, hidden)` 增第三参——删过的 id 既不进 `fetchedIds` 也不参与合并（否则下次 sync 从 QQ 收藏原样拉回来） |
+| 5 | `app/src/business/app.js` | `createRoutes({...})` 的 deps 增 `stickers`（原只有 orchestrator 拿到） |
+| 6 | `app/ui/index.html` | 页签 11 → **9**：删「日志」「本地设置」两条；日志区（级别下拉 + 清屏 + `#log-view`）搬进 `#view-overview` 卡片下方 |
+| 7 | `app/ui/views/settings-sections.js` | ① `renderPersona` 重做——去掉「统一模式就锁死」的分支，改群名单式条目（`groups-item` + 编辑 / 清空按钮）+ 点开才出编辑区；新增 `personaState.chatKey` 作为「当前编辑 = 当前预览」的键 ② `promptCard(ctx, chatKey)` 按会话重取（缓存按 chatKey 分区，带 `loading` 在途闸）③ 表情包卡增 `stickerPanelOf`——策略文案（`hint`，与提示词同源）+ 已收集列表 + 印象改 + 看图 + 删除 ④ 新增 `renderLocal`（十一、本地设置）走单体 `/api/config` |
+| 8 | `app/ui/views/settings.js` | `SECTIONS` 增 `local`（排在 `tools` 之后）；文件头口径改写 |
+| 9 | `app/ui/app.js` + `style.css` + `tools/verify-ui-contract.mjs` + `views/_index.md` | 本地设置表单的 DOM 已随页签移除 → `loadConfig` / 两个按钮绑定改空安全；`.groups-item.selected` 样式；`EXPECT.tabs` 11 → **9**；`_index.md` 本地设置归属句改写 |
+
+### B · 四条口径怎么落地
+
+| 口径 | 做法 | 判据 |
+|:--|:--|:--|
+| 分会话人设默认关闭 | 群名单式一行一条（`groups-item`），默认收起；**统一开关不再挡住列表**——原来的 `if (unified) 只显示一句提示` 分支删掉，列表恒定可见，只在编辑区顶部标「统一开关仍开着，这里保存的内容暂不生效」 | 页面里每个白名单会话都有一条，点「编辑」才展开四字段 |
+| 按钮像群名单 | 直接复用群名单的 `groups-item` / `groups-item-main` / `groups-item-btn` 三个类（同一份 CSS，不自造第二套条目形态） | 视觉与群名单页一致；选中态加 `.selected` |
+| 没填用预览的提示词 / 填了 1:1 互换 | 预览与编辑**共用 `personaState.chatKey`**：选某会话 → 后端用 `personaForChatOf` 合并出该会话那份 → 前端按运行时段序拼「系统提示词 + 【角色设定】+ 工具清单」；角色设定在运行时进的是**用户消息**（`prompt.js:922-924`），不补这一段则「填了看不到变化」 | 选中会话后预览标题变「按会话 X 的实际人设组装」且正文出现该会话的【角色设定】 |
+| 表情包：列出现有 + 印象 + 何时会发 + 可改 + 可删 | 新增 `GET /api/stickers` 返回 `panel()`：每条 `label/desc/localNote/tags/usage/useCount/lastUsedAt/lastContext/hasImage/zombie` + `hint`（策略原文）；`POST` 改印象；`DELETE` 删除 | 列表条数 = `data/stickers.json` 条数；`hint` 与 `buildStickerStrategyHint` 逐字一致 |
+| 日志落概览 | 日志块整段搬进 `#view-overview`，`view-logs` 段删除，`btn-log-clear` 绑定改空安全 | 概览页能看到四张卡 + 日志区；页签不再有「日志」 |
+| 本地设置进业务设置 | 新分节 `local`，排在 `tools` 之后；控件仍是原来六项，但改成**即时保存**（原页面是「填完点保存」） | 侧栏第 7 项 = 本地设置；改一项即写 `/api/config` 并读回 |
+
+### C · 删除的语义（为什么不动 QQ 收藏）
+
+`DELETE /api/stickers/<id>` 做两件事：本地库摘条目 + 把 id 记进 `config.sticker.hidden`。
+
+- **不删 QQ 收藏本体**：那是账号资产（`add_custom_face` 入的是真收藏），删了客户端里也没了，且无法恢复。
+- **必须记账**：只摘本地库的话，下一次 `sync()` 从 `fetch_custom_face_detail` 拉回来 → 用户看到「删了又回来了」。`hidden` 在 `mergeStickerLibrary` 的两处（`fetchedIds` 与合并循环）同时生效。
+- 界面上确认框写明这一点（「只从 AI 的记忆里删；QQ 收藏本体不动」）。
+
+### D · 判据兑现
+
+| # | 判据 | 状态 | 证据 |
+|:--:|:--|:--:|:--|
+| 1 | `hidden` 名单挡住回流 | ✅ | 自测 A1–A3：无 hidden 时三条在 / `hidden=['B']` 时 B 不回流 / 未删条目印象保留 |
+| 2 | 会话人设合并与运行时同源 | ✅ | 自测 B1–B6：空 key = 全局 · 命中独立人设 · 参与度覆盖 · 账号身份字段不被覆盖 · 裸 id 键兼容 · 统一模式下不生效 |
+| 3 | 表情面板成型 | ✅ | 自测 C1–C8：计数 / label 取 desc / hint 来自 `buildStickerStrategyHint` / 僵尸标记 / 改印象落库 / 删除摘库 |
+| 4 | 四条新路由在盘且形态正确 | ✅ | 路由自测 R1–R14：三条路由注册 + DELETE 正则命中且不与 persona-templates 串线 + 面板 200 带 `total`/`ok` + `force=1` 触发 sync + 缺 id 400 + 无 `stickers` 依赖 503 + 预览带 `chatKey` 200 且回执带回解析后的键 |
+| 4b | **预览两态真差异**（「填了 1:1 互换」的直接判据） | ✅ | 预览自测 P1–P12 · P14–P15：造 `group:100` 独立人设后——全局态 `chatKey=''` / `roleText=全局角色文本` / `participation=medium` / 系统提示词不含会话覆盖句；会话态 `chatKey='group:100'` / `roleText=群 100 的独立角色` / `participation=high` / `customRules` 与 `systemPromptOverride` 均置换且进系统提示词；**两态 `systemPrompt` 确实不同**（1:1 互换有实据）；统一开关打开后会话态回落全局（与 `personaForChat` 运行时语义一致） |
+| 5 | 界面守门 | ✅ | `verify-ui-contract` **PASS 54/54**（`EXPECT.tabs` 11 → 9 后组 ⑥ 三计数仍全绿） |
+| 6 | 语法与导入 | ✅ | `node --check` × 7 全 exit 0 · `check-syntax` **73/73** · `verify-import-integrity` **98 文件 / 426 符号 / `problems []`**（原 422，新增 4 个导入符号） |
+| 7 | 前端真渲染（对运行中单体） | ✅ | 页签 **9 项**（`sessions/chats/memory/usage/skills/bizsettings/overview/webui/nav`）· `#view-logs` / `#view-settings` **均不存在** · 概览 `#log-view` **40,819 字符** + `#log-level` 在 · 业务设置侧栏 **7 分节（7/7 已接）**，末项「本地设置」六字段齐 · 人设页点某群「编辑」→ 行带 `.groups-item.selected` + `.persona-chat-editor` 展开 + 预览标题变「按会话 group:1097492606 的实际人设组装 · 只读13928 字符 · 58 工具」+ 正文含【角色设定】段 · 表情包卡报 `未知 API：GET /api/stickers` = 前端按新地址发、旧进程未加载（重启前预期） |
+| ⏳ | 表情包成功态（列表 / 改印象 / 删除 / 看图） | 未验 | 需业务面重启后复核（`todo.md` UI-4） |
+
+### E · 未做 / 需人的动作
+
+- 🔴 **业务面与单体均未重启**：`app/src/business/**` 与 `app/src/**` 都是 Node 进程，改代码要重启才生效。本轮**未自行重启**——`todo.md` §〇-A 已挂「配可用模型端点 + 重启业务面 + 群内真触发」这条人的动作，两件事并一次做更省。
+- **真链路未验**：`GET /api/stickers` 在现场仍是 404（旧进程没有这条路由）；重启后需在界面点一遍「聊天设置 → 表情包」看列表条数与 `data/stickers.json` 一致。
+- **`_unpack/resources/app/src/**` 未改**：上游原版只读副本，改造面在 `app/src/business/`。
+- **看图走 base64 单张取**（`GET /api/stickers/image?id=`）：单体只服务 `app/ui` 静态目录，业务面的 `data/sticker-images/` 不在其内；开静态目录等于多一条越界面，故取字节转 data URL，前端 `window.open` 展示。
+
+### F · 判据复跑（本轮全绿）
+
+| 脚本 | 结果 |
+|:--|:--|
+| `node tools/CatTemp/sticker-selftest/selftest.mjs` | **PASS**（A1–A3 · B1–B6 · C1–C8） |
+| `node tools/CatTemp/sticker-selftest/route-selftest.mjs` | **PASS**（R1–R14） |
+| `node tools/CatTemp/preview-selftest.mjs` | **PASS**（P1–P12 · P14–P15 · 预览两态真差异） |
+| `node tools/verify-ui-contract.mjs` | **PASS 54/54** |
+| `node tools/check-syntax.mjs` | **73/73 OK**（`failed: 0`） |
+| `node tools/verify-import-integrity.mjs` | **ALL PASS**（98 文件 / 426 符号 / `problems: []`） |
+| `node --check` × 7 | exit 0 全绿 |
+| 单体页内实读（`127.0.0.1:3280`） | 见 §D 判据 7 |
+
+> 三支自测脚本原落 `tools/CatTemp/`（`sticker-selftest/` 两件 + `preview-selftest.mjs`，收工已软删进回收站）；要长期守门的话下一轮搬进 `tools/` 并按 `verify-*` 命名——断言内容见 §D 判据 1–4b。
+
+### G · 观察项（下一轮）
+
+1. **重启后逐条人工验收**：① 人设页 → 点某群「编辑」→ 预览区标题变「按会话 … 组装」且出现该群的【角色设定】→ 清空后回到全局那份 ② 聊天设置 → 表情包 → 列表条数与 `data/stickers.json` 一致、改印象后重进仍在 ③ 删一条 → 刷新收藏（`force=1`）→ 不回流 ④ 概览页日志区实时滚动 ⑤ 业务设置 → 本地设置 → 改端口读回。
+2. **`hidden` 只增不减**：目前没有「恢复已删表情」的入口。需要时在界面上加一个「已删除 N 条 · 恢复」按钮，把 `config.sticker.hidden` 里的 id 逐个移除即可——数据面已具备，缺的只是 UI（已登记 `todo.md` UI-5）。
+3. **`panel()` 每次重算**：不缓存、按 `lastUsedAt / useCount` 排序。表情总量在几十条量级，可接受；若将来过千需加分页。

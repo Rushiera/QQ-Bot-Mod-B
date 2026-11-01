@@ -1357,6 +1357,7 @@ export function createApp({ log = console.log, eventSource = null } = {}) {
   // 路由 handler 通过闭包取用这些依赖，handleHttp 只负责匹配分发。
   const apiRoutes = createRoutes({
     store, memory, sessions, onebot, orchestrator,
+    stickers,
     emit, log,
     localVersion, compareSemver, UPDATE_INFO_URL,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,

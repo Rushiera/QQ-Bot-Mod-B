@@ -2,11 +2,11 @@
 // 纯函数在 stickers.js；这里管缓存、TTL 和 OneBot 交互。
 import fs from 'node:fs';
 import path from 'node:path';
-import { getConfig, DATA_DIR } from './config.js';
+import { getConfig, updateConfig, DATA_DIR } from './config.js';
 import { safeFetchBinary } from './safe-fetch.js';
 import {
   loadStickerStore, saveStickerStore, mergeStickerLibrary,
-  findSticker, formatStickerList, applyStickerNote, markStickerUsed
+  findSticker, formatStickerList, applyStickerNote, markStickerUsed, buildStickerStrategyHint, normalizeStickerEntry
 } from './stickers.js';
 
 // 收藏表情的本地图片目录：收藏时把图片转存到这里（QQ 图床 rkey 会过期，
@@ -102,7 +102,7 @@ export class StickerManager {
         const fetched = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : null);
         if (!fetched) throw new Error('fetch_custom_face_detail 返回 data 不是数组');
         // 只有拿到合法数组才合并，避免异常响应清空本地库
-        const merged = mergeStickerLibrary(this.entries, fetched);
+        const merged = mergeStickerLibrary(this.entries, fetched, this.hidden());
         this.entries = merged;
         this.syncedAt = Date.now();
         saveStickerStore(this.entries);
@@ -177,6 +177,118 @@ export class StickerManager {
   async list(query = '', limit = 48, force = false) {
     const synced = await this.sync(force);
     return formatStickerList(synced.entries, query, limit);
+  }
+
+  /** 用户在界面里删掉的表情 id 名单（`config.sticker.hidden`）——挡住 QQ 收藏回流。 */
+  hidden() {
+    const list = getConfig().sticker?.hidden;
+    return Array.isArray(list) ? list.map(String) : [];
+  }
+
+  /**
+   * 界面用面板数据：每条表情的「现状 + 印象 + 使用统计 + 何时会发」。
+   *
+   * 「何时会发」不在这里编：`hint` 直接取提示词里同一份策略文案
+   * （`buildStickerStrategyHint`），保证界面看到的逻辑就是模型看到的逻辑。
+   *
+   * @returns {{total:number, enabled:boolean, encourage:number, promptMax:number, hint:string, items:object[]}}
+   */
+  panel() {
+    const cfg = getConfig().sticker || {};
+    const level = Number(cfg.encourage ?? 1) || 0;
+    const items = this.entries.map(normalizeStickerEntry).filter(Boolean).map((e) => {
+      const local = String(e.localFile || e.url || '');
+      // 图片不走静态服务（单体只服务 app/ui，业务面数据目录不在其内）——
+      // 只在有受控目录内的本地文件时给「可看图」标记，前端按需单张取 base64。
+      const hasImage = local.toLowerCase().startsWith('file:///') && Boolean(localStickerPath(local));
+      return {
+        id: e.id,
+        label: e.desc || e.localNote || '',
+        desc: e.desc || '',
+        localNote: e.localNote || '',
+        tags: e.tags || [],
+        usage: e.usage || '',
+        useCount: e.useCount || 0,
+        lastUsedAt: e.lastUsedAt || 0,
+        lastContext: e.lastContext || '',
+        source: e.source || 'qq',
+        hasImage,
+        zombie: !hasImage && (e.persistFailed === true || !e.emojiId)
+      };
+    }).sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0) || (b.useCount || 0) - (a.useCount || 0));
+    return {
+      total: items.length,
+      enabled: cfg.enabled !== false,
+      encourage: level,
+      promptMax: Number(cfg.promptMaxStickers) || 10,
+      hint: buildStickerStrategyHint(level),
+      items
+    };
+  }
+
+  /**
+   * 取一条表情的图片字节（界面看图为 base64 data URL，不经静态服务）。
+   *
+   * @param {string} id 表情 id
+   * @returns {{ok:boolean, dataUrl:string, error?:string}} 结果
+   */
+  imageOf(id) {
+    const target = String(id || '').trim();
+    const entry = this.entries.find((e) => String(e?.id || '') === target);
+    if (!entry) return { ok: false, dataUrl: '', error: '未找到该表情' };
+    const local = String(entry.localFile || entry.url || '');
+    const full = localStickerPath(local);
+    if (!full) return { ok: false, dataUrl: '', error: '该表情没有本地图片（只有过期直链或未落盘）' };
+    try {
+      const buffer = fs.readFileSync(full);
+      const ext = path.extname(full).toLowerCase().replace('.', '') || 'png';
+      const mime = ext === 'jpg' ? 'jpeg' : ext;
+      return { ok: true, dataUrl: `data:image/${mime};base64,${buffer.toString('base64')}` };
+    } catch (error) {
+      return { ok: false, dataUrl: '', error: String(error?.message ?? error) };
+    }
+  }
+
+  /**
+   * 改一条表情的印象（备注 / 标签 / 用途）。
+   *
+   * @param {string} id 表情 id
+   * @param {object} patch `{note, tags, usage}`
+   * @returns {object|null} 更新后的条目（未命中返 null，由路由转 404）
+   */
+  setNote(id, patch = {}) {
+    return this.note(id, {
+      note: patch.note !== undefined ? String(patch.note ?? '') : undefined,
+      tags: Array.isArray(patch.tags) ? patch.tags : undefined,
+      usage: patch.usage !== undefined ? String(patch.usage ?? '') : undefined,
+      source: 'manual'
+    });
+  }
+
+  /**
+   * 删一条表情（本地库摘掉 + 记进 `config.sticker.hidden` 挡住回流）。
+   *
+   * 🔴 不删 QQ 收藏本体：那是账号资产，误删无法恢复。删除只作用于「AI 认知层」——
+   *    删掉后模型不再看得到、也不会再发；QQ 客户端里那张表情照样在。
+   *
+   * @param {string} id 表情 id
+   * @returns {{ok:boolean, removed:boolean, hidden:string[]}} 结果
+   */
+  remove(id) {
+    const target = String(id || '').trim();
+    if (!target) return { ok: false, removed: false, hidden: this.hidden() };
+    const before = this.entries.length;
+    this.entries = this.entries.filter((e) => String(e?.id || '') !== target);
+    const removed = this.entries.length !== before;
+    if (removed) {
+      try { saveStickerStore(this.entries); } catch { /* 写盘失败：内存态已摘，下次启动由 hidden 名单兜 */ }
+    }
+    const hidden = this.hidden();
+    if (hidden.indexOf(target) < 0) {
+      // 写配置 → 下次 sync 不再回流；写失败也返回实际名单（调用方可据此判）
+      try { updateConfig({ sticker: { hidden: hidden.concat([target]) } }); } catch { /* 由返回值体现 */ }
+    }
+    return { ok: true, removed, hidden: this.hidden() };
   }
 
   async find(ref) {

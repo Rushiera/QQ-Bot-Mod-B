@@ -213,6 +213,10 @@ main { flex: 1; overflow: hidden; display: flex; }
 .groups-item.on { border-left-color: var(--ok); }
 .groups-item.missing { border-left-color: var(--warn); }
 .groups-item.dragging { opacity: .45; }
+/* 选中态（分会话人设的「正在编辑 / 预览」那条）——与启用态区分：蓝色左边 + 高亮底 */
+.groups-item.selected { border-left-color: var(--accent); background: #1a2130; }
+/* 不可拖拽的同类条目（人设列表 / 表情列表面板）不显示抓手光标——真能拖才给 grab */
+.groups-item:not([draggable="true"]) { cursor: default; }
 .groups-item:hover { border-color: var(--accent); }
 .groups-item-main { flex: 1; min-width: 0; }
 .groups-item-name {

@@ -30,7 +30,7 @@
 | ~~`plugins.js`~~ | ~~L7~~ | 🗑 **已删（2026-11-01 · 插件页整页移除，功能以技能页双市场按钮替代）** |
 | `settings.js` · `settings-sections.js` | L8 | 🟡 桩（47 + 21 行） |
 
-> 🔴 **`settings.js` 是「业务设置」（页签 `bizsettings` / `#view-bizsettings`）**，不是既有「本地设置」（`#view-settings`，归 `app/ui/app.js` 管，改单体自己的端口 / 协议端目录 / 账号）。两者并存不合并。
+> 🔴 **`settings.js` 是「业务设置」（页签 `bizsettings` / `#view-bizsettings`）**。原独立「本地设置」页签（`#view-settings`，归 `app/ui/app.js`）已于 2026-11-02 并入本节尾部的 `local` 分节（协议端目录 / 登录账号 / 界面端口 / 开机自启 / 关到托盘）——它打的是单体自己的 `/api/config`，与业务面 `/api/biz/config` 不同源，实现见 `settings-sections.js` 的 `renderLocal`。
 
 > 🔴 **`plugins.js` 的写面判据已反转**——插件页按 `design-qqbotb_log.md` §九十二 整页移除（Rushiera 硬约束：**不得重建**）。`tools/verify-ui-contract.mjs` 组 ① 对这一件断言的是**不存在**：谁把它建回来，自测立刻红。功能由技能页双市场按钮替代。
 

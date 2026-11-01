@@ -62,11 +62,12 @@ const VIEW_BLOCKS = ['sessions', 'chats', 'memory', 'usage', 'skills', 'settings
 const UI_MEMBERS = ['api', '$', '$$', 'el', 'esc', 'fmtTime', 'fmtNum', 'fmtBytes', 'empty', 'fail', 'registerView'];
 
 /**
- * index.html 期望值（口径见 `log §九十二`：13 页签 − 插件页 − 群名单页签 = 11；
- * 9 视图脚本 − plugins.js = 8；含 app.js 共 9 个 script）。
+ * index.html 期望值（口径见 `log §九十二` + 2026-11-02 页签合并：
+ * 原 13 页签 − 插件页 − 群名单页签 = 11 → 本次「日志」并入概览、「本地设置」
+ * 并入业务设置 = 9；9 视图脚本不变；含 app.js 共 9 个 script）。
  * 🔴 改界面结构时同步本值——三条断言就是页面结构的守门。
  */
-const EXPECT = { tabs: 11, viewScripts: 8, scripts: 9 };
+const EXPECT = { tabs: 9, viewScripts: 8, scripts: 9 };
 
 const GROUPS = {
   files: '① 文件在盘',

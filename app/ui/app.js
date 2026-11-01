@@ -227,11 +227,16 @@ function subscribeEvents() {
 }
 
 /**
- * 载入配置到表单。
+ * 载入本机配置到表单。
+ *
+ * 🔴 本地设置已并入「业务设置 → 本地设置」分节（单体这一侧的表单元素不再存在），
+ * 本函数保留为空安全的兜底：元素不在就直接返回，不再拉 /api/config 并写 DOM。
  *
  * @returns {Promise<void>} 完成
  */
 async function loadConfig() {
+  const host = $('#cfg-shell-dir');
+  if (!host) return;
   try {
     const data = await api('/api/config');
     $('#cfg-shell-dir').value = data.config?.napcat?.shellDir ?? '';
@@ -353,14 +358,19 @@ function bindEvents() {
     loadWebui('qq_login');
   });
 
-  $('#btn-log-clear').addEventListener('click', () => {
-    logBuffer.length = 0;
-    $('#log-view').textContent = '';
-  });
+  const clearBtn = $('#btn-log-clear');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      logBuffer.length = 0;
+      const view = $('#log-view');
+      if (view) view.textContent = '';
+    });
+  }
 
-  $('#btn-config-save').addEventListener('click', async () => {
+  const saveBtn = $('#btn-config-save');
+  if (saveBtn) saveBtn.addEventListener('click', async () => {
     const hint = $('#cfg-hint');
-    hint.textContent = '保存中…';
+    if (hint) hint.textContent = '保存中…';
     try {
       await api('/api/config', {
         method: 'POST',
@@ -374,9 +384,9 @@ function bindEvents() {
           }
         }
       });
-      hint.textContent = '已保存（目录与账号改动需重启程序生效）';
+      if (hint) hint.textContent = '已保存（目录与账号改动需重启程序生效）';
     } catch (error) {
-      hint.textContent = `保存失败：${error.message}`;
+      if (hint) hint.textContent = `保存失败：${error.message}`;
     }
   });
 }

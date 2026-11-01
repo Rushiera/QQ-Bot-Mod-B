@@ -63,18 +63,32 @@ export function saveStickerStore(entries, file = STICKER_FILE) {
   fs.renameSync(tmp, file);
 }
 
-export function mergeStickerLibrary(existing, fetched) {
-  const out = existing.map(normalizeStickerEntry).filter(Boolean);
+/**
+ * 合并"本地库"与"QQ 收藏表情"。
+ *
+ * `hidden` = 用户在界面里删掉的表情 id 名单（`config.sticker.hidden`）：
+ * 删除若只从本地库摘掉，下一次 sync 会从 QQ 收藏里原样拉回来 —— 用户看到
+ * 「删了又回来了」。故删除必须双向记录：本地库摘条目 + 名单挡住回流。
+ *
+ * @param {Array} existing 本地库
+ * @param {Array} fetched 协议端 `fetch_custom_face_detail` 回执
+ * @param {string[]} [hidden] 已删除名单（id）
+ * @returns {Array} 合并后的库
+ */
+export function mergeStickerLibrary(existing, fetched, hidden = []) {
+  const block = new Set((Array.isArray(hidden) ? hidden : []).map((x) => String(x)));
+  const out = existing.map(normalizeStickerEntry).filter(Boolean).filter((e) => !block.has(e.id));
   const byId = new Map(out.map((e) => [e.id, e]));
   const fetchedIds = new Set();
   for (const item of Array.isArray(fetched) ? fetched : []) {
     const id = String(item?.emoji_id || item?.resId || item?.id || '').trim();
-    if (id) fetchedIds.add(id);
+    if (id && !block.has(id)) fetchedIds.add(id);
   }
   for (const item of Array.isArray(fetched) ? fetched : []) {
     if (!item || typeof item !== 'object') continue;
     const id = String(item.emoji_id || item.resId || item.id || '').trim();
     if (!id) continue;
+    if (block.has(id)) continue;                                  // 用户删过：不回流
     const old = byId.get(id);
     const merged = normalizeStickerEntry({
       ...(old || {}),

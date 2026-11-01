@@ -236,6 +236,10 @@ export const DEFAULT_CONFIG = {
     promptMaxStickers: 10,
     collectEnabled: true,
     maxCollectPerHour: 10,
+    // 界面上「删除」掉的表情 id 名单：本地库摘除 + 此名单挡住协议端收藏回流
+    // （只从本地库删，下次 sync 会从 QQ 收藏原样拉回来，用户看到「删了又回来」）。
+    // 不删 QQ 收藏本体 —— 那是账号资产。
+    hidden: [],
     // 发表情包的积极程度（0=不鼓励 1=偶尔 2=较积极 3=很积极）。
     // 这是在提示词层面引导模型"更愿意用表情回应"，不是强制每次都发 ——
     // 强制会显得机械，引导才能让它在合适的时候自然用上。
@@ -871,12 +875,27 @@ export function setRuntimeConfig(cfg) {
  *    开关关掉后条目恢复生效 —— 数据不删，只是不再参与合并。
  */
 export function personaForChat(chatKey) {
-  const base = getConfig().persona || {};
+  return personaForChatOf(getConfig(), chatKey);
+}
+
+/**
+ * 取某个会话实际生效的人设（**指定配置对象版**——纯函数，不改全局）。
+ *
+ * 供「提示词预览」用：预览要按"尚未落盘的临时配置"组装，同时必须与运行时
+ * 走同一条合并逻辑（另写一份必漂移）。运行时入口 `personaForChat()` 即本函数
+ * 传 `getConfig()`，两处同源。
+ *
+ * @param {object} cfg 配置对象（全局配置或深合并后的临时副本）
+ * @param {string} chatKey 会话键（`group:123` / `private:10001`，可空 = 全局）
+ * @returns {object} 合并后的人设
+ */
+export function personaForChatOf(cfg, chatKey) {
+  const base = (cfg && cfg.persona) || {};
   const [kind, id] = String(chatKey || '').split(':');
   if (!id) return base;
   // 统一人设模式：一律用全局，不看 personaByChat
-  if (getConfig().personaUnified !== false) return base;
-  const perChat = getConfig().personaByChat || {};
+  if (cfg.personaUnified !== false) return base;
+  const perChat = cfg.personaByChat || {};
   // 兼容两种键格式：UI 的隐藏 JSON 以 chatKey（group:123）为键保存，
   // 而这里按 id 段（123）查 —— 只认一种格式时保存成功但永不生效
   // （2026-09-17 用户实测踩中：独立人设存了却一直跟随全局）。

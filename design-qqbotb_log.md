@@ -3912,3 +3912,60 @@ CHANGELOG 膨胀的三层原因与对应处置（判据 → `ccbp:L1/Wisdom.md` 
 | 2 | 「删除本会话记忆」按钮 | 会清真实群 94 个成员档，属破坏性写面，本轮不点；用零记忆空会话复验 |
 | 3 | `orchestrator.js:2569-2573` 的同类 `String(s ?? '')` | 输入来自 LLM 解析结果，不在本卡写面；下游已过 `replaceMember` 归一，观察一轮收工轮日志再定 |
 | 4 | browser-* 通道 | 4 次 `OA_TIMEOUT` 后按 `Discipline` §三-10 停止，未第 5 次 |
+
+---
+
+## 九十一、API 信息清除 + 用量置空（2026-11-01 · Rushiera 指令 · 归档至 CatTemp）
+
+> Rushiera：「将 api 信息清除掉，这个 key 我们不用了，另外用量信息也置空」；处置口径：「按照归档到 CatTemp 的方式来」——不永久删除，软迁移到 `WorkSpace:tools/CatTemp`。
+
+### A · API 信息清除（四处同改）
+
+| # | 落点 | 动作 | 读回实况 |
+|:--:|:--|:--|:--|
+| 1 | `_unpack/data/config.json` `api` 段 | `baseUrl` / `apiKey` / `model` / `provider` / `fallbackModels` 清空 | `:2-7` 全空、`fallbackModels: []` |
+| 2 | 运行期内存单例 | `POST /api/config` 传同一 patch（`updateConfig` 深合并 + 全量写盘），避免内存值把盘上改动覆盖回去 | 回执 200 · 回传 `api.baseUrl=""` / `model=""` |
+| 3 | `runtime/.{botguard,browse,engage,fileread,hardlimit,memory-reach,memory,quiet,readcompact,session,talkstyle}-selftest/config.json` **11 份** | 自测残留副本同口径清空 | `text-grep sk-xvsLhJOx` 命中 **0** |
+| 4 | `tools/apply-qqagent-config.mjs:249-252` | 常量 `API` 三字段置空 + 注释记明作废原因；`:280` 分支加 `API.baseUrl` 前置判据——空即**不覆盖 api**（原先是无条件读密钥面写回） | `node --check` exit 0 |
+
+**取证面：** 全仓 `text-grep sk-xvsLhJOx`（明文 key 本体）余量 = **0**；`app/data` / `_unpack/data/logs` / `_unpack/data/sessions` / `tools` 四处分别 grep 均 0。历史运行日志里的 `time.api.freeshare.tech` 属**端点地址**（非密钥），随日志归档保留。
+
+### B · 用量置空（软归档 → CatTemp）
+
+**归档根**：`workspace:tools/CatTemp/qqbotb-usage-archive-20261101/`
+
+| 件 | 形态 | 说明 |
+|:--|:--|:--|
+| `config.json` | 副本 | 清除前的原始配置快照（含原 api 段，供反查） |
+| `usage-today.json` | 副本 | 清除前 `dayKey 2026-11-01` / 2,584,953 tokens / runs 25 |
+| `usage-days/` | 副本 | 6 个日文件（2026-10-26 … 10-31） |
+| `telemetry-totals.json` | 副本 | 清除前 calls 3770 / 119,266,303 tokens |
+| `clear-api-patch.json` | 施工件 | 本次用的 patch 载荷 |
+| `moved/usage-today.json` · `moved/usage-days/` · `moved/telemetry-totals.json` · `moved/session-index-cache.json` | **原文件迁入**（非复制） | 运行区已无这些件 |
+| `moved/sessions/` | **原目录迁入** | 3105 个会话 JSON——用量聚合的**唯一原始来源**（`app.js:1847` `parseUsageSessionFile` 逐条读 `message.raw.usage`） |
+| `moved/usage-days-regen/` · `moved/session-index-cache-regen.json` | 二次迁入 | 业务面旧进程（PID 未重启前）在首次迁移后又从内存态回写生成的两份，重启前再清一次 |
+
+**为什么必须迁 `sessions/`**：只删 `usage-*` 不够——`buildUsageStatsWithSnapshots`（`app.js:2216-2259`）在日文件缺失时**从 sessions 回算并回写**。实测：仅迁走 `usage-*` 后 `GET /api/usage/stats?range=7` 仍返 60.52（回算值）。
+
+**重启与收口**：`启动QQBotB.vbs` 一键全流程（停旧实例 → 清锁 → 开会话 → 起新）→ 45 秒后复测。
+
+### C · 消费点验收（全绿）
+
+| 判据 | 手段 | 读数 |
+|:--:|:--|:--|
+| 1 用量归零 | `GET http://127.0.0.1:3210/api/usage/stats?range=7` | `totals.cost 0` · `peakTokens 0` · `promptTokens 0` · `completionTokens 0` · `cachedTokens 0` |
+| 2 全量窗口同零 | 同上 `?range=all` | 全零 |
+| 3 配置面明文清零 | `text-read _unpack/data/config.json:1-8` | `baseUrl` / `apiKey` / `model` / `provider` 全 `""` |
+| 4 配置 API 不回密钥 | `GET /api/config` | `api` 段无 `apiKey` 字段（`sanitizeConfig` 删除）；`baseUrl` / `model` 为空 |
+| 5 会话表重建 | `_unpack/data/sessions/` | 1 条（`mvxk43jv-249702e6` · `chatKey=local:启动` · usage 全 0） |
+| 6 索引缓存重建 | `session-index-cache.json` | `entries` 1 条、usage 全 0 |
+| 7 补丁脚本可跑 | `node --check tools/apply-qqagent-config.mjs` | exit 0 |
+
+### D · 边界与遗留
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | **业务面当前无可用模型端点**——`api.*` 全空意味着群消息进不了 LLM。恢复路径：在界面「设置 → API」填新端点与密钥（写回 `_unpack/data/config.json`），或改 `tools/apply-qqagent-config.mjs` 的 `API` 常量再跑一次 | 按指令预期 |
+| 2 | `_unpack/data/logs/*.log` 与 `memory/` / `messages/` / `metrics/` 未动——不属「api 信息」也不属「用量」；日志含端点地址（非密钥） | 按口径保留 |
+| 3 | 归档件在 CatTemp，按 `Discipline` §三-9 属收工清理区——**但本次是指令性归档，不作清理**；需长期留存时再迁 `tools/` 其他目录 | 待定 |
+| 4 | `sessions/` 归档顺带清掉了存档页历史（16 群 → 0 群），界面「存档」页现只剩启动会话 | 用量口径的必然连带，已知 |

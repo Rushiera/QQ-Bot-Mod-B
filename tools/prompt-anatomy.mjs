@@ -93,5 +93,5 @@ for (const l of msgLines) {
 }
 L.push('发言人分布（前 8）: ' + Object.entries(who).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}=${v}`).join(' | '));
 
-fs.writeFileSync('D:/Mau/WorkSpace/CatTemp/qqbotb-prompt-anatomy3.out.txt', L.join('\n'), 'utf8');
+fs.writeFileSync('D:/Mau/WorkSpace/tools/CatTemp/qqbotb-prompt-anatomy3.out.txt', L.join('\n'), 'utf8');
 console.log('ok ' + L.length);

@@ -246,9 +246,10 @@ const ROUTE_INDEX = [
   '- 需要目录时：`list_dir("ccbp:L2/Worker")` / `list_dir("workspace:QQBotB")`。'
 ].join('\n');
 
-// newapi-bak（apiConfigId 7e5dd46a-…）——密钥按 id 从密钥面取
-// 2026-10-25：站点换到 time.api.freeshare.tech（原 47.250.160.225:8443 已 410）
-const API = { baseUrl: 'https://time.api.freeshare.tech/v1', keyId: '7e5dd46ab9ee431cb016c24f65d1f41e', model: 'deepseek-v4.1-flash' };
+// 2026-11-01（Rushiera）：原 API 站点与 key 一并作废——api/baseUrl/apiKey/model 已从
+// data/config.json 清空，本脚本不再把密钥写回配置。
+// 常量留空即为「不覆盖 api」：下方非 --roletext-only 分支遇到空 baseUrl 直接跳过 api。
+const API = { baseUrl: '', keyId: '', model: '' };
 // NapCat（QQBot mod B 协议端 · design-qqbotb_log.md §二）
 const ONEBOT = { wsUrl: 'ws://127.0.0.1:3001', httpUrl: 'http://127.0.0.1:3000', token: 'napcatb2405997337' };
 
@@ -276,7 +277,7 @@ const cfg = JSON.parse(fs.readFileSync(CFG_FILE, 'utf8'));
 // --roletext-only：只刷前文（roleText）——api / snowluma 已由后续补丁与实测调过，不覆盖
 const ONLY_ROLE = process.argv.includes('--roletext-only');
 let apiKey = { length: 0 };
-if (!ONLY_ROLE) {
+if (!ONLY_ROLE && API.baseUrl) {
   const secrets = JSON.parse(fs.readFileSync(SECRETS, 'utf8'));
   apiKey = secrets[API.keyId];
   if (!apiKey) throw new Error(`密钥未取到：${API.keyId}`);

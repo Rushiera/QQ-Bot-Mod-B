@@ -13,6 +13,9 @@ const MEMORY_DIR = path.join(DATA_DIR, 'memory');
 const INJECT_MAX_IMPRESSIONS = 8;    // 每位群友注入最近 N 条（原 5）
 const INJECT_MAX_MEMBERS = 30;       // 无过滤时最多注入几位群友（原 20）
 const MEMBER_ARCHIVE_DIR = 'archive';
+// 写入侧上限（不节流；界面 `app/ui/views/memory.js` 的 `IMPRESSION_MAX` 同口径）
+const WRITE_MAX_IMPRESSIONS = 20;
+const IMPRESSION_MAX_CHARS = 300;
 
 function chatDirName(chatKey) {
   return String(chatKey).replace(/[^a-z0-9_]/gi, '_');
@@ -76,6 +79,44 @@ function loadMember(chatKey, userId, name = '') {
 function loadMeta(chatKey) {
   const raw = readJson(metaFile(chatKey), null);
   return { lastConsolidatedAt: Number(raw?.lastConsolidatedAt) || 0 };
+}
+
+/**
+ * 把调用方送来的 impressions 归一成 `[{ content, createdAt }]`。
+ *
+ * 形态容错与 GET 对称——元素接受三种：
+ *   ① 字符串
+ *   ② `{ content: string }` 对象（就是 GET 返回的形态，会被整份回传，v1.11 前落成 `[object Object]`）
+ *   ③ `{ text: string }` 对象（历史字段名）
+ * 其余形态（数字 / null / 数组 / 缺文本的对象）一律抛错——静默 `String(x)` 会把对象落成字面量，
+ * 属失败不可见（`AGENTS.md` §一-4）。
+ *
+ * @param {unknown} value 调用方传入的 impressions（数组 / 单值 / 空）
+ * @param {number} now 本批统一时间戳
+ * @returns {{content: string, createdAt: number}[]} 归一后的条目（≤ WRITE_MAX_IMPRESSIONS）
+ * @throws {Error} 元素形态不可识别
+ */
+function normalizeImpressions(value, now) {
+  const list = Array.isArray(value) ? value : (value == null ? [] : [value]);
+  const out = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const s = list[i];
+    let text;
+    if (typeof s === 'string') {
+      text = s;
+    } else if (s && typeof s === 'object' && !Array.isArray(s) &&
+      (typeof s.content === 'string' || typeof s.text === 'string')) {
+      text = typeof s.content === 'string' ? s.content : s.text;
+    } else {
+      const seen = s === null ? 'null' : (Array.isArray(s) ? 'array' : typeof s);
+      throw new Error(`impressions[${i}] 形态不可识别（${seen}）——只接受字符串或含 content 文本的对象`);
+    }
+    const content = text.trim();
+    if (!content) continue;
+    out.push({ content: content.slice(0, IMPRESSION_MAX_CHARS), createdAt: now });
+    if (out.length >= WRITE_MAX_IMPRESSIONS) break;
+  }
+  return out;
 }
 
 export class MemoryStore {
@@ -288,13 +329,8 @@ export class MemoryStore {
     const map = this.#ensureChat(chatKey);
     const old = map.get(uid) || loadMember(chatKey, uid, name);
     const finalName = String(name ?? '').trim().slice(0, 60) || String(old.name || '').trim() || uid;
-    const list = Array.isArray(impressions) ? impressions : [impressions];
     const now = Date.now();
-    const entries = list
-      .map((s) => String(s ?? '').trim())
-      .filter(Boolean)
-      .slice(0, 20)
-      .map((content) => ({ content: content.slice(0, 300), createdAt: now }));
+    const entries = normalizeImpressions(impressions, now);
     const member = {
       userId: uid,
       name: finalName,
@@ -328,13 +364,8 @@ export class MemoryStore {
     const map = this.#ensureChat(chatKey);
     const old = map.get(uid) || loadMember(chatKey, uid, name);
     const finalName = String(name ?? '').trim().slice(0, 60) || String(old.name || '').trim() || uid;
-    const list = Array.isArray(contents) ? contents : [contents];
     const now = Date.now();
-    const impressions = list
-      .map((s) => String(s ?? '').trim())
-      .filter(Boolean)
-      .slice(0, 20)
-      .map((content) => ({ content: content.slice(0, 300), createdAt: now }));
+    const impressions = normalizeImpressions(contents, now);
     const member = {
       userId: uid,
       name: finalName,

@@ -3862,3 +3862,53 @@ CHANGELOG 膨胀的三层原因与对应处置（判据 → `ccbp:L1/Wisdom.md` 
 |:--:|:--|:--|
 | 1 | `impressions` 非法形态处置口径 | **容错 `{content}` 对象 + 其余非字符串抛错**——GET/PUT 形态不对称本身就是缺陷源头，严格只收字符串会让 GET 结果无法直接回传 |
 | 2 | 该缺陷是否单独开卡 | **挂在验收线内**（两函数 + 一处调用，成本低；判据已压成可复跑断言） |
+
+---
+
+## 九十、R9 执行：退出并发协议 + 记忆写面健壮性修复 + 合龙后页面级验收（2026-11-01 · 主干直做）
+
+> Rushiera 2026-11-01 11:47：「R9 改为你直接执行，退出并发协议」。本轮 R9 不再经调度器，由主干一次做完；报告 → `reports/R9-L1.md`。
+
+### A · 退出并发的动作（四处同改）
+
+| # | 动作 | 落点 |
+|:--:|:--|:--|
+| 1 | 队列 §三 删 Q-001 行（原 `待开工` · N=1 · 卡 R9） | `workspace:tools/并发协议/并发待开工.md` |
+| 2 | 队列 §六 归档追加一行「R9 撤出并发 · 转主干单线」（状态列写「未核销（撤出并发时点）」） | 同上 |
+| 3 | `state/queue.json` 删 Q-001 整行（剩 Q-002 / Q-004 两行） | `workspace:tools/并发协议/state/queue.json` |
+| 4 | 项目哨兵 `tasks/.concurrency.json` 软删除 → `tools/CatTemp/fs_recycle` | `workspace:QQBotB/tasks/` |
+
+### B · 缺陷修复（`app/src/business/memory.js` +43/-12 · `git diff --numstat` 实测）
+
+- **新增** `WRITE_MAX_IMPRESSIONS = 20` / `IMPRESSION_MAX_CHARS = 300` 两个模块级常量（`:16-18`），把原先散在两处的字面量收成一处。
+- **新增** 纯函数 `normalizeImpressions(value, now)`（`:84-120`）：数组 / 单值 / 空三形态统一入口；元素接受「字符串」「含 `content` 文本的对象」「含 `text` 文本的对象」三种，其余**抛错并带下标与实得类型**；空串跳过；截 20 条 / 每条 300 字。
+- **两处调用同口径**：`editMemberImpression`（`:333`）与 `replaceMember`（`:368`）原先各自 `list.map((s) => String(s ?? '').trim())…` 五段链，改成一行归一调用。
+- **为什么容错 `{content}` 而不是一律拒**：GET 端点返的就是 `[{content, createdAt}]`，界面把 GET 结果整份回传是自然行为——形态不对称本身就是缺陷源头（卡 §七 待裁 1 选 A + 兜底）。抛错的那一支经 `routes.js:1370-1381` 的 `try/catch` 变 **400 + 原文**，不是 500 静默。
+- **`app/ui/views/memory.js` 零改动**：`saveMember`（`:1310-1336`）送的是 `String(raw).split(/\r?\n/)` 得到的字符串数组，形态本就正确；页面报 `[object Object]` 的成因在业务面。
+
+### C · 验收读数（九条判据）
+
+| 判据 | 手段 | 读数 |
+|:--:|:--|:--|
+| 1–2 | 临时 node 进程 + `QQ_AGENT_DATA_DIR` 指 `%TEMP%/r9l1-sandbox-<pid>`（**不碰 `_unpack/data`**），直调 `MemoryStore` | 6 正例全绿（返回值与落盘逐条相等）· 8 负例（数字 / null / 嵌套数组 / 空对象 × 两方法）**8/8 全 throw** · 落盘含字面量 `false` · 沙盒自证已清理 |
+| 3 | `text-grep "[object Object]"` 根 `_unpack/data/memory` | 命中 **0** |
+| 4 | `browser_vision` 域内真浏览器开 `http://127.0.0.1:3280/`，页内挂 `error` / `unhandledrejection` / `console.error` 三钩子逐页点 13 个 `.tab[data-view]` | **13/13 全零**；innerText 长度逐页 29 … 42,093 |
+| 5 | 同上 | 会话 37,777 字符级 / 存档 16 群（首行 `SC2BOT开发 未读1·170条`）/ 用量 20 行（合计 4,664 · 148,410,802）/ 记忆 365 元素 |
+| 6 | 同上，八入口逐点 | 七条实点全 200 + 提示行有值 + 读回真文本：加 / 改 / 删群记 · 加印象 · 编辑印象「存」· bot 指定 · 发言档位；「删本会话记忆」按边界 **NOT RUN**。所有写入逐字还原并回读确认（`1286860918.json` 的 `createdAt` 复原为 `1793449551641`，`config.json` 的 `levelByChat.361820329` 复原为 4、`botGuard.members` 复原为两项） |
+| 7 | `node tools/verify-ui-contract.mjs` | **PASS 58/58**（八组 9/7/7/8/13/3/2/9） |
+| 8 | `node tools/verify-import-integrity.mjs` | `filesScanned 98` · `symbolsChecked 417` · `problems []` |
+| 9 | `node --check` 两文件 | 各 exit 0 |
+
+### D · 现场处置两笔（页面级验收的副产物）
+
+1. **测试成员 `999000001`（「＋ 添加印象」新建）**：页面点「删除」时 browser-eval 连续超时未取到回执 → 业务面直连 `DELETE /api/memory-files/group_361820329/members/999000001` → `{"ok":true}`；`file-find` 0 条、`R9探针` grep 命中 0，已清干净。
+2. **真实成员 `1286860918`**：编辑印象「存」写入后，读回 `createdAt` 被刷新（写新值属正常语义），按 `memory/backups/group_361820329/1286860918.json` **逐字还原**（含 `updatedAt` / `lastConsolidatedAt` 时间戳），读回确认与原档一致。
+
+### E · 未竟（写进 `reports/R9-L1.md` §未取证，四条）
+
+| # | 项 | 处置方向 |
+|:--:|:--|:--|
+| 1 | 缺陷修复的**群内真触发** | 需重启业务面才对 3210 生效（当前仍是 PID 33580 旧进程）；主干按卡 §五-2 不自行起停 → 待 Rushiera 双击 `启动QQBotB.vbs` 后用群内 @ 复验 |
+| 2 | 「删除本会话记忆」按钮 | 会清真实群 94 个成员档，属破坏性写面，本轮不点；用零记忆空会话复验 |
+| 3 | `orchestrator.js:2569-2573` 的同类 `String(s ?? '')` | 输入来自 LLM 解析结果，不在本卡写面；下游已过 `replaceMember` 归一，观察一轮收工轮日志再定 |
+| 4 | browser-* 通道 | 4 次 `OA_TIMEOUT` 后按 `Discipline` §三-10 停止，未第 5 次 |

@@ -52,8 +52,8 @@
 
 | 字段 | 值 |
 |:--|:--|
-| 上次同步时间 | 2026-11-01 19:26 |
-| 上次同步 commit | 本轮 HEAD = `origin/main`（`5ac910e` 代码 · `800e63d` 档案 · `cea0fa0` todo 核销 · 之后仅本档案行）；写入后 `status -sb` 显示 `## main...origin/main` 无偏离 |
+| 上次同步时间 | 2026-11-01 20:1x |
+| 上次同步 commit | `907ea30`（v1.16 守门自测判据对齐 + UI-2 置顶）→ `origin/main`；`status -sb` 无偏离 |
 | 远程状态 | 与 origin 同步 |
 
 ## 五、项目特有规则

@@ -3592,7 +3592,7 @@ R2-L4 基线 `verify-suite` 9/24，`verify-qqagent-boot` 是失败项。根因�
 | N6 ingress | `mode=shadow` · `allow=null` · `seen=25` · `shadow=25` · `live=0` · `dispatched=0` · `bufferedChats=3` | `GET :3280/api/nav/ingress` |
 | N6 hub | `bound=true` · `mode=child` · `received=75` · `dispatched=148` · `duplicates=0` · `failures=0` · `droppedOverflow=0` | `GET :3280/api/nav/hub` |
 | 领航员 | `enabled=false` · `activeChat=1097492606` · `openedBy=app` | `GET :3280/api/nav/status` |
-| 影子采集 | `intent-2026-10-31.jsonl` 27 行：`kind` 全 `chat` · `action` 全 `none` · `via` 全 `rule` · `result` 全 `shadow` | `app/data/metrics/` |
+| 影子采集 | **采样时**（00:46）`intent-2026-10-31.jsonl` 27 行：`kind` 全 `chat` · `action` 全 `none` · `via` 全 `rule` · `result` 全 `shadow`。⏱ 27 是**当时采样值不是全量**——同日文件继续增长，2026-11-01 实读 ≈4.4k 行（`instruct` 5 / `generate` 11）；行数与分布**以 `app/data/metrics/intent-<日期>.jsonl` 实读为准** | `app/data/metrics/` |
 | 缓存采集 | `cache-2026-10-31.jsonl` 在产，`headGapSec` 有值（null / 8 / 0.9） | `_unpack/data/metrics/` |
 | 当日发言 | 6 条，**全在群 361820329** | `_unpack/data/logs/qq-agent-2026-10-31.log:1-33` |
 
@@ -3618,7 +3618,7 @@ R2-L4 基线 `verify-suite` 9/24，`verify-qqagent-boot` 是失败项。根因�
 | B1 | B29 五档 + v0.84 界面 | `boot.log:922` 起凭据注入仅 1 行 | 代码面达成；界面三项待人眼 |
 | B2 | B46 缓存采集面 | `cache-2026-10-31.jsonl` 在产、22 字段有值 | ✅ 核销（剩 B47 数据积累） |
 | B3 | N6-1 重启使 N6 生效 | 三路由 200 · `hub.bound=true` | ✅ 核销 |
-| B4 | N6-2 影子基线 | 27 行全 `chat` / `action=none` | **零派活样本**，切 live 判据未可判 |
+| B4 | N6-2 影子基线 | 采样时（10-31 00:46）27 行全 `chat` / `action=none`——**采样值，非全量** | **当时**零派活样本；2026-11-01 21:48 实读 `app/data/metrics/intent-2026-10-31.jsonl` **4,420 行**（`instruct` 5 / `generate` 11）· `intent-2026-11-01.jsonl` **5,080 行**（`generate` 12 / `instruct` 1）→ 派活样本在盘，切 live 判据已可判 |
 | B5 | B34 余额后缀 | 10-25 曾成功（0.00→3.00）· 10-27 失败 = `get_group_member_info` retcode 200 Timeout `NodeIKernelProfileService/fetchUserDetailInfo` · 10-30/31 无 `balance` 行 | **判据无落点**：`balance.js:138-147` 两条 skipped 路径不写日志 → 判据改为读 `POST /api/balance/sync` 返回值 |
 | B6 | B36 语音伴随 | `voiceReply.chats` 五群与当日发言群 361820329 **不交集** | 样本为零不构成反证；验收须在 voice 五群内触发 |
 | B7 | B21 回应参数 | `_rapport.json` 全仓 0 命中；`adjust_rapport` 计数 = 8；自愈日志 10-25/26 有 38 行、**10-27 后 0 行**；`app.js:1677` 已调 `startRapportHeal()`；`rapport.js:101-114` 只写 `score<100`、回满即删；`tools.js:285-289` 的 `delta=0` 早退不落盘 | **非缺陷（Inferred）**——若 8 次中有一次真降分，5 分钟自愈必留行；实际 0 行 ⇒ 全为 `delta=0` |
@@ -3643,7 +3643,7 @@ R2-L4 基线 `verify-suite` 9/24，`verify-qqagent-boot` 是失败项。根因�
 
 ### E · 遗留
 
-1. **R5 前置**：N6 切 live 需先有 instruct/generate 影子样本（现 27 行全闲聊）；切 live 顺序 readonly/shot → switch → generate → session → send，单类失败即停。
+1. **R5 前置**：N6 切 live 需先有 instruct/generate 影子样本（采样时 27 行全闲聊；2026-11-01 21:48 实读两日 **4,420 + 5,080 行**，派活样本 `instruct` 6 / `generate` 23 条在盘）；切 live 顺序 readonly/shot → switch → generate → session → send，单类失败即停。
 2. **B34 判据落点缺口**：`balance.js` 的两条 skipped 路径需补一行日志（或验收改读 API 返回值）——R5-L5 出表前先处理。
 3. **R3-1 冒烟 D**（崩溃退避重启）与 **R3-3 层 2**（WS fan-out）仍未开始，非阻塞。
 4. **`verify-suite` 实跑基线**本轮未跑（纪律禁起子进程），R5 单车执行。
@@ -4175,3 +4175,79 @@ FAIL  [① 文件在盘] views/plugins.js 不存在（已退役） —— plugin
 3. §3.3 代理层方法白名单：`GET / POST / DELETE` → **`GET / POST / PUT / DELETE`**（R8-L1 已纳入 PUT，文档漏改；`PATCH` 仍 405）
 
 **未竟**：无。判据与硬约束现为同一口径——改界面结构只需同步 `EXPECT` 一个常量，判据来源写在常量注释里。
+
+---
+
+## 九十四、A7 陈旧读数订正 + B31 重判与接线取证（2026-11-01 · 主干直做 · 只判决策不带实现）
+
+> 触发：Rushiera「上工 QQBotB，按 todo.md §〇-F 执行：先读 §〇-C 读数订正表与 §〇-F 优先序」；两件 = §十八 A7 + 重判 B31。
+> 定位：**纯文档 + 取证**——本轮不动任何 `app/**` 源码与 `_unpack/data/config.json`。B31 拍板结论 = 甲案（先接线再启用），实现归下一轮。
+
+### A · A7 五处陈旧读数订正（核销）
+
+改法统一为**三件套**：标明是「采样值，非全量」+ 给实读指针 + 附取数时刻实读。不把新采样再写成常数（判据 → `ccbp:L1/Wisdom.md` §1.1）。
+
+| # | 位点 | 原写 | 订正后 |
+|:--:|:--|:--|:--|
+| 1 | `design-qqbotb_log.md:3595`（§八十五 A 表 影子采集行） | 「`intent-2026-10-31.jsonl` 27 行」 | 标明「采样时（00:46）」+ 注明 27 是采样值不是全量 + 给实读指针（≈4.4k 行 · `instruct` 5 / `generate` 11） |
+| 2 | `design-qqbotb_log.md:3621`（§八十五 C 表 B4） | 「**零派活样本**，切 live 判据未可判」 | 判定列改「**当时**零派活样本；2026-11-01 实读派活样本在盘 → 切 live 判据**已可判**」 |
+| 3 | `design-qqbotb_log.md:3646`（§八十五 E 遗留 1） | 「现 27 行全闲聊」 | 「采样时 27 行全闲聊；实读两日行数与 `instruct` 6 / `generate` 23 条在盘」 |
+| 4 | `design-status.md:22`（v0.99 摘要行） | 「影子 27 行全闲聊」 | 加〔采样值，非全量——2026-11-01 实读两日 ≈4.4k + 5.0k 行〕 |
+| 5 | `reports/N6-验收清单.md:111`（§七 台账 #3） | 「同步后 = 样本 1597 行」 | 标「同步时刻采样值」+ 实读指针；证据列补「`generate` 全库 0 命中**限于同步时刻**——两日现共 23 条」 |
+
+**不动面**（按 Rushiera 指令）：`CHANGELOG.md` 历史版本行 · `reports/R5-L13.md` / `R5-L14.md` · `tasks/R4.md`（历史任务卡，27 行是该卡当时的事实）。
+
+**越界说明（如实记）**：第 5 处位于 `N6-验收清单.md` §七「本次同步台账（**R5-L14**）」段内。本轮只改「同步后」列的事实值 + 加指针句，「同步前」列的原引用逐字未动；若判该段整段属 L14 写面，回退这一处即可，其余四处独立成立。
+
+### B · B31 样本分布（八日全量实读）
+
+数据源 `_unpack/data/metrics/engage-<日期>.jsonl`（10-25 ～ 11-01）：
+
+| 面 | 读数 |
+|:--|:--|
+| roll 总量 | **3,623** 条（全部 8 文件只有 `roll` 一种 event）；⏱ 该数持续增长——复跑 `node tools/engage-metrics-report.mjs _unpack/data/metrics` 取当时值（同日 23:10 复跑 = 3,692） |
+| 整体 hit 率 | **63.6%**（2,301 / 3,623；同日 23:10 复跑 63.7%，3,692 条） |
+| 分档吻合度 | L2 `0.2604` vs 配置 `0.25`（+0.7σ）· L3 `0.5737` vs `0.60`（−1.6σ）· L4 `0.8496` vs `0.85`（−0.2σ）· L5 `11/11` vs `1.0` |
+| 拍型分列 | idle 拍 2,811 → hit **61.1%** · 到点拍 812 → hit **72.3%** |
+| `blocked` 行 | **0**（八日全量为 0，八文件逐个数过） |
+| 判定 | **档位机制按设计工作**——四档偏差全在 2σ 内，不构成「分布临界」 |
+
+**`blocked = 0` 不构成证据**：`noteBlocked` 只挂在 `sender.js:121`（`hardLimit`）与 `:140`（`quota`）两处抛错前；八日 0 条无法区分「闸门松」与「模型从不超发」——与 B34 同型的判据无落点。
+
+### C · 🔴 阻断性事实：`signals` 模块从未接线
+
+| 检查项 | 结果 | 取法 |
+|:--|:--|:--|
+| `computeSignals` / `compositeCoefficient` / `signalSummary` 的消费方 | **0** | 全树扫 `app/src` + `_unpack/resources/app/src`，只命中 `engage-signals.js` 自身三行 `export` |
+| `getConfig().engage.signals` 读取点 | **0** | 全树 grep `.signals` 只命中 `engage-signals.js:6` 的注释 |
+| `costDay` / `missStreak` 供给源 | **0** | 只出现在 `computeSignals` 形参与注释 |
+| `signalSummary` 落盘 | **0** | `engage-*.jsonl` 无 `coef` / `share` / `atRate` 任一字段（grep 0 命中） |
+| 自测覆盖 | 只测纯函数 | `verify-qqagent-level.mjs:120-153` 全为 import 后跑值，无接线断言 |
+
+**结论：`engage.signals.enabled` 改 `true` 在当前代码下是空操作。** R5 D6-5 拍「继续只采集」与实际相符，但它描述的「只采集」同样不成立——采集面 `signalSummary` 也是零调用。
+
+### D · `floor = 0.15` 区分度核算
+
+六因子几何平均，最坏情况（`share` 0.5 · `hour` 0.5 · `cost` 0.7 · `miss` 0.5，`at` / `ask` 取 1）= `(0.5·1·1·0.5·0.7·0.5)^(1/6)` ≈ **0.666**；单是深夜一项 = `0.5^(1/6)` ≈ **0.891**。→ **`floor=0.15` 永远够不着，该参数当前无作用点。**
+
+若真接线，效果量级 = 普遍压制入场：L4 `0.85 × 0.666 ≈ 0.57`（活跃档掉到标准档以下）· L3 `0.6 × 0.666 ≈ 0.40`；深夜拍占 585 / 3,609 ≈ **16%** 额外吃 ×0.5。
+
+### E · 拍板与去向
+
+Rushiera 2026-11-01 拍 **甲案 = 先接线再启用**（弃乙案「维持 false 并诚实化档案」、丙案「删模块」）。落地判据写入 `todo.md` B31 条目：
+
+1. `orchestrator.js` 判定处接 `computeSignals → compositeCoefficient`，系数乘到 `rate`
+2. 补 `costDay`（日成本）与 `missStreak`（连续未接拍）两项数据供给——两者现均无来源
+3. `floor` 按实测量级重定（0.15 够不着，参考下沿 0.666）
+4. 自测补接线断言（现只测纯函数）
+5. `enabled` 改 `true` 后按一日 `roll.hit` 复核未把发言压成零
+
+### F · 本域中介脚本（已归位 `tools/`，可复跑）
+
+三件由 `WorkSpace:tools/CatTemp` 移入项目 `tools/`——它们是**判据复跑面**（B31 复核与后续接线验收都要用），不是一次性中介：
+
+| 脚本 | 用途 |
+|:--|:--|
+| `tools/engage-metrics-report.mjs` | engage 分布（roll / hit / 分档 / idle-due / 分群 / blocked）——参数 = metrics 目录 |
+| `tools/intent-metrics-report.mjs` | 影子采集行数与 `kind` / `action` / `via` / `result` 分布 |
+| `tools/audit-signal-wiring.mjs` | `signals` 接线审计——扫指定根下所有 `.js/.mjs` 找三个函数名的出现点 |

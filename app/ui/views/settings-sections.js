@@ -750,7 +750,10 @@
   const memoryFiles = { items: [], loaded: false, error: '' };
 
   /**
-   * 记忆分节：整理开关与节奏 / 整理模型 / 记忆文件清单。
+   * 记忆分节：只留「记忆文件」一张卡（清单 + 刷新 + 立即整理全部会话）。
+   *
+   * 原「记忆整理」「整理模型」两卡已按 Rushiera 口径删除（2026-11-01）——
+   * `memory.consolidateEnabled` 等参数仍在业务面配置里照读照跑，只是无界面写面。
    *
    * @param {object} ctx 渲染上下文
    * @returns {Element} 分节根

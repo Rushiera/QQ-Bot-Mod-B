@@ -4031,3 +4031,50 @@ CHANGELOG 膨胀的三层原因与对应处置（判据 → `ccbp:L1/Wisdom.md` 
 | 2 | 会话页左栏由「群」改成「会话记录」，原「群消息存档」能力仍只在存档页——两页职责已分开，符合原版口径 | 设计如此 |
 | 3 | 统一人设卡删除后，人设正文改由 `role/*.md` 与业务面 `persona` 承载——界面不再有该编辑入口（`persona.roleText` 等字段仍在，只是无界面写面） | 按指令预期，需要时在配置面直改 |
 | 4 | `views/plugins.js` 文件仍在盘（仅取消引用）；`views/_index.md` 写面表未同步本轮改动 | 已处置（2026-11-01 收工）：`plugins.js` 软删入回收站、`_index.md` 写面表与依赖树同步、`_shell.js` MANAGED 去 `plugins` |
+---
+
+## 九十三、记忆页签照原版重做（2026-11-01 · 已完成编码 + 真链路验收）
+
+> Rushiera 口径：「做记忆页签，也要跟之前那个业务面单体一样」——即记忆页按 §九十二 会话页同一套原版两栏形态重做，并补齐原版有而我们缺的行内状态与操作。
+
+### A · 改动总表
+
+| # | 面 | 动作 | 落点 |
+|:--:|:--|:--|:--|
+| 1 | 两栏骨架 | `.split` + `.pane.narrow` / `.pane.wide` → **会话页同一套** `.sx-sessions` + `.sx-list-pane` / `.sx-detail-pane`；左栏工具条改 `.groups-bar.r5-list-bar` | `app/ui/views/memory.js` `mount()` |
+| 2 | 左栏行 | `.list-item` 家族（两行纯文本）→ `.sx-row` 家族（标题行 + 元信息行） | `fileRow()` |
+| 3 | 行内三徽标（新） | **发言档位**（冰封 / 保守 / 标准 / 活跃 / 全开，冰封带 🤫）· **💰 余额**（开着才显示值）· **🔊 语音**（开着才显示）| `fileRow()` 调 `engageLevelOf` / `balanceStateOf` / `voiceStateOf`——三个函数原本就在，只是从未被调用 |
+| 4 | 行内删除（新） | 仅真有记忆（成员 / 印象 / 群记任一非零）时出现；`stopPropagation` 不触发选中 | `.sx-row-del` |
+| 5 | 右栏头 | 单行 `.pane-head` → `.sx-head` + `.sx-head-title`（h3 + 整理中/记忆徽标 + 三按钮）+ `.sx-head-metas`（会话键 / 计数 / 更新于 / 操作回执） | `detailHead()` |
+| 6 | 右栏卡片 | `.pane` / `.pane-head` / `.pane-body` → `.sxm-card` / `.sxm-head` / `.sxm-body`（新前缀，与会话页 `sx-*` 同族不互撞） | `summarySection` / `groupSection` / `switchSection` / 群友印象区 |
+| 7 | 「更新记忆」（新） | 群友印象块内每行加按钮——让模型重分析这个人（有印象则整理合并，没印象则从聊天记录提炼）；走 `POST /api/biz/memory-files/consolidate` 的 `userIds` 单人口径（`routes.js:1452-1457`） | `memberBlock()` + `refreshMemberMemory()` |
+| 8 | 群成员表（新） | 新增「群成员」卡：按需 `GET /api/biz/groups/<id>/members` 拉取，表内每行「加 / 改备注」（写 `memberNotes`）+「🤖 bot」（写 `engage.botGuard.members`）；非群会话不渲染 | `membersSection()` / `loadGroupMembers()` / `openNoteEditor()` / `saveMemberNote()` |
+| 9 | 样式 | 新增 `sxm-*` 段 + 三徽标色 + `.sx-row-del` + `.member-table` | `app/ui/style.css`（+53 行） |
+
+### B · 真链路验收（重启单体后逐项实测）
+
+| 判据 | 实测值 | 结论 |
+|:--:|:--|:--:|
+| 两栏渲染 | `.sx-row` **13** 行 · `.sxm-card` **5** 张 · `window.__errs` **0** | ✅ |
+| 行内三徽标 | 逐行徽标数 `[2,2,1,1,1,1,1,2,2,1,2,1,2]`；档位分布 活跃 3 / 标准 6 / 🤫冰封 4 · 🔊 5 行 · 💰 1 行 | ✅ |
+| 长群名不撑行 | `.sx-row-title` **13/13 全 20px**（修复前 11 行 26px）· `.sx-row-id` computed `flex:1 1 auto` / `min-width:0` / `ellipsis` · `clipped=[]` | ✅ |
+| 群成员表 | 点拉取后 head →「群成员 **210 人**」· `.member-table tr` **211** 行（含表头）· 每行两按钮 | ✅ |
+| 「更新记忆」 | 点后 `sx-head` 出「已提交：重分析「…」的记忆」· `GET /api/biz/memory-files` 回 `consolidating:[]` `files:13` | ✅ |
+| 备注新增 | 写成功，首格显示备注名，head 报「已保存（读回一致）」 | ✅ |
+| 备注删除 | 首轮**失败**（读回不一致）→ 根因修后实测通过，`config.json` 的 `memberNotes` 回到 `{}` | ✅ |
+
+### C · 本轮踩坑两条（可复用）
+
+| # | 现象 | 根因 | 对策 |
+|:--:|:--|:--|:--|
+| 1 | 备注编辑用 `window.prompt` 后页面**死锁**——`browser-eval` / `browser-open` / `browser-shot` 连三次工单超时 | Electron renderer 里 `window.prompt` 阻塞渲染线程（模态对话框） | 改**行内输入框**（Enter 保存 / Esc 取消），`state.noteEditor` 驱动重渲染；`window.prompt` 在记忆页归零 |
+| 2 | 清空备注后恒报「读回与写入不一致」，`config.json` 里键仍在 | `business/config.js:609-628` `deepMerge`：对象型字段传 `{}` 是**深合并**，删不掉已有键 | 映射型字段必须传 `{ __replace__: X }` 整体替换（该函数 :614-616 注释已写明）；`saveMemberNote` 改口径后实测删键成功 |
+
+### D · 边界与遗留
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 原版右栏 `detail-header` 把「发言档位下拉 / 余额 / 语音」摆在头部一行内；改版收进「按群开关」卡 | 功能等价、位置不同——按 Rushiera 口径待定是否搬到头部 |
+| 2 | 「拉取群成员列表」只在群会话出现（原版同）；私聊无成员表 | 设计如此 |
+| 3 | 备注编辑器用 `window.prompt` 之外仍是行内表单，未做原版的模态框（`modelModalShell`） | 本轮不搬模态框族，行内表单已够 |
+| 4 | 业务设置「记忆」分节的三张卡仍只有「记忆文件」一张（§九十二 B 表口径），JSDoc 第 753 行仍写三卡 | 注释陈旧待勘误（零功能影响） |

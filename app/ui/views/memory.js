@@ -7,6 +7,8 @@
 // 面：左栏 = 记忆文件列表（`/api/biz/memory-files` 全量，条数 = `files.length`，不截断）；
 //     右栏 = 选中会话的记忆详情：**会话要点（顶部只读）** + 群记（按 `kind` 分组，**现行 / 归档**切换）+
 //            群友印象（含回应参数）+「重整」按钮 + 两个按群开关面（💰 余额后缀 / 🔊 语音伴随）。
+// 形态：与会话页同构（原版 QQ Agent 两栏）——骨架 `sx-sessions` / `sx-list-pane` / `sx-detail-pane` /
+//       `sx-list` / `sx-row*` / `sx-head*` / `sx-body` 复用，右栏内层卡片用 `sxm-card` / `sxm-head` / `sxm-body`。
 // 取数：`/api/biz/memory-files` · `/api/biz/memory-files/<group_xxx>` · `/api/biz/memory-files/<group_xxx>/summary`（R8-L2 新增端点）
 //       `/api/biz/chats`（群名）· `/api/biz/config`（开关现值；写后**再读一次**核对，不做本地乐观更新）
 // 写面：`POST /api/biz/memory-files/consolidate` · `POST /api/biz/config` · `POST /api/biz/balance/sync`
@@ -78,7 +80,16 @@
     /** 会话要点取数失败原因（与「还没产出」区分开）。 */
     summaryError: '',
     /** 群记区视图：`current`（现行池）/ `archived`（归档只读）。 */
-    view: 'current'
+    view: 'current',
+    // ── 群成员表（按需拉取，原版「拉取群成员列表」同义）──────────────
+    /** 群成员缓存（`GET /api/biz/groups/<id>/members`）；缺省空 = 未拉取。 */
+    groupMembers: [],
+    /** 群成员拉取失败原因（与「未拉取」区分）。 */
+    groupMembersError: '',
+    /** 群成员表是否已展开（false 时只显示按钮）。 */
+    groupMembersOpen: false,
+    /** 备注行内编辑器（`{qq, value, error}`；null = 未编辑）——不用 `window.prompt`（会阻塞渲染线程）。 */
+    noteEditor: null
   };
 
   /**
@@ -318,23 +329,69 @@
    */
   function fileRow(file) {
     const key = String(file.chatKey || '');
+    const id = idOf(key);
     const busy = isBusy(file);
     const groupCount = Number(file.groupCount) || 0;
     const archived = (Number(file.groupArchived) || 0) + (Number(file.memberArchived) || 0);
-    const parts = [
-      (Number(file.memberCount) || 0) + ' 位群友',
-      (Number(file.impressionCount) || 0) + ' 条印象',
-      '群记 ' + groupCount + ' 条'
-    ];
-    if (archived) parts.push('归档 ' + archived + ' 条');
 
-    const row = el('div', { class: 'list-item' + (key === state.currentKey ? ' active' : '') },
-      el('div', { class: 'list-item-main' },
-        el('div', { class: 'list-item-title', text: nameOf(key) }),
-        el('div', { class: 'list-item-sub', text: busy ? '正在整理本群记忆' : parts.join(' · ') })),
+    // ── 行内三个状态徽标（原版 05-memory-settings.js:75-96 同口径：档位 / 余额 / 语音）──
+    // 只在配置取到时算——`state.cfg` 为 null 表示「没配」，不能用缺省值把开关渲染成「已关」。
+    const cfg = state.cfg;
+    const lv = cfg ? engageLevelOf(cfg, id) : null;
+    const bal = cfg ? balanceStateOf(cfg, id) : null;
+    const vc = cfg ? voiceStateOf(cfg, id) : null;
+
+    const levelBadge = lv
+      ? el('span', {
+        class: 'sx-badge sx-level' + (lv.level === 1 ? ' quiet' : (lv.level >= 4 ? ' loud' : '')),
+        title: '发言档位 ' + lv.level + '/5：' + lv.name,
+        text: (lv.level === 1 ? '🤫 ' : '') + lv.name
+      })
+      : null;
+    const balanceBadge = bal && bal.on
+      ? el('span', {
+        class: 'sx-badge sx-balance',
+        title: '群名片后缀已开：每 ' + bal.minutes + ' 分钟刷「' + bal.marker + bal.amount + '」到本号群名片',
+        text: '💰 ' + bal.amount
+      })
+      : null;
+    const voiceBadge = vc && vc.on
+      ? el('span', {
+        class: 'sx-badge sx-voice',
+        title: '语音伴随已开：本号每次发言都会再念一遍日语发回本群（依田芳乃 · v4.1-Small）',
+        text: '🔊 语音'
+      })
+      : null;
+
+    // 删除本会话记忆（原版在行内；只有真有记忆才出现）——stopPropagation 不触发选中
+    const hasMemory = (Number(file.memberCount) || 0) || (Number(file.impressionCount) || 0) || groupCount;
+    const delBtn = hasMemory
+      ? el('button', { class: 'btn small sx-row-del', title: '删除本会话的全部记忆（所有群友的印象）', text: '删除' })
+      : null;
+    if (delBtn) delBtn.onclick = (ev) => { ev.stopPropagation(); deleteChatMemory(key); };
+
+    // 行形态与会话页 `.sx-row` 同构：标题行（名称 + 三徽标）+ 元信息行 + 时间行
+    // 时间放第二行——长群名（如「偶像大师灰姑娘女孩mod交流分享群」）在标题行会被挤断行。
+    const meta = el('div', { class: 'sx-row-metas' },
+      el('span', { text: (Number(file.memberCount) || 0) + ' 位群友' }),
+      el('span', { text: (Number(file.impressionCount) || 0) + ' 条印象' }),
+      el('span', { text: '群记 ' + groupCount + ' 条' }),
+      archived ? el('span', { text: '归档 ' + archived + ' 条' }) : null,
+      el('span', { class: 'sx-row-time', text: '更新于 ' + fmtTime(file.updatedAt) }));
+
+    const row = el('div', {
+      class: 'sx-row' + (key === state.currentKey ? ' on' : ''),
+      title: key
+    },
+    el('div', { class: 'sx-row-title' },
       busy
-        ? el('span', { class: 'badge warn', text: '整理中' })
-        : el('span', { class: 'list-item-meta', text: fmtTime(file.updatedAt) }));
+        ? el('span', { class: 'sx-badge sx-waiting', text: '整理中' })
+        : el('span', { class: 'sx-row-id', text: nameOf(key) }),
+      levelBadge,
+      balanceBadge,
+      voiceBadge,
+      delBtn),
+    meta);
     row.onclick = () => select(key);
     return row;
   }
@@ -454,28 +511,28 @@
     const addBtn = el('button', { class: 'btn small', text: '＋ 添加群记' });
     addBtn.onclick = () => openEditor({ mode: 'group-new', entryId: '', kind: KIND_ORDER[0], content: '', error: '' });
     const tabs = viewTabs(list.length, archivedCount);
-    const head = el('div', { class: 'pane-head' },
+    const head = el('div', { class: 'sxm-head' },
       el('span', { class: 'title', text: '群记' }),
       tabs[0],
       tabs[1],
       el('span', { class: 'spacer' }),
       showingArchived ? null : addBtn);
 
-    const body = el('div', { class: 'pane-body' });
+    const body = el('div', { class: 'sxm-body' });
     if (showingArchived) {
       body.appendChild(el('p', { class: 'hint', text: '归档池只读（按天追加的 JSONL）——要改请从现行池操作；归档 = 现行池之外的历史条目。' }));
       if (!shown.length) {
         empty(body, '本会话还没有归档群记');
-        return el('div', { class: 'pane' }, head, body);
+        return el('div', { class: 'sxm-card' }, head, body);
       }
     } else if (state.editor && state.editor.mode === 'group-new') {
       body.appendChild(groupEditor(state.editor));
     }
     if (!shown.length && !showingArchived) {
       empty(body, '还没有群记（梗 / 群规 / 关系 / 项目 / 在聊什么）——点「重整」让模型从聊天记录里提炼');
-      return el('div', { class: 'pane' }, head, body);
+      return el('div', { class: 'sxm-card' }, head, body);
     }
-    if (!shown.length) return el('div', { class: 'pane' }, head, body);
+    if (!shown.length) return el('div', { class: 'sxm-card' }, head, body);
 
     const groups = new Map();
     for (const entry of shown) {
@@ -494,7 +551,7 @@
         body.appendChild(editing ? groupEditor(state.editor) : groupRow(entry));
       }
     }
-    return el('div', { class: 'pane' }, head, body);
+    return el('div', { class: 'sxm-card' }, head, body);
   }
 
   /**
@@ -505,7 +562,7 @@
    * @returns {Element} 区块元素
    */
   function summarySection() {
-    const box = el('div', { class: 'pane-body' });
+    const box = el('div', { class: 'sxm-body' });
     const sum = state.summary;
     if (state.summaryError) {
       fail(box, UNREACHABLE + '：' + state.summaryError);
@@ -519,9 +576,10 @@
       box.appendChild(el('p', { class: 'hint', text: '产出 ' + fmtTime(sum.createdAt)
         + ' · 轮转 ' + (Number(sum.rollovers) || 0) + ' 次 · ' + (Number(sum.messages) || 0) + ' 条消息' }));
     }
-    return el('div', { class: 'pane' },
-      el('div', { class: 'pane-head' },
+    return el('div', { class: 'sxm-card' },
+      el('div', { class: 'sxm-head' },
         el('span', { class: 'title', text: '会话要点' }),
+        el('span', { class: 'spacer' }),
         el('span', { class: 'hint', text: '只读' })),
       box);
   }
@@ -596,6 +654,14 @@
       if (ev && typeof ev.preventDefault === 'function') { ev.preventDefault(); ev.stopPropagation(); }
       toggleBotMember(qq);
     };
+    // 「更新记忆」：让模型重分析这个人（有印象则整理合并，没印象则从聊天记录提炼）
+    // 走 `POST /api/biz/memory-files/consolidate` 的 `userIds` 单人口径（routes.js:1452-1457）
+    const refreshBtn = el('button', { class: 'btn small', text: '更新记忆' });
+    refreshBtn.title = '让模型重新分析这个人：有印象则整理合并，没印象则从聊天记录里提炼';
+    refreshBtn.onclick = (ev) => {
+      if (ev && typeof ev.preventDefault === 'function') { ev.preventDefault(); ev.stopPropagation(); }
+      refreshMemberMemory(qq, who, refreshBtn);
+    };
     const editBtn = el('button', { class: 'btn small', text: '编辑' });
     editBtn.onclick = (ev) => {
       if (ev && typeof ev.preventDefault === 'function') { ev.preventDefault(); ev.stopPropagation(); }
@@ -621,6 +687,7 @@
         : el('span', { class: score < 80 ? 'view-fail' : 'hint', text: ' 回应 ' + score + (rapport.lastReason ? ' · ' + rapport.lastReason : '') }),
       el('span', { class: 'spacer' }),
       botBtn,
+      refreshBtn,
       editBtn,
       delBtn);
 
@@ -698,20 +765,20 @@
   function switchSection(key) {
     if (!isGroup(key)) return null;
     const id = idOf(key);
-    const body = el('div', { class: 'pane-body' });
+    const body = el('div', { class: 'sxm-body' });
+    const card = () => el('div', { class: 'sxm-card' },
+      el('div', { class: 'sxm-head' }, el('span', { class: 'title', text: '按群开关' })), body);
     if (!state.cfg) {
       // 配置端点没取到就不渲染控件——用缺省值渲染会让「未配置」伪装成「已关闭」
       empty(body, '业务面配置不可用（/api/biz/config 未取到），按群开关暂不可用');
-      return el('div', { class: 'pane' },
-        el('div', { class: 'pane-head' }, el('span', { class: 'title', text: '按群开关' })), body);
+      return card();
     }
     const bal = balanceStateOf(state.cfg, id);
     const voice = voiceStateOf(state.cfg, id);
 
     if (!bal) {
       body.appendChild(el('p', { class: 'view-empty', text: '该会话缺少群号，按群开关不可用' }));
-      return el('div', { class: 'pane' },
-        el('div', { class: 'pane-head' }, el('span', { class: 'title', text: '按群开关' })), body);
+      return card();
     }
 
     // 🎚 发言档位（五档；写 engage.levelByChat，档位 1 同步并入 engage.quiet.chats）
@@ -760,11 +827,11 @@
 
     body.appendChild(el('p', { class: 'hint', text: '开关写业务面配置（engage.balance.chats / engage.voiceReply.chats），保存后按 /api/biz/config 读回值重渲染。' }));
 
-    return el('div', { class: 'pane' },
-      el('div', { class: 'pane-head' },
+    return el('div', { class: 'sxm-card' },
+      el('div', { class: 'sxm-head' },
         el('span', { class: 'title', text: '按群开关' }),
         el('span', { class: 'spacer' }),
-        el('span', { text: state.cfg ? '' : '配置未载入' })), body);
+        el('span', { class: 'hint', text: state.cfg ? '' : '配置未载入' })), body);
   }
 
   /**
@@ -785,15 +852,22 @@
     const delBtn = el('button', { class: 'btn small', text: '删除本会话记忆' });
     delBtn.onclick = () => deleteChatMemory(key);
 
-    return el('div', { class: 'pane-head' },
-      el('span', { class: 'title', text: nameOf(key) + ' 的记忆' }),
-      el('span', { class: 'mono hint', text: key }),
-      file ? el('span', { text: (Number(file.memberCount) || 0) + ' 群友 · ' + (Number(file.groupCount) || 0) + ' 群记' }) : null,
-      el('span', { class: 'spacer' }),
-      state.note ? el('span', { class: 'hint', text: state.note }) : null,
-      reloadBtn,
-      consolidateBtn,
-      delBtn);
+    return el('div', { class: 'sx-head' },
+      el('div', { class: 'sx-head-title' },
+        el('h3', { text: nameOf(key) + ' 的记忆' }),
+        busy
+          ? el('span', { class: 'sx-badge sx-waiting', text: '整理中' })
+          : el('span', { class: 'sx-badge sx-done', text: '记忆' }),
+        el('span', { class: 'spacer' }),
+        reloadBtn,
+        consolidateBtn,
+        delBtn),
+      el('div', { class: 'sx-head-metas' },
+        el('span', { class: 'mono', text: key }),
+        file ? el('span', { text: (Number(file.memberCount) || 0) + ' 位群友 · ' + (Number(file.impressionCount) || 0) + ' 条印象 · '
+          + (Number(file.groupCount) || 0) + ' 群记' }) : null,
+        file ? el('span', { text: '更新于 ' + fmtTime(file.updatedAt) }) : null,
+        state.note ? el('span', { text: state.note }) : null));
   }
 
   /**
@@ -839,12 +913,12 @@
     // 群友印象区（人轴）
     const addImpBtn = el('button', { class: 'btn small', text: '＋ 添加印象' });
     addImpBtn.onclick = () => openEditor({ mode: 'member', userId: '', name: '', impressions: '', error: '' });
-    const impHead = el('div', { class: 'pane-head' },
+    const impHead = el('div', { class: 'sxm-head' },
       el('span', { class: 'title', text: '群友印象' }),
-      el('span', { text: members.length + ' 位' }),
+      el('span', { class: 'hint', text: members.length + ' 位' }),
       el('span', { class: 'spacer' }),
       addImpBtn);
-    const impBody = el('div', { class: 'pane-body' });
+    const impBody = el('div', { class: 'sxm-body' });
     // 新增成员编辑器（无 userId 时挂在这里，不进任何成员的折叠块）
     if (state.editor && state.editor.mode === 'member' && !String(state.editor.userId || '')) {
       impBody.appendChild(memberEditor(state.editor));
@@ -856,7 +930,11 @@
         impBody.appendChild(memberBlock(member, rapportMap[String(member && member.userId)]));
       }
     }
-    refs.bodyEl.appendChild(el('div', { class: 'pane' }, impHead, impBody));
+    refs.bodyEl.appendChild(el('div', { class: 'sxm-card' }, impHead, impBody));
+
+    // 群成员卡（按需拉取——改备注 / 指定 bot；非群会话不渲染）
+    const ms = membersSection(key);
+    if (ms) refs.bodyEl.appendChild(ms);
 
     // 按群开关区（余额后缀 / 语音伴随）
     const sw = switchSection(key);
@@ -925,9 +1003,203 @@
       state.detailError = '';
       state.summary = null;
       state.summaryError = '';
+      // 群成员表跟会话走——换会话即收起，避免把上一下群的成员挂到新群下
+      state.groupMembers = [];
+      state.groupMembersError = '';
+      state.groupMembersOpen = false;
     }
     renderList();
     return loadDetail(key);
+  }
+
+  /**
+   * 让模型重分析某个群友（有印象则整理合并，没印象则从聊天记录提炼）。
+   *
+   * 走 `POST /api/biz/memory-files/consolidate` 的 `userIds` 单人口径
+   * （`routes.js:1452-1457`：`userIds` 非空时只整理这些人）。
+   *
+   * @param {string} userId QQ 号
+   * @param {string} who 显示名（提示用）
+   * @param {Element} btn 触发按钮（做「更新中… / 已提交 ✓」在位反馈）
+   * @returns {Promise<void>} 完成
+   */
+  async function refreshMemberMemory(userId, who, btn) {
+    const api = ui().api;
+    const uid = String(userId || '').trim();
+    if (typeof api !== 'function') return;
+    if (!/^\d{1,15}$/.test(uid)) {
+      state.note = '该群友缺少 QQ 号，无法定位聊天记录';
+      renderDetail();
+      return;
+    }
+    const key = state.currentKey;
+    if (!key) return;
+    const oldText = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '更新中…'; }
+    const res = await api('/api/biz/memory-files/consolidate',
+      { method: 'POST', body: { chatKey: key, userIds: [uid], force: true } });
+    if (!res || res.ok === false) {
+      state.note = '更新「' + who + '」的记忆失败 · ' + String((res && (res.error || res.status)) || '-');
+      if (btn) { btn.disabled = false; btn.textContent = oldText; }
+      renderDetail();
+      return;
+    }
+    state.note = '已提交：重分析「' + who + '」的记忆';
+    if (state.running.indexOf(key) < 0) state.running.push(key);
+    if (btn) { btn.textContent = '已提交 ✓'; }
+    renderList();
+    renderDetail();
+    // 后端结束时会把 consolidating 撤掉；1.2s 后重取一次让界面跟上（与 consolidate 同节奏）
+    setTimeout(() => { refresh().catch(() => {}); }, 1200);
+  }
+
+  /**
+   * 群成员表卡（原版「拉取群成员列表（编辑备注）」同义）。
+   *
+   * 只在群会话出现；按钮按需拉 `GET /api/biz/groups/<id>/members`，
+   * 表内每行可改备注（写 `memberNotes`）与切 🤖 bot（写 `engage.botGuard.members`）。
+   *
+   * @param {string} key 会话键（`group:<id>`）
+   * @returns {Element|null} 卡片元素；非群返 null
+   */
+  function membersSection(key) {
+    if (!isGroup(key)) return null;
+    const id = idOf(key);
+    if (!id) return null;
+
+    const loadBtn = el('button', { class: 'btn small', text: state.groupMembersOpen ? '重新拉取' : '拉取群成员列表' });
+    loadBtn.title = '从协议端取本群成员（编辑备注 / 指定 bot 用）';
+    loadBtn.onclick = () => loadGroupMembers(id);
+
+    const head = el('div', { class: 'sxm-head' },
+      el('span', { class: 'title', text: '群成员' }),
+      el('span', { class: 'hint', text: state.groupMembersError
+        ? '拉取失败：' + state.groupMembersError
+        : (state.groupMembers.length ? state.groupMembers.length + ' 人' : '未拉取') }),
+      el('span', { class: 'spacer' }),
+      loadBtn);
+
+    const body = el('div', { class: 'sxm-body' });
+    if (!state.groupMembersOpen) {
+      body.appendChild(el('p', { class: 'hint', text: '点「拉取群成员列表」从协议端取本群成员，可改备注（聊天记录 / 记忆 / 成员表都优先显示备注）与指定 🤖 bot。' }));
+      return el('div', { class: 'sxm-card' }, head, body);
+    }
+
+    const notes = (((state.cfg || {}).memberNotes) || {});
+    const bots = botMembersOf(state.cfg);
+    const table = el('table', { class: 'member-table' },
+      el('tr', {},
+        el('th', { text: '群名片 / 备注' }),
+        el('th', { text: 'QQ 昵称' }),
+        el('th', { text: 'QQ 号' }),
+        el('th', { text: '操作' })));
+    for (const m of state.groupMembers) {
+      const qq = String((m && m.userId) || '');
+      const note = String(notes[qq] || '');
+      const isBot = bots.indexOf(qq) >= 0;
+      const editing = state.noteEditor && String(state.noteEditor.qq) === qq;
+
+      // 备注编辑态：行内输入框 + 保存 / 取消（不用 window.prompt——会阻塞渲染线程）
+      if (editing) {
+        const input = el('input', {
+          type: 'text',
+          class: 'btn small',
+          style: 'width:12em',
+          placeholder: '备注名（留空 = 删除）',
+          value: state.noteEditor.value
+        });
+        input.addEventListener('input', () => { state.noteEditor.value = input.value; });
+        input.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') { ev.preventDefault(); saveMemberNote(qq, id); }
+          if (ev.key === 'Escape') { state.noteEditor = null; renderDetail(); }
+        });
+        const saveBtn = el('button', { class: 'btn small primary', text: '保存' });
+        saveBtn.onclick = () => saveMemberNote(qq, id);
+        const cancelBtn = el('button', { class: 'btn small', text: '取消' });
+        cancelBtn.onclick = () => { state.noteEditor = null; renderDetail(); };
+        table.appendChild(el('tr', {},
+          el('td', {}, input),
+          el('td', { class: 'hint', text: String((m && m.nickname) || '—') }),
+          el('td', { class: 'mono hint', text: qq }),
+          el('td', {}, saveBtn, cancelBtn)));
+        continue;
+      }
+
+      const noteBtn = el('button', { class: 'btn small', text: note ? '改备注' : '加备注' });
+      noteBtn.onclick = () => openNoteEditor(qq);
+      const botBtn = el('button', { class: 'btn small' + (isBot ? ' primary' : ''), text: isBot ? '🤖 bot ✓' : '🤖 bot' });
+      botBtn.title = '指定为机器人：对 TA 的回复限制为 240 秒 1 条';
+      botBtn.onclick = () => toggleBotMember(qq);
+      table.appendChild(el('tr', {},
+        el('td', { text: note || String((m && m.card) || '—') }),
+        el('td', { class: 'hint', text: String((m && m.nickname) || '—') }),
+        el('td', { class: 'mono hint', text: qq }),
+        el('td', {}, noteBtn, botBtn)));
+    }
+    body.appendChild(table);
+    return el('div', { class: 'sxm-card' }, head, body);
+  }
+
+  /**
+   * 拉群成员列表（`GET /api/biz/groups/<id>/members`）。
+   *
+   * @param {string} id 群号
+   * @returns {Promise<void>} 完成
+   */
+  async function loadGroupMembers(id) {
+    const api = ui().api;
+    if (typeof api !== 'function' || !id) return;
+    state.groupMembersError = '';
+    state.groupMembersOpen = true;
+    renderDetail();
+    const res = await api('/api/biz/groups/' + String(id) + '/members');
+    if (!res || res.ok === false || res.error) {
+      state.groupMembers = [];
+      state.groupMembersError = String((res && (res.error || res.status)) || '协议端未响应');
+      renderDetail();
+      return;
+    }
+    state.groupMembers = Array.isArray(res.members) ? res.members : [];
+    renderDetail();
+  }
+
+  /**
+   * 打开备注行内编辑器（**不用 `window.prompt`**——Electron renderer 里它会阻塞渲染线程，
+   * 弹一次页面就死锁，browser-* 全部超时）。
+   *
+   * @param {string} qq QQ 号
+   * @returns {void}
+   */
+  function openNoteEditor(qq) {
+    const cur = String((((state.cfg || {}).memberNotes) || {})[String(qq)] || '');
+    state.noteEditor = { qq: String(qq), value: cur, error: '' };
+    renderDetail();
+  }
+
+  /**
+   * 保存备注（写配置 `memberNotes`，读回核对；留空 = 删除备注）。
+   *
+   * @param {string} qq QQ 号
+   * @param {string} groupId 群号（保存成功后重拉成员表）
+   * @returns {Promise<void>} 完成
+   */
+  async function saveMemberNote(qq, groupId) {
+    const ed = state.noteEditor;
+    if (!ed || String(ed.qq) !== String(qq)) return;
+    const name = String(ed.value || '').trim();
+    const notes = Object.assign({}, ((state.cfg || {}).memberNotes) || {});
+    if (name) notes[String(qq)] = name; else delete notes[String(qq)];
+    // 🔴 `memberNotes` 是映射型字段：深合并传 {} 删不掉已有键（config.js:614-616），
+    //    必须用 `{ __replace__: X }` 整体替换，否则「删备注」读回必然不一致。
+    const ok = await writeConfig({ memberNotes: { __replace__: notes } }, '备注「' + (name || '已删除') + '」',
+      (cfg) => String((((cfg || {}).memberNotes) || {})[String(qq)] || '') === name);
+    if (!ok) {
+      state.noteEditor = { qq: String(qq), value: ed.value, error: state.note };
+      renderDetail();
+      return;
+    }
+    state.noteEditor = null;
+    await loadGroupMembers(groupId);
   }
 
   /**
@@ -1530,21 +1802,21 @@
     const reloadBtn = el('button', { class: 'btn small', text: '刷新' });
     reloadBtn.onclick = () => refresh();
 
-    const listEl = el('div', { class: 'pane-body' });
-    const footEl = el('div', { class: 'hint' });
-    const headEl = el('div', { class: 'pane-head' });
-    const bodyEl = el('div', { class: 'pane-body' });
+    const listEl = el('div', { class: 'sx-list' });
+    const footEl = el('div', { class: 'r5-foot hint' });
+    const headEl = el('div', { class: 'sx-heads' });
+    const bodyEl = el('div', { class: 'sx-body' });
 
-    const rootEl = el('div', { class: 'split' },
-      el('aside', { class: 'pane narrow' },
-        el('div', { class: 'pane-head' },
-          el('span', { class: 'title', text: '记忆文件' }),
+    const rootEl = el('div', { class: 'sx-sessions' },
+      el('aside', { class: 'sx-list-pane' },
+        el('div', { class: 'groups-bar r5-list-bar' },
+          el('span', { class: 'title', text: '记忆' }),
           countEl,
-          el('span', { class: 'spacer' }),
+          el('span', { class: 'groups-spacer' }),
           reloadBtn),
         listEl,
-        el('div', { class: 'pane-body flush' }, footEl)),
-      el('section', { class: 'pane wide' }, headEl, bodyEl));
+        footEl),
+      el('section', { class: 'sx-detail-pane' }, headEl, bodyEl));
 
     container.appendChild(rootEl);
     refs = { countEl, listEl, footEl, headEl, bodyEl };

@@ -663,7 +663,7 @@ main { flex: 1; overflow: hidden; display: flex; }
 .sx-row:hover { border-color: var(--accent); }
 .sx-row.on { border-color: var(--accent); border-left-color: var(--accent); background: #1a2130; }
 .sx-row-title { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-.sx-row-id { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sx-row-id { flex: 1 1 auto; min-width: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sx-row-metas {
   display: flex;
   flex-wrap: wrap;
@@ -834,3 +834,74 @@ main { flex: 1; overflow: hidden; display: flex; }
 @media (max-width: 1100px) {
   .sx-list-pane { width: 280px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   记忆页（原版 QQ Agent 两栏重做 · views/memory.js）
+   左 = 记忆文件列表（按群一行）· 右 = 选中会话的记忆详情
+   骨架复用会话页 sx-sessions / sx-list-pane / sx-detail-pane，
+   内层卡片用 sxm-* 前缀，与 sx-* 同族但互不覆盖。
+   ─────────────────────────────────────────────────────────────────────── */
+
+.sxm-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.sxm-card:last-child { margin-bottom: 0; }
+
+.sxm-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.sxm-head .title { font-size: 13px; font-weight: 600; color: var(--text); }
+.sxm-head .spacer { flex: 1; }
+
+.sxm-body { padding: 9px 12px; }
+.sxm-body.flush { padding: 0; }
+
+/* 记忆行内的档位 / 余额 / 语音三个徽标（原版 unread-pill 同义，色值取同族） */
+.sx-badge.sx-level { color: var(--muted); }
+.sx-badge.sx-level.quiet { color: #58a6ff; border-color: #2b4d6b; }
+.sx-badge.sx-level.loud { color: #d29922; border-color: #6b5622; }
+.sx-badge.sx-balance { color: #3fb950; border-color: #2b6b34; }
+.sx-badge.sx-voice { color: #a371f7; border-color: #4a3573; }
+
+/* 行内右对齐的删除按钮（标题行尾；时间已在第二行 meta 内） */
+.sx-row-del {
+  flex: none;
+  margin-left: auto;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #f85149;
+  border-color: #7a2d2a;
+}
+
+/* 群成员表（记忆页「群成员」卡） */
+.member-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.member-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.member-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.member-table tr:last-child td { border-bottom: none; }
+.member-table td:last-child { white-space: nowrap; }

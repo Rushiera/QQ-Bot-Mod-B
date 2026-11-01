@@ -42,16 +42,12 @@
    * 侧栏照样列出来，点开显示「未接」占位并列出全部未接分节名（任务卡 §四 L8 ③）。
    */
   const SECTIONS = [
-    { id: 'api', title: '模型 API', sub: '提供商 / 模型 / 降级 / 成本', src: '06-settings-render.js:171', batch: 1 },
-    { id: 'search', title: '搜索服务', sub: '搜索通道 / 结果条数 / 自定义提供商', src: '06-settings-render.js:262', batch: 1 },
-    { id: 'memory', title: '记忆', sub: '记忆整理 / 沉淀节奏 / 记忆文件', src: '06-settings-render.js:369', batch: 1 },
-    { id: 'persona', title: '人设', sub: '名字 / 角色卡 / 参与度 / 分会话人设', src: '06-settings-render.js:395', batch: 1 },
-    { id: 'allow', title: '聊天白名单', sub: '允许的群与私聊 / 空表语义', src: '06-settings-render.js:670', batch: 1 },
-    { id: 'chat', title: '聊天设置', sub: '发送节奏 / 活跃档位 / 禁言 / 开话题 / 表情包', src: '06-settings-render.js:816', batch: 1 },
-    { id: 'desktop', title: '桌面端', sub: '桌面端接入与更新', src: '06-settings-render.js:959', batch: 1 },
-    { id: 'onebot', title: 'OneBot（SnowLuma）', sub: 'WS / HTTP 端口与令牌', src: '06-settings-render.js:1000', batch: 1 },
-    { id: 'tools', title: '工具与技能', sub: '工具启用态 / 技能开关', src: '06-settings-render.js:1527', batch: 1 },
-    { id: 'prompt', title: '提示词预览', sub: '按当前启用态组装后的系统提示词', src: '06-settings-render.js:1652', batch: 1 }
+    { id: 'api', title: '模型 API', sub: '提供商 / 模型 / 备选降级', batch: 1 },
+    { id: 'memory', title: '记忆', sub: '记忆文件', batch: 1 },
+    { id: 'persona', title: '人设', sub: '分会话人设 / 提示词预览', batch: 1 },
+    { id: 'groups', title: '群名单', sub: '启用 / 未启用 / 拒绝名单', batch: 1 },
+    { id: 'chat', title: '聊天设置', sub: '发送配置 / 表情包', batch: 1 },
+    { id: 'tools', title: '工具与技能', sub: '工具启用态 / 技能开关', batch: 1 }
   ];
 
   /** id → 分节元数据。 */

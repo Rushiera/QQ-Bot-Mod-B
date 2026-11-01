@@ -151,10 +151,12 @@
       '      style="width:240px;background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:6px 10px;font-size:13px" />',
       '    <button id="skills-refresh" class="btn small" data-act="refresh">刷新</button>',
       '    <button id="skills-reload" class="btn small" data-act="reload" title="重扫磁盘（POST /api/skills/reload）">重载</button>',
+      '    <button id="skills-market" class="btn small" data-act="market" title="打开 Skill 市场">Skill 市场</button>',
+      '    <button id="plugin-market" class="btn small" data-act="plugin-market" title="打开插件市场">插件市场</button>',
       '  </div>',
       '  <div class="hint" id="skills-hint">',
       '    技能是 <b>LLM 型</b>扩展：它注册工具进模型的 function 列表，<b>用不用由模型自己判断</b>，',
-      '    所以不会「条件满足必然生效」。需要「必跑」的功能应做成插件（见「插件」页签）。',
+      '    所以不会「条件满足必然生效」。需要「必跑」的功能应做成插件（本页只列技能——插件不单独成页）。',
       '  </div>',
       '  <div id="skills-receipt"></div>',
       '  <div id="skills-list"></div>',
@@ -178,6 +180,8 @@
         const act = btn.dataset.act || '';
         if (act === 'reload') { onReload(btn); return; }
         if (act === 'refresh') { refresh(); return; }
+        if (act === 'market') { window.open('https://www.kondius.cn/qq-agent/skill-market/', '_blank', 'noopener'); return; }
+        if (act === 'plugin-market') { window.open('https://www.kondius.cn/qq-agent/plugin-market/', '_blank', 'noopener'); return; }
         if (act === 'settings') {
           // 设置弹窗属原版的市场/表单族，本轮不搬（任务卡 §1.2）；按钮保留以对齐形态。
           receipt(`设置面本轮未接：技能 ${btn.dataset.id} 的 configSchema 表单不在 R5 实现范围（指令类面仅照搬形态）。`);

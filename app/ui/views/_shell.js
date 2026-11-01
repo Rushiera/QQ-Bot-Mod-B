@@ -25,7 +25,7 @@
   const NOT_INSTALLED = '此页未安装（视图块缺失）';
 
   /** 外壳接管导航的页签名——与 index.html 的 `.tab[data-view]` 一一对应；其余既有页签归 app.js。 */
-  const MANAGED = ['sessions', 'chats', 'memory', 'usage', 'skills', 'plugins', 'bizsettings'];
+  const MANAGED = ['sessions', 'chats', 'memory', 'usage', 'skills', 'bizsettings'];
 
   /** 页签名 → 视图块全局名（`bizsettings` 页签挂的块叫 `settings`，见 `_index.md` §3.1）。 */
   const VIEW_KEY = { bizsettings: 'settings' };

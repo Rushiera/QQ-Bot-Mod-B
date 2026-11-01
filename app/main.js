@@ -148,9 +148,16 @@ function createWindow(port) {
     }
   });
 
-  // 关窗只收进托盘——协议端与机器人继续跑，真正退出走托盘菜单
+  // 关窗行为按配置分支（原「桌面端」分节的「点关闭时最小化到托盘」搬去「本地设置」）：
+  //   closeToTray !== false → 收进托盘，协议端与机器人继续跑（真退出走托盘菜单）
+  //   closeToTray === false → 直接退出（与 Windows 常规窗口一致）
   mainWindow.on('close', (event) => {
     if (quitting) return;
+    const keepInTray = core?.config?.app?.closeToTray !== false;
+    if (!keepInTray) {
+      quitting = true;
+      return;
+    }
     event.preventDefault();
     mainWindow.hide();
   });
@@ -188,6 +195,26 @@ app.whenReady().then(async () => {
     bootLog(`界面服务已启动，端口 ${port}`);
     createWindow(port);
     bootLog('主窗口已创建');
+
+    /**
+     * 壳层设置落地（开机自启注册表项）——由核心在 `POST /api/config` 后回调。
+     *
+     * @param {object} appCfg `config.app`——读 `autoStart`
+     * @returns {void}
+     */
+    core.hooks.shell = (appCfg) => {
+      const want = (appCfg || {}).autoStart === true;
+      try {
+        // 开发态（未打包）注册的是 electron.exe 路径——只在打包后才有意义，但仍写入，
+        // 免得「勾了却什么都没发生」这种不可见的静默失败。
+        app.setLoginItemSettings({ openAtLogin: want });
+        bootLog(`开机自启已${want ? '开启' : '关闭'}`);
+      } catch (error) {
+        bootLog(`开机自启设置失败：${String(error?.message ?? error)}`);
+      }
+    };
+    // 启动即对齐一次（配置里开着、注册表里没写，或反之）
+    core.hooks.shell(core.config.app || {});
 
     // 壳层能力：截图——开发期验证界面渲染，经 /api/debug/screenshot 触发
     core.hooks.capture = async (tab) => {

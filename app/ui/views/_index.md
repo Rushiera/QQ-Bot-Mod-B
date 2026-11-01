@@ -26,8 +26,8 @@
 | `chats.js` | L3 | 🟡 桩（42 行） |
 | `usage.js` | L4 | 🟡 桩（43 行） |
 | `memory.js` | L5 | 🟡 桩（43 行） |
-| `skills.js` | L6 | 🟡 桩（44 行） |
-| `plugins.js` | L7 | 🟡 桩（42 行） |
+| `skills.js` | L6 | ✅ 已实现（29683 B） |
+| ~~`plugins.js`~~ | ~~L7~~ | 🗑 **已删（2026-11-01 · 插件页整页移除，功能以技能页双市场按钮替代）** |
 | `settings.js` · `settings-sections.js` | L8 | 🟡 桩（47 + 21 行） |
 
 > 🔴 **`settings.js` 是「业务设置」（页签 `bizsettings` / `#view-bizsettings`）**，不是既有「本地设置」（`#view-settings`，归 `app/ui/app.js` 管，改单体自己的端口 / 协议端目录 / 账号）。两者并存不合并。
@@ -93,7 +93,6 @@ _shell.js（L1：导航 / api() / 共享工具 / 代理失败出口）
    ├── usage.js（L4）
    ├── memory.js（L5）
    ├── skills.js（L6）
-   ├── plugins.js（L7）
    └── settings.js + settings-sections.js（L8）
 ```
 

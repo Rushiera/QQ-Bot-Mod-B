@@ -342,37 +342,6 @@
       body: fbBody
     }));
 
-    // ── 卡 3：成本核算 ──
-    const priceBody = [
-      boolField(ctx, '用内置官方价格表估算', api.useOfficialPrice, '按模型 id 自动匹配；走中转站请关掉',
-        (b) => push(ctx, { api: { useOfficialPrice: b } })),
-      h.row([
-        numField(ctx, '输入单价（元/百万）', api.priceInputPerM, { min: 0, step: 0.01, note: '兜底默认值' },
-          (n) => push(ctx, { api: { priceInputPerM: n } })),
-        numField(ctx, '输出单价（元/百万）', api.priceOutputPerM, { min: 0, step: 0.01 }, (n) => push(ctx, { api: { priceOutputPerM: n } }))
-      ]),
-      numField(ctx, '缓存命中单价（元/百万）', api.priceCachedPerM, { min: 0, step: 0.01, note: '留 0 时按输入单价计' },
-        (n) => push(ctx, { api: { priceCachedPerM: n } })),
-      h.hint('按模型单独的单价（`api.modelPrices`）走下方「批量自定义价格编辑」：有记录的模型不再用官方表，也不受本节全局兜底单价影响。'),
-      priceTableOf(ctx, api),
-      h.el('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } },
-        h.button('拉取官方价格表', () => {
-          ctx.notice('正在拉取价格表…');
-          ctx.api('/api/biz/model-prices/refresh', { method: 'POST', body: {} }).then((r) => {
-            if (r && r.ok) ctx.notice('价格表已更新');
-            else ctx.notice(`拉取失败：${(r && r.error) || '未知原因'}`, 'fail');
-          });
-        }))
-    ];
-    root.appendChild(h.fold({
-      icon: '💰',
-      title: '成本核算',
-      sub: '官方价表 / 全局兜底单价',
-      val: api.useOfficialPrice === false ? '关' : '开',
-      open: false,
-      body: priceBody
-    }));
-
     // 首次渲染时补拉提供商目录（只影响显示名，不阻塞表单）
     if (!providers.loaded && !providers.error) {
       ctx.api('/api/biz/providers').then((r) => {
@@ -570,85 +539,7 @@
       ]
     }));
 
-    // ── 卡 2：活跃设置（响应档位 / 峰谷）──
-    root.appendChild(h.fold({
-      icon: '⚡',
-      title: '活跃设置',
-      sub: '响应档位 / 峰谷时段 / 上下文条数',
-      val: `档 ${store.contextTier === undefined ? 4 : store.contextTier}`,
-      open: true,
-      body: [
-        selectField(ctx, '响应档位', String(store.contextTier === undefined ? 4 : store.contextTier), TIER_OPTIONS,
-          '累积生效：选 4 档时 1/2/3 档也都生效',
-          (v) => push(ctx, { store: { contextTier: Number(v) } })),
-        h.row([
-          numField(ctx, '响应时带多少条历史', store.historyCount === undefined ? 80 : store.historyCount, { min: 1 },
-            (n) => push(ctx, { store: { historyCount: n } })),
-          numField(ctx, '随机档概率（%）', store.randomPercent === undefined ? 10 : store.randomPercent, { min: 0, max: 100 },
-            (n) => push(ctx, { store: { randomPercent: n } }))
-        ]),
-        h.hint('第 2 档的关键词表在 config.json 的 `store.keywords`——本节只给档位与条数。'),
-        boolField(ctx, '所有会话共用一套档位', store.unifiedTier, '关 = 每个群单独设置（下方出现分群编辑器）',
-          (b) => push(ctx, { store: { unifiedTier: b } })),
-        tierEditorOf(ctx, store),
-        boolField(ctx, '启用峰谷切换', peak.enabled, '高峰时段用高峰档，其余时间用低谷档',
-          (b) => push(ctx, { store: { peakSchedule: { enabled: b } } })),
-        h.row([
-          textField(ctx, '高峰开始（HH:MM）', peakHigh.start || '09:00', { note: '跨零点也支持' },
-            (v) => push(ctx, { store: { peakSchedule: { peak: { start: v } } } })),
-          textField(ctx, '高峰结束（HH:MM）', peakHigh.end || '18:00', {},
-            (v) => push(ctx, { store: { peakSchedule: { peak: { end: v } } } }))
-        ]),
-        h.row([
-          numField(ctx, '高峰档位滑条（0~100）', peakHigh.sliderPos === undefined ? 10 : peakHigh.sliderPos, { min: 0, max: 100 },
-            (n) => push(ctx, { store: { peakSchedule: { peak: { sliderPos: n } } } })),
-          numField(ctx, '低谷档位滑条（0~100）', peakLow.sliderPos === undefined ? 100 : peakLow.sliderPos, { min: 0, max: 100 },
-            (n) => push(ctx, { store: { peakSchedule: { valley: { sliderPos: n } } } }))
-        ])
-      ]
-    }));
-
-    // ── 卡 3：指令禁言 ──
-    root.appendChild(h.fold({
-      icon: '🔇',
-      title: '指令禁言',
-      sub: '被 @ 附带指令就安静一段时间',
-      val: mute.enabled === false ? '关' : '开',
-      open: false,
-      body: [
-        h.row([
-          textField(ctx, '禁言指令（需与 @机器人 同条消息）', mute.command || '/安静', { placeholder: '如 /安静' },
-            (v) => push(ctx, { commandMute: { command: v } })),
-          numField(ctx, '禁言时长（分钟，0 = 手动解除）', mute.durationMin === undefined ? 30 : mute.durationMin, { min: 0 },
-            (n) => push(ctx, { commandMute: { durationMin: n } }))
-        ]),
-        boolField(ctx, '启用指令禁言', mute.enabled === undefined ? true : mute.enabled, '',
-          (b) => push(ctx, { commandMute: { enabled: b } }))
-      ]
-    }));
-
-    // ── 卡 4：主动开话题 ──
-    root.appendChild(h.fold({
-      icon: '💬',
-      title: '主动开话题',
-      sub: '冷场时按概率主动开话题',
-      val: proactive.enabled ? '开' : '关',
-      open: false,
-      body: [
-        boolField(ctx, '冷场时按概率主动开话题', proactive.enabled, '',
-          (b) => push(ctx, { proactive: { enabled: b } })),
-        h.row([
-          numField(ctx, '检查间隔下限（毫秒）', proactive.checkIntervalMinMs === undefined ? 1800000 : proactive.checkIntervalMinMs,
-            { min: 60000 }, (n) => push(ctx, { proactive: { checkIntervalMinMs: n } })),
-          numField(ctx, '检查间隔上限（毫秒）', proactive.checkIntervalMaxMs === undefined ? 5400000 : proactive.checkIntervalMaxMs,
-            { min: 120000 }, (n) => push(ctx, { proactive: { checkIntervalMaxMs: n } }))
-        ]),
-        numField(ctx, '触发概率（0~1）', proactive.probability === undefined ? 0.25 : proactive.probability,
-          { min: 0, max: 1, step: 0.05 }, (n) => push(ctx, { proactive: { probability: n } }))
-      ]
-    }));
-
-    // ── 卡 5：表情包 ──
+    // ── 卡 2：表情包 ──
     root.appendChild(h.fold({
       icon: '😄',
       title: '表情包',
@@ -866,60 +757,9 @@
    */
   function renderMemory(ctx) {
     const h = ctx.h;
-    const c = ctx.config || {};
-    const mem = get(c, ['memory'], {});
-    const useChat = mem.useChatModel !== false;
     const root = h.el('div', { class: 'folds' });
 
-    root.appendChild(h.fold({
-      icon: '🧠',
-      title: '记忆整理',
-      sub: '自动整理 / 冷却间隔 / 条数上限',
-      val: mem.consolidateEnabled === false ? '关' : '开',
-      open: true,
-      body: [
-        boolField(ctx, '启用记忆自动整理', mem.consolidateEnabled !== false,
-          '条数超过阈值且距上次整理超过冷却时间后，在运行结束后后台整理',
-          (b) => push(ctx, { memory: { consolidateEnabled: b } })),
-        numField(ctx, '整理冷却时间（毫秒）', mem.consolidateMinIntervalMs === undefined ? 10800000 : mem.consolidateMinIntervalMs,
-          { min: 1800000, step: 600000, note: '默认 3 小时（10800000 毫秒）' },
-          (n) => push(ctx, { memory: { consolidateMinIntervalMs: n } })),
-        numField(ctx, '记忆沉淀拍间隔（毫秒）', mem.sedimentIntervalMs === undefined ? 43200000 : mem.sedimentIntervalMs,
-          { min: 0, step: 3600000, note: '0 = 关闭沉淀拍' },
-          (n) => push(ctx, { memory: { sedimentIntervalMs: n } })),
-        h.row([
-          numField(ctx, '单成员印象上限', mem.maxImpressionsPerMember === undefined ? 40 : mem.maxImpressionsPerMember,
-            { min: 1 }, (n) => push(ctx, { memory: { maxImpressionsPerMember: n } })),
-          numField(ctx, '群记重整上限', mem.maxGroupEntries === undefined ? 60 : mem.maxGroupEntries,
-            { min: 1 }, (n) => push(ctx, { memory: { maxGroupEntries: n } }))
-        ]),
-        h.row([
-          numField(ctx, '发现新人最低发言条数', mem.discoverMinMessages === undefined ? 3 : mem.discoverMinMessages,
-            { min: 1 }, (n) => push(ctx, { memory: { discoverMinMessages: n } })),
-          numField(ctx, '单次最多发现新人', mem.discoverMaxMembers === undefined ? 10 : mem.discoverMaxMembers,
-            { min: 1 }, (n) => push(ctx, { memory: { discoverMaxMembers: n } }))
-        ])
-      ]
-    }));
-
-    root.appendChild(h.fold({
-      icon: '🤖',
-      title: '整理模型',
-      sub: '跟随聊天模型 / 专用模型',
-      val: useChat ? '跟随聊天模型' : (mem.model || '未选模型'),
-      open: false,
-      body: [
-        boolField(ctx, '使用与聊天机器人相同的模型', useChat,
-          '关掉后使用下方专用模型（仅在有单独配额时才有意义）',
-          (b) => push(ctx, { memory: { useChatModel: b } })),
-        textField(ctx, '专用提供商 id', mem.provider || '', { note: 'useChatModel 关闭时生效' },
-          (v) => push(ctx, { memory: { provider: v } })),
-        textField(ctx, '专用模型 id', mem.model || '', { note: 'useChatModel 关闭时生效' },
-          (v) => push(ctx, { memory: { model: v } }))
-      ]
-    }));
-
-    // ── 卡 3：记忆文件清单 ──
+    // ── 卡 1：记忆文件清单（本分节只留这一卡）──
     const fileBody = h.el('div', {});
     if (!memoryFiles.loaded) {
       fileBody.appendChild(h.hint(memoryFiles.error ? `读取失败：${memoryFiles.error}` : '正在读取记忆文件…'));
@@ -983,7 +823,10 @@
   ];
 
   /**
-   * 人设分节：统一人设编辑器 / 分会话人设 / 人设模板库。
+   * 人设分节：分会话人设 + 提示词预览。
+   *
+   * 统一人设那张编辑卡已按Rushiera口径删除——人设内容改由 `role/` 系列文件承载；
+   * 统一开关保留在「分会话人设」卡内（关掉才轮得到逐会话编辑）。
    *
    * @param {object} ctx 渲染上下文
    * @returns {Element} 分节根
@@ -991,7 +834,6 @@
   function renderPersona(ctx) {
     const h = ctx.h;
     const c = ctx.config || {};
-    const per = get(c, ['persona'], {});
     const unified = c.personaUnified !== false;
     const perChat = get(c, ['personaByChat'], {});
     const allow = get(c, ['allow'], {});
@@ -1005,60 +847,16 @@
     // 会话清单 = 白名单 ∪ 已配置过独立人设的会话（白名单外的历史条目不能静默丢）
     const chatIds = allowIds.concat(configuredIds.filter((id) => allowIds.indexOf(id) < 0));
 
-    const tplSelect = h.selectOf({
-      value: '',
-      options: [['', '（手动填写角色设定）']].concat(
-        personaTemplates.items.map((t) => [t.id, `${t.name}${t.builtin ? '（内置）' : '（自定义）'}`])
-      ),
-      onchange: (id) => {
-        const hit = personaTemplates.items.find((t) => String(t.id) === String(id));
-        if (!hit) return;
-        // 套用人设：文本 + 附加规则一起写回（与原版「点击选择人设」同口径）
-        push(ctx, { persona: { roleText: hit.text, customRules: hit.customRules || per.customRules || '' } });
-      }
-    });
-
-    root.appendChild(h.fold({
-      icon: '🎭',
-      title: '统一人设',
-      sub: '名字 / 角色设定 / 参与度 / 附加规则 / 提示词覆盖',
-      val: per.botName || '未命名',
-      open: unified,
-      body: [
-        boolField(ctx, '为所有的群聊 / 私聊使用同一个人设', unified,
-          unified ? '所有会话共用下面这一套人设。' : '关闭后每个会话可用独立人设（见下方「分会话人设」）。',
-          (b) => push(ctx, { personaUnified: b })),
-        h.row([
-          textField(ctx, '机器人名字', per.botName || '', { placeholder: '小鲸鱼' },
-            (v) => push(ctx, { persona: { botName: v } })),
-          textField(ctx, '群内展示名（可选）', per.selfNickname || '', { note: '留空 = 用 QQ 昵称' },
-            (v) => push(ctx, { persona: { selfNickname: v } }))
-        ]),
-        selectField(ctx, '参与度', per.participation || 'medium', PARTICIPATION_OPTIONS, '',
-          (v) => push(ctx, { persona: { participation: v } })),
-        personaTemplates.items.length
-          ? h.field('套用人设模板', tplSelect, personaTemplates.error ? `（模板读取失败：${personaTemplates.error}）` : '选中即写入角色设定')
-          : h.hint(personaTemplates.error ? `人设模板读取失败：${personaTemplates.error}` : '人设模板加载中…'),
-        areaField(ctx, '角色设定', per.roleText || '',
-          { placeholder: '例如：你是运维群里的老油条……', minHeight: '160px' },
-          (v) => push(ctx, { persona: { roleText: v } })),
-        areaField(ctx, '管理员附加规则（可选，追加到系统提示）', per.customRules || '',
-          { minHeight: '100px' }, (v) => push(ctx, { persona: { customRules: v } })),
-        areaField(ctx, '系统提示词覆盖（高级 · 可选）', per.systemPromptOverride || '', {
-          minHeight: '120px',
-          placeholder: '留空 = 使用内置默认系统提示词',
-          note: '⚠️ 填写后整体替换内置系统提示词（安全规则 / 工具协议 / 反 AI 味全部失效）。'
-            + '可用占位符 {botName} {roleText} {participation}。'
-        }, (v) => push(ctx, { persona: { systemPromptOverride: v } }))
-      ]
-    }));
-
-    // ── 卡 2：分会话人设（统一人设关闭时出现）──
+    // ── 卡 1：分会话人设（统一开关保留在这里——删掉的是「统一人设」那张编辑卡）──
     const chatBody = h.el('div', {});
+    chatBody.appendChild(boolField(ctx, '为所有的群聊 / 私聊使用同一个人设', unified,
+      unified ? '开启中：各会话跟随统一人设，下面的独立编辑不生效。' : '已关闭：下面给每个会话单独编辑。',
+      (b) => push(ctx, { personaUnified: b })));
+
     if (unified) {
-      chatBody.appendChild(h.hint('「统一人设」开启中——本节不生效。关掉上面的开关后，这里给每个会话单独编辑。'));
+      chatBody.appendChild(h.hint('关掉上面的开关后，这里给每个会话单独编辑人设。'));
     } else if (!chatIds.length) {
-      chatBody.appendChild(h.hint('（白名单为空——先在「聊天白名单」里添加群聊 / 私聊）'));
+      chatBody.appendChild(h.hint('（群名单为空——先在「群名单」里添加群聊 / 私聊）'));
     } else {
       chatIds.forEach((chatKey) => {
         const conf = perChat[chatKey] || {};
@@ -1089,11 +887,14 @@
     root.appendChild(h.fold({
       icon: '👥',
       title: '分会话人设',
-      sub: '每个白名单会话一套独立人设',
+      sub: '每个会话一套独立人设',
       val: `${Object.keys(perChat).length} 个已配置`,
       open: false,
       body: chatBody
     }));
+
+    // ── 卡 2：提示词预览（与分会话人设同节，一屏内可对照）──
+    root.appendChild(promptCard(ctx));
 
     if (!personaTemplates.loaded && !personaTemplates.error) {
       ctx.api('/api/biz/persona-templates').then((r) => {
@@ -1146,166 +947,293 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════
-  // 六、聊天白名单（原版 06-settings-render.js:670 renderAllowSection）
+  // 六、群名单（取代原「聊天白名单」分节 + 独立「群名单」页签）
+  //     两栏看板：未启用 / 已启用，拖动或按钮即写；写后按读回值重渲染。
+  //     端点：GET /api/groups · GET /api/groups/online · POST /api/groups
+  //     （前两个是单体自己的路由，不走 /api/biz 代理——见 app/src/app.js:104-106）
   // ══════════════════════════════════════════════════════════════════════
 
-  /** 已知会话缓存（`GET /api/biz/chats`——勾选群 / 好友用）。 */
-  const chatDirectory = { items: [], loaded: false, error: '' };
+  /** 群名单缓存（一次刷新取两份：业务面名单 + 协议端实际所在群）。 */
+  const groupBoard = {
+    allow: [],
+    deny: [],
+    allowAllWhenEmpty: false,
+    online: [],
+    onlineError: '',
+    busy: false,
+    loaded: false,
+    status: ''
+  };
 
   /**
-   * 勾选式名单编辑（补强②：原版是模态框，这里做成内联勾选清单——不新造交互形态）。
+   * 按 id 去重并只留纯数字。
    *
-   * 数据源是 `/api/chats`（本机已有会话记录）+ 当前名单并集：只会出现"见过的会话"，
-   * 不会伪造"全部群列表"（SnowLuma 侧的好友 / 群列表需要协议端在线，不在本页职责内）。
-   *
-   * @param {object} ctx 渲染上下文
-   * @param {string} kind `group` / `private`
-   * @param {string[]} current 当前名单
-   * @param {Function} onsave `(ids[]) => void`
-   * @returns {Element} 清单容器
+   * @param {string[]} list 原始清单
+   * @returns {string[]} 干净清单
    */
-  function pickListOf(ctx, kind, current, onsave) {
-    const h = ctx.h;
-    const box = h.el('div', { style: { marginTop: '6px' } });
-    const prefix = kind === 'group' ? 'group:' : 'private:';
-    const seen = new Set(current.map(String));
-    const candidates = [];
-    chatDirectory.items.forEach((item) => {
-      const key = String(item.key || '');
-      if (!key.startsWith(prefix)) return;
-      const id = key.slice(prefix.length);
-      if (seen.has(id)) return;
-      seen.add(id);
-      candidates.push({ id, label: item.chatName ? `${item.chatName}（${id}）` : id });
-    });
-
-    if (!chatDirectory.loaded) {
-      box.appendChild(h.hint(chatDirectory.error
-        ? `会话目录读取失败：${chatDirectory.error}`
-        : '正在读取本机会话目录…'));
-      if (!chatDirectory.error) {
-        ctx.api('/api/biz/chats').then((r) => {
-          if (r && r.ok) {
-            chatDirectory.items = Array.isArray(r.chats) ? r.chats : [];
-            chatDirectory.loaded = true;
-            ctx.reload();
-          } else {
-            chatDirectory.error = (r && r.error) || 'unknown';
-            ctx.reload();
-          }
-        }).catch((error) => {
-          chatDirectory.error = String((error && error.message) || error);
-          ctx.reload();
-        });
-      }
-      return box;
+  function cleanGroupIds(list) {
+    const out = [];
+    for (const item of list || []) {
+      const id = String(item === null || item === undefined ? '' : item).trim();
+      if (!/^\d+$/.test(id)) continue;
+      if (out.indexOf(id) < 0) out.push(id);
     }
-
-    if (!candidates.length) {
-      box.appendChild(h.hint(kind === 'group'
-        ? '（没有可勾选的新群——本机会话目录里没有未在名单中的群）'
-        : '（没有可勾选的新好友——本机会话目录里没有未在名单中的私聊）'));
-      return box;
-    }
-
-    candidates.forEach((c) => {
-      box.appendChild(h.checkbox({
-        checked: false,
-        label: c.label,
-        note: '',
-        onchange: (on) => {
-          if (!on) return;
-          const next = current.concat([c.id]);
-          onsave(next);
-        }
-      }));
-    });
-    return box;
+    return out;
   }
 
   /**
-   * 聊天白名单分节：允许的群 / 允许的私聊 / 空表语义 / 拒绝名单。
+   * 写群名单并读回（唯一写入口——拖动 / 按钮 / 手输 / 拒绝名单全走这里）。
+   *
+   * @param {object} ctx 渲染上下文
+   * @param {object} override 局部覆盖
+   * @param {string} action 动作说明（拼进状态行）
+   * @returns {Promise<boolean>} 是否成功
+   */
+  async function commitGroups(ctx, override, action) {
+    const h = ctx.h;
+    if (groupBoard.busy) return false;
+    groupBoard.busy = true;
+    groupBoard.status = (action || '写入') + '…';
+    ctx.reload();
+
+    const body = {
+      allowGroups: override && override.allowGroups !== undefined ? override.allowGroups : groupBoard.allow,
+      denyGroups: override && override.denyGroups !== undefined ? override.denyGroups : groupBoard.deny,
+      allowAllWhenEmpty: override && override.allowAllWhenEmpty !== undefined
+        ? override.allowAllWhenEmpty : groupBoard.allowAllWhenEmpty
+    };
+    const r = await ctx.api('/api/groups', { method: 'POST', body });
+    groupBoard.busy = false;
+
+    if (!r || r.ok === false) {
+      groupBoard.status = (action || '写入') + '失败：' + String((r && (r.error || r.status)) || '无响应');
+      ctx.reload();
+      return false;
+    }
+    groupBoard.allow = cleanGroupIds(r.allowGroups);
+    groupBoard.deny = cleanGroupIds(r.denyGroups);
+    groupBoard.allowAllWhenEmpty = r.allowAllWhenEmpty === true;
+    groupBoard.status = (action || '写入') + '：已生效（已启用 ' + groupBoard.allow.length + ' 个）';
+    ctx.reload();
+    return true;
+  }
+
+  /**
+   * 建一条群条目（拖动 + 按钮双通道——触摸板 / 远程桌面下按钮永远可用）。
+   *
+   * @param {object} ctx 渲染上下文
+   * @param {object} entry `{id, name, enabled, missing, denied}`
+   * @returns {Element} 条目节点
+   */
+  function groupItemOf(ctx, entry) {
+    const h = ctx.h;
+    const item = h.el('div', {
+      class: 'groups-item' + (entry.enabled ? ' on' : '') + (entry.missing ? ' missing' : ''),
+      draggable: 'true'
+    });
+    item.dataset.id = entry.id;
+    if (entry.denied) item.title = '在拒绝名单里——启用前先从这里移出拒绝名单';
+
+    const main = h.el('div', { class: 'groups-item-main' },
+      h.el('div', { class: 'groups-item-name', text: entry.name || ('群 ' + entry.id) }),
+      h.el('div', {
+        class: 'groups-item-id mono',
+        text: entry.missing ? entry.id + '（协议端未返回该群）' : entry.id
+      }));
+
+    const btn = h.el('button', {
+      class: 'btn small groups-item-btn', type: 'button', text: entry.enabled ? '移除' : '启用'
+    });
+    btn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      btn.disabled = true;
+      if (entry.enabled) {
+        await commitGroups(ctx, {
+          allowGroups: groupBoard.allow.filter((x) => x !== entry.id)
+        }, '移除 ' + entry.id);
+      } else {
+        await commitGroups(ctx, {
+          allowGroups: groupBoard.allow.concat([entry.id]),
+          // 在拒绝名单里的群要启用，先把它从拒绝名单摘掉——否则业务面按「同群冲突」拒写
+          denyGroups: groupBoard.deny.filter((x) => x !== entry.id)
+        }, '启用 ' + entry.id);
+      }
+      btn.disabled = false;
+    });
+
+    item.appendChild(main);
+    item.appendChild(btn);
+
+    item.addEventListener('dragstart', (event) => {
+      event.dataTransfer.setData('text/plain', entry.id);
+      event.dataTransfer.effectAllowed = 'move';
+      item.classList.add('dragging');
+    });
+    item.addEventListener('dragend', () => item.classList.remove('dragging'));
+    return item;
+  }
+
+  /**
+   * 群名单分节：两栏看板（未启用 / 已启用）+ 手输加入 + 折叠高级项。
    *
    * @param {object} ctx 渲染上下文
    * @returns {Element} 分节根
    */
-  function renderAllow(ctx) {
+  function renderGroups(ctx) {
     const h = ctx.h;
-    const c = ctx.config || {};
-    const allow = c.allow || {};
-    const deny = c.deny || {};
-    const groups = Array.isArray(allow.groups) ? allow.groups : [];
-    const privates = Array.isArray(allow.private) ? allow.private : [];
     const root = h.el('div', { class: 'folds' });
 
-    const groupInput = h.input({
-      type: 'text',
-      value: groups.join(','),
-      placeholder: '如 123456789,987654321',
-      onchange: (v) => push(ctx, { allow: { groups: splitList(v) } })
+    // ── 首次取数（名单 + 协议端群列表并行，谁失败都不挡另一个）──
+    if (!groupBoard.loaded && !groupBoard.status) {
+      groupBoard.status = '载入中…';
+      ctx.api('/api/groups').then((lists) => {
+        if (!lists || lists.ok === false) {
+          groupBoard.status = '载入名单失败：' + String((lists && (lists.error || lists.status)) || '业务面未响应');
+          ctx.reload();
+          return null;
+        }
+        groupBoard.allow = cleanGroupIds(lists.allowGroups);
+        groupBoard.deny = cleanGroupIds(lists.denyGroups);
+        groupBoard.allowAllWhenEmpty = lists.allowAllWhenEmpty === true;
+        return ctx.api('/api/groups/online').then((online) => {
+          groupBoard.online = online && online.ok ? (online.groups || []) : [];
+          groupBoard.onlineError = online && online.ok ? '' : String((online && online.error) || '协议端不可达');
+          groupBoard.loaded = true;
+          groupBoard.status = groupBoard.onlineError
+            ? '名单已载入（' + String(lists.apiUrl || '') + '）；协议端群列表没拿到：' + groupBoard.onlineError
+            : '名单已载入（' + String(lists.apiUrl || '') + '）· 协议端 ' + groupBoard.online.length + ' 个群';
+          ctx.reload();
+        });
+      }).catch((error) => {
+        groupBoard.status = '载入失败：' + String((error && error.message) || error);
+        ctx.reload();
+      });
+    }
+
+    const names = new Map((groupBoard.online || []).map((g) => [String(g.id), g.name]));
+    const allowSet = new Set(groupBoard.allow);
+    const denySet = new Set(groupBoard.deny);
+
+    const onEntries = groupBoard.allow.map((id) => ({
+      id, name: names.get(id) || '', enabled: true, missing: !names.has(id)
+    }));
+    const offIds = [];
+    for (const g of groupBoard.online || []) if (!allowSet.has(String(g.id))) offIds.push(String(g.id));
+    for (const id of groupBoard.deny) if (!allowSet.has(id) && offIds.indexOf(id) < 0) offIds.push(id);
+    const offEntries = offIds.map((id) => ({
+      id, name: names.get(id) || '', enabled: false, missing: !names.has(id), denied: denySet.has(id)
+    }));
+
+    const offBox = h.el('div', { class: 'groups-drop', dataset: { list: 'off' } });
+    const onBox = h.el('div', { class: 'groups-drop', dataset: { list: 'on' } });
+
+    /**
+     * 一次拖放（拖到右栏 = 启用；拖回左栏 = 移除）。
+     *
+     * @param {DragEvent} event 事件
+     * @param {string} target `on` / `off`
+     * @returns {Promise<void>} 完成
+     */
+    async function onDrop(event, target) {
+      event.preventDefault();
+      event.currentTarget.classList.remove('drop-hot');
+      const id = String(event.dataTransfer.getData('text/plain') || '').trim();
+      if (!/^\d+$/.test(id)) return;
+      if (target === 'on') {
+        if (groupBoard.allow.indexOf(id) >= 0) return;
+        await commitGroups(ctx, {
+          allowGroups: groupBoard.allow.concat([id]),
+          denyGroups: groupBoard.deny.filter((x) => x !== id)
+        }, '启用 ' + id);
+      } else {
+        if (groupBoard.allow.indexOf(id) < 0) return;
+        await commitGroups(ctx, { allowGroups: groupBoard.allow.filter((x) => x !== id) }, '移除 ' + id);
+      }
+    }
+
+    [[offBox, 'off'], [onBox, 'on']].forEach(([zone, target]) => {
+      zone.addEventListener('dragover', (event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        zone.classList.add('drop-hot');
+      });
+      zone.addEventListener('dragleave', (event) => {
+        if (!zone.contains(event.relatedTarget)) zone.classList.remove('drop-hot');
+      });
+      zone.addEventListener('drop', (event) => onDrop(event, target));
     });
-    const privateInput = h.input({
-      type: 'text',
-      value: privates.join(','),
-      placeholder: '如 10001,10002',
-      onchange: (v) => push(ctx, { allow: { private: splitList(v) } })
+
+    for (const entry of offEntries) offBox.appendChild(groupItemOf(ctx, entry));
+    for (const entry of onEntries) onBox.appendChild(groupItemOf(ctx, entry));
+    if (!offEntries.length) offBox.appendChild(h.el('p', { class: 'hint groups-empty', text: '（没有未启用的群）' }));
+    if (!onEntries.length) onBox.appendChild(h.el('p', { class: 'hint groups-empty', text: '（先把左边的群拖过来）' }));
+
+    // 手输群号加入
+    const addInput = h.input({ type: 'text', placeholder: '输群号回车加入' });
+    const addBtn = h.button('加入', async () => {
+      const raw = String(addInput.value || '');
+      const ids = cleanGroupIds((raw.match(/\d+/g) || [])).filter((id) => groupBoard.allow.indexOf(id) < 0);
+      if (!ids.length) {
+        groupBoard.status = raw.trim() ? '这个群号已经在已启用里了' : '先输个群号';
+        ctx.reload();
+        return;
+      }
+      const okDone = await commitGroups(ctx, {
+        allowGroups: groupBoard.allow.concat(ids),
+        denyGroups: groupBoard.deny.filter((x) => ids.indexOf(x) < 0)
+      }, '启用 ' + ids.join('、'));
+      if (okDone) addInput.value = '';
     });
+    addInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') addBtn.click();
+    });
+
+    const reloadBtn = h.button('刷新', () => {
+      groupBoard.loaded = false;
+      groupBoard.status = '';
+      ctx.reload();
+    });
+
+    const denyArea = h.el('textarea', { class: 'groups-text small', spellcheck: 'false' });
+    denyArea.value = groupBoard.deny.join('\n');
+    const denyApply = h.button('应用', () => {
+      const ids = cleanGroupIds((denyArea.value || '').match(/\d+/g) || []);
+      commitGroups(ctx, { denyGroups: ids }, '应用拒绝名单');
+    });
+
+    const board = h.el('div', { class: 'groups-board' },
+      h.el('div', { class: 'groups-col' },
+        h.el('h3', {}, '未启用 ', h.el('span', { class: 'hint', text: offEntries.length + ' 个' })),
+        h.el('p', { class: 'hint groups-col-tip', text: '协议端在的全部群——拖到右边即启用' }),
+        offBox),
+      h.el('div', { class: 'groups-col' },
+        h.el('h3', {}, '已启用 ', h.el('span', { class: 'hint', text: onEntries.length + ' 个' })),
+        h.el('p', { class: 'hint groups-col-tip', text: '这些群的消息会进猫——拖回左边即移除' }),
+        onBox));
 
     root.appendChild(h.fold({
       icon: '✅',
-      title: '接入白名单',
-      sub: '允许的群 / 允许的私聊 / 空表语义',
-      val: `${groups.length} 群 · ${privates.length} 私聊`,
+      title: '群名单',
+      sub: '启用 / 未启用 / 拒绝名单 · 拖动即生效',
+      val: onEntries.length + ' 启用 · ' + offEntries.length + ' 未启用',
       open: true,
       body: [
-        h.hint('白名单为空时机器人不会在任何群聊 / 私聊内运行（除非开了下方「白名单留空时允许所有会话」）。'),
-        h.row([
-          h.field('允许的群号（逗号分隔）', groupInput, `${groups.length} 项`),
-          h.field('允许的 QQ（逗号分隔）', privateInput, `${privates.length} 项`)
-        ]),
+        h.el('div', { class: 'groups-bar' }, addInput, addBtn, h.el('span', { class: 'groups-spacer' }), reloadBtn,
+          h.el('span', { class: 'hint', text: groupBoard.status || '' })),
+        board,
         h.fold({
-          icon: '📋',
-          title: '从本机会话目录勾选（群）',
-          sub: '只列见过的群 · 勾一个即加入白名单',
-          val: chatDirectory.loaded ? '可勾选' : '未加载',
+          icon: '🚫',
+          title: '高级：拒绝名单 · 空名单放行',
+          sub: '拒绝优先级高于允许',
+          val: groupBoard.deny.length ? groupBoard.deny.length + ' 项' : '空',
           open: false,
-          body: [pickListOf(ctx, 'group', groups, (next) => push(ctx, { allow: { groups: next } }))]
-        }),
-        h.fold({
-          icon: '📋',
-          title: '从本机会话目录勾选（私聊）',
-          sub: '只列见过的私聊 · 勾一个即加入白名单',
-          val: chatDirectory.loaded ? '可勾选' : '未加载',
-          open: false,
-          body: [pickListOf(ctx, 'private', privates, (next) => push(ctx, { allow: { private: next } }))]
-        }),
-        boolField(ctx, '白名单留空时允许所有会话', c.allowAllWhenEmpty,
-          '两个列表都为空且本项开启 → 在所有群聊与私聊运行；填了任意一项就只按名单过滤',
-          (b) => push(ctx, { allowAllWhenEmpty: b })),
-        h.hint('按会话的独立人设在「人设」分节配置（关闭「统一人设」后出现）。')
-      ]
-    }));
-
-    const denyGroups = Array.isArray(deny.groups) ? deny.groups : [];
-    const denyPrivates = Array.isArray(deny.private) ? deny.private : [];
-    root.appendChild(h.fold({
-      icon: '🚫',
-      title: '拒绝名单',
-      sub: '即使是白名单内的会话也不再响应',
-      val: `${denyGroups.length} 群 · ${denyPrivates.length} 私聊`,
-      open: false,
-      body: [
-        h.row([
-          h.field('拒绝的群号（逗号分隔）', h.input({
-            type: 'text', value: denyGroups.join(','), placeholder: '如 123456789',
-            onchange: (v) => push(ctx, { deny: { groups: splitList(v) } })
-          }), `${denyGroups.length} 项`),
-          h.field('拒绝的 QQ（逗号分隔）', h.input({
-            type: 'text', value: denyPrivates.join(','), placeholder: '如 10001',
-            onchange: (v) => push(ctx, { deny: { private: splitList(v) } })
-          }), `${denyPrivates.length} 项`)
-        ]),
-        h.hint('拒绝名单优先级高于白名单；全局屏蔽名单（跨群生效）在会话页「管理屏蔽名单」，本节不重复。')
+          body: [
+            boolField(ctx, '允许名单为空时放行全部群', groupBoard.allowAllWhenEmpty, '谨慎开启',
+              (b) => commitGroups(ctx, { allowAllWhenEmpty: b }, b ? '开启空名单放行' : '关闭空名单放行')),
+            h.field('拒绝名单（一行一个群号）', denyArea, '拒绝名单优先级高于白名单；同群不能同时在两边'),
+            h.el('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } }, denyApply)
+          ]
+        })
       ]
     }));
 
@@ -1313,163 +1241,9 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════
-  // 七、桌面端（原版 06-settings-render.js:959 renderDesktopSection）
+  // 七、桌面端与 OneBot —— 按Rushiera口径整节删除（2026-11-01）
+  //     开机自启 / 点关闭最小化托盘 → 搬去「本地设置」（单体自己的 config，不走业务面）
   // ══════════════════════════════════════════════════════════════════════
-
-  /**
-   * 桌面端分节：桌面端接入 / 界面 / 数据管理 / 版本更新。
-   *
-   * 本机动作类按钮（打开文件夹 / 重置数据 / 检查更新）**不自造端点**——
-   * 点了给提示说明去处（原版由 Electron 主进程承载，单体侧无对应通道）。
-   *
-   * @param {object} ctx 渲染上下文
-   * @returns {Element} 分节根
-   */
-  function renderDesktop(ctx) {
-    const h = ctx.h;
-    const c = ctx.config || {};
-    const server = get(c, ['server'], {});
-    const uiCfg = get(c, ['ui'], {});
-    const root = h.el('div', { class: 'folds' });
-
-    root.appendChild(h.fold({
-      icon: '🖥',
-      title: '桌面端',
-      sub: '开机自启 / 关闭到托盘',
-      val: server.autoStart ? '自启' : '手动',
-      open: true,
-      body: [
-        boolField(ctx, '开机自启', server.autoStart === true, '仅 Electron 桌面端生效',
-          (b) => push(ctx, { server: { autoStart: b } })),
-        boolField(ctx, '点关闭时最小化到托盘', server.closeToTray !== false, '',
-          (b) => push(ctx, { server: { closeToTray: b } }))
-      ]
-    }));
-
-    root.appendChild(h.fold({
-      icon: '🎨',
-      title: '界面',
-      sub: '主题 / 视觉徽标 / 轮询间隔',
-      val: uiCfg.theme || 'dark',
-      open: true,
-      body: [
-        selectField(ctx, '主题', uiCfg.theme || 'dark', [
-          ['dark', '深色'],
-          ['light', '浅色'],
-          ['system', '跟随系统']
-        ], '前端以 localStorage 为准即时生效，这里管重装后的默认值',
-        (v) => push(ctx, { ui: { theme: v } })),
-        boolField(ctx, '模型目录显示图片输入能力徽标', uiCfg.showVision !== false, '',
-          (b) => push(ctx, { ui: { showVision: b } })),
-        numField(ctx, '界面刷新间隔（毫秒）', uiCfg.refreshMs === undefined ? 15000 : uiCfg.refreshMs,
-          { min: 1000, step: 1000 }, (n) => push(ctx, { ui: { refreshMs: n } }))
-      ]
-    }));
-
-    root.appendChild(h.fold({
-      icon: '🗂',
-      title: '数据管理',
-      sub: '用户数据目录 / 重置（本机动作）',
-      val: '只读展示',
-      open: false,
-      body: [
-        h.hint('用户数据目录（配置 / 聊天记录 / 记忆 / 表情包）由 Electron 主进程提供，'
-          + '业务面不掌握该路径——本节只给形态，点击按钮在桌面端操作。'),
-        h.el('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } },
-          h.button('打开数据目录', () => ctx.notice('打开数据目录：属于桌面端本机动作，请在桌面端操作')),
-          h.button('重置为初始形态', () => ctx.notice('重置数据属破坏性本机动作，不在本页提供（桌面端二次确认后执行）')))
-      ]
-    }));
-
-    root.appendChild(h.fold({
-      icon: '⬆️',
-      title: '版本更新',
-      sub: '当前版本 / 检查更新',
-      val: '本机动作',
-      open: false,
-      body: [
-        h.hint('版本号由单体自身提供（`GET /api/version`）；更新检查属桌面端流程，本页只给形态。'),
-        h.el('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } },
-          h.button('查看当前版本', () => {
-            ctx.api('/api/biz/version').then((r) => {
-              if (r && r.ok && r.version) ctx.notice(`当前版本：${r.version}`);
-              else ctx.notice(`版本读取失败：${(r && r.error) || '未知原因'}`, 'fail');
-            });
-          }))
-      ]
-    }));
-
-    return root;
-  }
-
-  // ══════════════════════════════════════════════════════════════════════
-  // 八、OneBot（原版 06-settings-render.js:1000 renderOnebotSection）
-  // ══════════════════════════════════════════════════════════════════════
-
-  /**
-   * OneBot（SnowLuma）分节：程序目录 / 自动拉起 / WS 与 HTTP 地址与令牌。
-   *
-   * @param {object} ctx 渲染上下文
-   * @returns {Element} 分节根
-   */
-  function renderOnebot(ctx) {
-    const h = ctx.h;
-    const c = ctx.config || {};
-    const snow = c.snowluma || {};
-    const root = h.el('div', { class: 'folds' });
-
-    root.appendChild(h.fold({
-      icon: '🔌',
-      title: 'OneBot（SnowLuma）',
-      sub: 'WS 收消息 / HTTP 发消息 / 令牌',
-      val: snow.wsUrl ? '已配置' : '未配置',
-      open: true,
-      body: [
-        textField(ctx, 'SnowLuma 程序目录', snow.dir || '',
-          { note: '留空 = 自动探测项目内 snowluma/', placeholder: '留空自动探测' },
-          (v) => push(ctx, { snowluma: { dir: v } })),
-        boolField(ctx, '应用启动时自动拉起 SnowLuma（未运行时）', snow.autoLaunch === true, '',
-          (b) => push(ctx, { snowluma: { autoLaunch: b } })),
-        h.row([
-          textField(ctx, 'WebSocket 地址（收消息）', snow.wsUrl || '', { placeholder: 'ws://127.0.0.1:3001' },
-            (v) => push(ctx, { snowluma: { wsUrl: v } })),
-          textField(ctx, 'HTTP 地址（发消息）', snow.httpUrl || '', { placeholder: 'http://127.0.0.1:3000' },
-            (v) => push(ctx, { snowluma: { httpUrl: v } }))
-        ]),
-        textField(ctx, 'WebSocket 令牌', '', {
-          secret: true,
-          placeholder: snow.hasAccessToken ? '已保存（不显示；留空 = 不改）' : '未保存（填了就写回）'
-        }, (v) => push(ctx, { snowluma: { accessToken: v } })),
-        textField(ctx, 'HTTP 令牌（与 WS 不同时填）', '', {
-          secret: true,
-          placeholder: snow.hasHttpAccessToken ? '已保存（不显示；留空 = 不改）' : '未保存（留空沿用 WS 令牌）'
-        }, (v) => push(ctx, { snowluma: { httpAccessToken: v } })),
-        h.el('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } },
-          h.button('读取 WS 令牌明文', () => readOnebotToken(ctx, 'ws')),
-          h.button('读取 HTTP 令牌明文', () => readOnebotToken(ctx, 'http'))),
-        h.hint('改完 OneBot 地址需重启应用生效；模型 / 人设 / 白名单即时生效。')
-      ]
-    }));
-
-    return root;
-  }
-
-  /**
-   * 读取 OneBot 令牌明文（`GET /api/biz/onebot-token?which=`）。
-   *
-   * @param {object} ctx 渲染上下文
-   * @param {string} which `ws` / `http`
-   * @returns {void}
-   */
-  function readOnebotToken(ctx, which) {
-    ctx.api(`/api/biz/onebot-token?which=${which}`).then((r) => {
-      if (r && r.ok && typeof r.token === 'string') {
-        ctx.notice(`${which === 'ws' ? 'WebSocket' : 'HTTP'} 令牌：${r.token || '（空）'}`);
-      } else {
-        ctx.notice(`读取失败：${(r && r.error) || '未知原因'}`, 'fail');
-      }
-    });
-  }
 
   // ══════════════════════════════════════════════════════════════════════
   // 九、工具与技能（原版 06-settings-render.js:1527 renderToolsSection）
@@ -1644,20 +1418,20 @@
 
   // ══════════════════════════════════════════════════════════════════════
   // 十、提示词预览（原版 06-settings-render.js:1652 renderPromptPreview）
+  //     —— 不再单独成节：作为一张卡挂在「人设」分节内（口径：提示词就是人设的产物）。
   // ══════════════════════════════════════════════════════════════════════
 
   /** 提示词预览缓存（`GET /api/biz/prompt-preview`）。 */
   const promptPreview = { text: '', tools: [], loaded: false, error: '' };
 
   /**
-   * 提示词预览分节：按当前启用态组装后的系统提示词 + 可用工具清单。
+   * 提示词预览卡：按当前启用态组装后的系统提示词 + 可用工具清单（只读）。
    *
    * @param {object} ctx 渲染上下文
-   * @returns {Element} 分节根
+   * @returns {Element} 折叠卡
    */
-  function renderPrompt(ctx) {
+  function promptCard(ctx) {
     const h = ctx.h;
-    const root = h.el('div', { class: 'folds' });
 
     const pre = h.el('pre', {
       class: 'prompt-preview-content',
@@ -1670,12 +1444,12 @@
       ? `读取失败：${promptPreview.error}`
       : '正在组装提示词预览…');
 
-    root.appendChild(h.fold({
+    const card = h.fold({
       icon: '📜',
-      title: '系统提示词预览',
+      title: '提示词预览',
       sub: '按当前启停状态实时组装 · 只读',
       val: promptPreview.loaded ? `${promptPreview.text.length} 字符 · ${promptPreview.tools.length} 工具` : '未加载',
-      open: true,
+      open: false,
       body: [
         h.hint('这份文本由后端用运行时同一套 buildSystemPrompt + getToolAvailability 组装——'
           + '前端不另拼一份，避免与实际发送的提示词漂移。改开关后点「刷新预览」重取。'),
@@ -1683,7 +1457,7 @@
           h.button('刷新预览', () => { promptPreview.loaded = false; promptPreview.error = ''; ctx.reload(); })),
         pre
       ]
-    }));
+    });
 
     if (!promptPreview.loaded && !promptPreview.error) {
       ctx.api('/api/biz/prompt-preview').then((r) => {
@@ -1706,21 +1480,24 @@
       });
     }
 
-    return root;
+    return card;
   }
 
   // 注册：分节 id → 渲染函数（`settings.js` 按侧栏点击调度；未在此处的分节 = 未接）
+  //
+  // 🔴 侧栏只列本表的键。2026-11-01 按Rushiera口径收缩后的现行集：
+  //    api（模型 API）· memory（记忆）· persona（人设，含提示词预览卡）·
+  //    groups（群名单）· chat（聊天设置）· tools（工具与技能）
+  //    已删：search（搜索服务，能力以技能形式存在）· allow（聊天白名单，并入群名单）·
+  //          desktop（桌面端）· onebot（OneBot 不显示）· prompt（并入人设）
+  //    renderSearch / renderAllow 已随分节删除而移除；promptCard 由 renderPersona 内部调用。
   window.__settingsSections = Object.assign(window.__settingsSections || {}, {
     api: renderApi,
-    search: renderSearch,
     memory: renderMemory,
     persona: renderPersona,
+    groups: renderGroups,
     chat: renderChat,
-    allow: renderAllow,
-    desktop: renderDesktop,
-    onebot: renderOnebot,
     tools: renderTools,
-    prompt: renderPrompt,
     stub: false,
     unreachable: UNREACHABLE
   });

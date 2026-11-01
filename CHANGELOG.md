@@ -122,3 +122,4 @@
 | v1.10 | 2026-11-01 | R9 建卡（合龙验收 + 记忆写面健壮性 · N=1）+ 建卡时撞见 `impressions` 零校验缺陷（详见 log §八十九） |
 | v1.11 | 2026-11-01 | **R9 退出并发协议 · 主干直做完成**——`memory.js` 新增 `normalizeImpressions()`（对象取 `content` / `text`，其余非字符串 `throw`），两处调用同口径；13 页签 `__errs` 全零 / 取数四页真数据 / 七写入口页面级实点；契约 58/58 · import 98/417/0 · 语法 0 错（详见 `reports/R9-L1.md` · log §九十） |
 | v1.12 | 2026-11-01 | **API 信息清除 + 用量置空（软归档 CatTemp）**——`api.*` 四字段清零（配置 + 内存单例 + 11 份自测残留副本 + 补丁脚本常量，全仓明文 key 余量 0）；用量六件（`usage-today` / `usage-days` / `telemetry-totals` / `session-index-cache` / `sessions/`）迁 `tools/CatTemp/qqbotb-usage-archive-20261101/moved/`；重启后 `usage/stats` 判据 7/7 全零。业务面现无可用模型端点，恢复路径见 log（详见 log §九十一） |
+| v1.13 | 2026-11-01 | **单体界面改版（页面级 8 项）**——会话页照原版重写（左会话记录 / 右过程卡，参照 CH4 blocks）· 插件页删 · 技能页加双市场按钮 · 群名单并进业务设置 · 业务设置 10 节 → 6 节（详见 log §九十二） |

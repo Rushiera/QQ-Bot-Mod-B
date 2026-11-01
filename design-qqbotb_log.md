@@ -3969,3 +3969,65 @@ CHANGELOG 膨胀的三层原因与对应处置（判据 → `ccbp:L1/Wisdom.md` 
 | 2 | `_unpack/data/logs/*.log` 与 `memory/` / `messages/` / `metrics/` 未动——不属「api 信息」也不属「用量」；日志含端点地址（非密钥） | 按口径保留 |
 | 3 | 归档件在 CatTemp，按 `Discipline` §三-9 属收工清理区——**但本次是指令性归档，不作清理**；需长期留存时再迁 `tools/` 其他目录 | 待定 |
 | 4 | `sessions/` 归档顺带清掉了存档页历史（16 群 → 0 群），界面「存档」页现只剩启动会话 | 用量口径的必然连带，已知 |
+
+---
+
+## 九十二、单体界面改版（2026-11-01 · Rushiera 逐条口径 · 已完成编码，待重启验收）
+
+> Rushiera 原话口径（逐条，含两处拍板）：「改一下自研单例里的外观……会话页还是采用原来的样式，右边是需要查看 agent 思考和工具调用过程的，不过我对那个过程页不太满意，你可以参照 mau 重写」；两处歧义经拍板：①「原来的样式」= **原版 QQ Agent 样式**；②「skill 实测」实指**顶栏的 Skill 市场 / 插件市场两个按钮**（其余顶栏按钮不要）。
+
+### A · 改动总表（页面级）
+
+| # | 面 | 动作 | 落点 |
+|:--:|:--|:--|:--|
+| 1 | 会话页 | **整页重写为原版两栏**——左 = 按群折叠的**会话记录列表**，右 = 该会话**完整过程** | `app/ui/views/sessions.js` 全文重写（900 行）· 样式 `app/ui/style.css` 追加 `sx-*` 段（239 行） |
+| 2 | 过程卡 | 参照 **CH4 会话页**（`mau:CatHome4/html/js/chat/blocks/`）重写：思考卡 = 头行统计 + peek/full 两档（点头行切档）；工具卡 = `<details>` 折叠 + 参数/结果段 + 失败行级标色；另有已发送 / 错误 / finish 三类信息卡 | 同上 `thinkCard` / `toolCard` / `imageCard` / `plainCard` / `buildFlow` |
+| 3 | 存档页 | **不动**——现状已是「一条消息一条」（`views/chats.js:318-329` `msgRow`），核对即通过 | — |
+| 4 | 记忆 | **不动**——业务行为与原版一致（不节流、归档 + 索引 + 检索），本轮零改动 | — |
+| 5 | 技能页 | 头部加 **Skill 市场 / 插件市场** 两按钮（直开 `kondius.cn/qq-agent/{skill,plugin}-market/`）；页内提示语去掉「插件页签」指向 | `app/ui/views/skills.js`（mount 骨架 + `bind()` 分支） |
+| 6 | 插件页 | **整页删除**——页签 + 容器 + 脚本引用 | `app/ui/index.html` ×3 处 |
+| 7 | 群名单页 | **独立页签删除**，两栏看板搬进业务设置新分节 | `index.html` 删页签 + 容器；`views/settings-sections.js` 新增 `renderGroups` |
+| 8 | 业务设置 | 分节 10 → **6**：模型 API / 记忆 / 人设 / 群名单 / 聊天设置 / 工具与技能 | `views/settings.js` `SECTIONS` |
+
+### B · 业务设置分节逐条
+
+| 分节 | 删除项 | 保留 / 新增 |
+|:--|:--|:--|
+| 模型 API | 删「成本核算」整卡（官方价表 + 三项兜底单价 + `priceTableOf` + 拉价按钮） | 模型与渠道 / 备选模型降级 |
+| 搜索服务 | **整节删除**（搜索能力以技能形式存在） | — |
+| 记忆 | 删「记忆整理」「整理模型」两卡 | 只留「记忆文件」卡 |
+| 人设 | 删「统一人设」编辑卡（名字 / 角色设定 / 参与度 / 模板 / 附加规则 / 提示词覆盖） | 分会话人设卡（统一开关并入其内）+ **提示词预览卡**（原独立分节，改 `promptCard()`，默认折叠） |
+| 聊天白名单 | **整节删除** | 位置由「群名单」取代 |
+| 群名单（新） | — | 两栏看板（拖动 / 按钮 / 手输三通道）+ 折叠高级项（拒绝名单 / 空名单放行）；端点走单体自己的 `/api/groups`，**不走 `/api/biz` 代理** |
+| 聊天设置 | 删「活跃设置」「指令禁言」「主动开话题」三卡 | 信息发送配置 / 表情包 |
+| 桌面端 | **整节删除**（界面 / 数据管理 / 版本更新三卡一并删） | 其中「开机自启」「点关闭最小化托盘」两项搬去本地设置 |
+| OneBot | **整节不显示**（`renderOnebot` 与 `readOnebotToken` 一并移除） | — |
+| 工具与技能 | 不动 | — |
+
+### C · 壳层与配置（开机自启 / 关闭到托盘搬移的落地）
+
+| 件 | 改动 |
+|:--|:--|
+| `app/ui/index.html` 本地设置 | 新增两个勾选项 `#cfg-autostart-app`（开机自启）、`#cfg-close-to-tray`（点关闭最小化到托盘） |
+| `app/ui/app.js` | `loadConfig` 读两项；保存时并入 `app` patch；**整段群名单逻辑删除**（`groupState` 一族 + `switchView('groups')` 分支，约 270 行） |
+| `app/src/config.js` `DEFAULTS.app` | 新增 `autoStart: false` / `closeToTray: true` |
+| `app/src/app.js` | `POST /api/config` 写盘后**同步内存配置**并回调 `hooks.shell`（否则壳层读到启动时旧快照）；`hooks` 增 `shell` 槽 |
+| `app/main.js` | 关窗行为按 `config.app.closeToTray` 分支（false → 直接退出）；新增 `core.hooks.shell` 落地 `app.setLoginItemSettings`，启动即对齐一次 |
+
+### D · 验证面（本轮已做 / 未做）
+
+| 判据 | 手段 | 结果 |
+|:--:|:--|:--|
+| 1 语法零错 | `node --check` × 6（`sessions.js` / `settings-sections.js` / `settings.js` / `skills.js` / `app.js` / `main.js`） | **全部 exit 0** |
+| 2 分节注册表与侧栏一致 | 代码核对：`SECTIONS` 6 项 ↔ `window.__settingsSections` 6 键（`api` / `memory` / `persona` / `groups` / `chat` / `tools`） | 一致 |
+| 3 页面级真链路 | 需重启单体后逐页点（会话页左列表 / 右过程卡、技能页两按钮、业务设置六节、本地设置两项） | **未做**——留待重启验收 |
+| 4 开机自启真生效 | 勾选保存后查 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` + `boot.log` 的「开机自启已开启」行 | **未做** |
+
+### E · 边界与遗留
+
+| # | 项 | 状态 |
+|:--:|:--|:--|
+| 1 | 会话页过程区的**实时刷新**只做了「运行中会话 4 秒轮询详情」，没有接 SSE——单体端口对 `/api/biz` 走的是单次 fetch 代理（`business-proxy.js` 不支持长连接），要接 SSE 属新通道 | 遗留，按需立项 |
+| 2 | 会话页左栏由「群」改成「会话记录」，原「群消息存档」能力仍只在存档页——两页职责已分开，符合原版口径 | 设计如此 |
+| 3 | 统一人设卡删除后，人设正文改由 `role/*.md` 与业务面 `persona` 承载——界面不再有该编辑入口（`persona.roleText` 等字段仍在，只是无界面写面） | 按指令预期，需要时在配置面直改 |
+| 4 | `views/plugins.js` 文件仍在盘（仅取消引用）；`views/_index.md` 写面表未同步本轮改动 | 已处置（2026-11-01 收工）：`plugins.js` 软删入回收站、`_index.md` 写面表与依赖树同步、`_shell.js` MANAGED 去 `plugins` |

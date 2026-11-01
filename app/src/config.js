@@ -25,7 +25,11 @@ const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const DEFAULTS = {
   app: {
     port: 3280,
-    autostartNapcat: true
+    autostartNapcat: true,
+    // 开机自启（随系统启动本应用）——Electron 侧 app.setLoginItemSettings 落地，重启后生效
+    autoStart: false,
+    // 点关闭时最小化到托盘（默认开：协议端与机器人要继续跑，关窗不等于退出）
+    closeToTray: true
   },
   napcat: {
     shellDir: path.join(PROJECT_DIR, 'runtime', 'NapCat', 'NapCat.52230.Shell'),

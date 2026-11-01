@@ -68,7 +68,7 @@ export async function createApp() {
   });
 
   // 壳层能力注入点（截图等）——核心不依赖 Electron，由 main.js 按需挂上
-  const hooks = { capture: null, shot: null };
+  const hooks = { capture: null, shot: null, shell: null };
 
   // 领航员（design-qqbotb-navigator.md）——状态机 + CH4 猫面 + 观测 + 空闲守护 + 本地 API
   const navigator = createNavigator({ log, dataDir: DATA_DIR, config, onebot, hooks });
@@ -100,7 +100,21 @@ export async function createApp() {
           configFile: layout.napcatFile
         }
       }),
-      'POST /api/config': async ({ body }) => ({ body: { ok: true, config: saveConfig(body ?? {}) } }),
+      'POST /api/config': async ({ body }) => {
+        const next = saveConfig(body ?? {});
+        // 内存配置同步：closeToTray / autoStart 这类壳层读面要立即看到新值，
+        // 只写磁盘会让它们读到启动时的旧快照（改了不生效，直到重启）。
+        Object.keys(next).forEach((key) => { config[key] = next[key]; });
+        // 壳层动作（开机自启注册表项）不在核心内——由 main.js 挂 hooks.shell 落地
+        if (typeof hooks.shell === 'function') {
+          try {
+            hooks.shell(config.app || {});
+          } catch (error) {
+            log.warn('app', `壳层设置应用失败：${error?.message ?? error}`);
+          }
+        }
+        return { body: { ok: true, config: next } };
+      },
       // 群名单（业务面的 allow / deny）——读写都经业务面自己的 /api/config：
       // 它在内存里持有一份活配置，直改磁盘文件不生效。三条接口的实现见 web/groups-api.js。
       ...createGroupsApi({ business, log }),

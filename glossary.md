@@ -8,7 +8,8 @@
 
 | 术语 | 说明 |
 |:--|:--|
-| `模式 A` | QQ 官方 Bot 开放平台通道（CH4 现行 qqbot，`CatHome4.QQ`）——受官方被动回复约束：仅用户先输入后有回复窗口，每条用户消息最多 4 次被动回复 |
+| `模式 A` | QQ 官方 Bot 开放平台通道——**宿主侧已移除**（A299：2026-11-02 合并 upstream 1.8.204，整仓归档 `mau:_archive/CatHome4.QQ/`，宿主零接线）；受官方被动回复约束：仅用户先输入后有回复窗口，每条用户消息最多 4 次被动回复。重适配接口 → `ref-ch4-qq-removal.md` |
+| `A299` | 宿主 QQ 域移除批次（upstream `79562465`）——`CatHome4.QQ` + 测试整仓进 `_archive`；`cat.cfg` 两字段（`qqbotId` / `qqbotEnable`）、四条 `qqbot-apis` 管理端点、启动路径、`QqSource` 类型随之离开宿主编译面；用户态三键与 `chat-images` 保留 |
 | `模式 B` | 本项目——专用 QQ 号（小号槽位）+ OneBot 11 协议端；可随时主动发送，无被动预算 |
 | `OneBot 11` | 通用 QQ 机器人接口标准——HTTP / 正向 WS / 反向 WS 三种对接形态；本项目取正向 WS 或 HTTP |
 | `协议端` | 实际登录 QQ 号并与 QQ 服务器通信的程序（本项目 = NapCat） |

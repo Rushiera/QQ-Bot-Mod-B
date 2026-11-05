@@ -492,6 +492,14 @@ export const DEFAULT_CONFIG = {
       runMode: 'small',
       maxChars: 60,
       caption: ''
+    },
+    // ── reference-purge 内容口径开关（2026-11-05）── [qqbotb-purge:config]
+    // 按群切换擦边 / R18 话题的回应口径（prompt.js「内容口径」段是唯一权威）。
+    //   chats：开了 purge 的群号清单（记忆页「🔊 语音伴随」右侧的「reference-purge」按钮写这里）；
+    //     开 → R18 话题正常回复（不饥渴、不主动），露骨性描写与未打码涩图两条产出线解除；
+    //     关（默认）→ 擦边话题接梗不接活，产出守两条线（不写露骨性描写、不发未打码涩图）。
+    referencePurge: {
+      chats: []
     }
   },
   // 屏蔽名单：{ [群号]: [QQ号, ...] }

@@ -938,6 +938,20 @@ export function buildUserPrompt(ctx) {
     '- 记得：你的普通文本输出不会发到 QQ，只有工具调用会。'
   ].join('\n'));
 
+  // 内容口径（reference-purge 按群开关）——[qqbotb-purge:prompt-policy]
+  // 擦边 / R18 话题的回应口径按 engage.referencePurge.chats 分两套（关 = 基线）：
+  //   开 → R18 话题正常回复（不饥渴），露骨性描写与未打码涩图两条产出线解除；
+  //   关 → 接梗不接活，产出守两条线。
+  // 段内显式声明优先于【记忆】旧条目（群记整理前写进去的历史口径按本段为准）。
+  {
+    const purgeChats = (Array.isArray(cfg.engage?.referencePurge?.chats) ? cfg.engage.referencePurge.chats : []).map(String);
+    const purgeOn = String(ctx.chatKey).startsWith('group:')
+      && purgeChats.indexOf(String(ctx.chatKey).split(':')[1]) >= 0;
+    parts.push(purgeOn
+      ? '【内容口径】reference-purge 开：擦边 / R18 话题正常回复，尺度跟群友走——不饥渴、不主动发情、不追着要，被撩才接；露骨性描写与未打码涩图的限制解除，常规 R18 尺度即可。其余一切照旧（角色扮演仍先声明、发言纪律不变）。本段优先于【记忆】里的旧口径条目。'
+      : '【内容口径】擦边 / R18 话题：接梗不接活——用角色语气回应、调侃或吐槽，不解释、不拒绝、不说教；产出守两条线：不写露骨性描写、不发未打码涩图（图要发就遮挡关键部位）。要收线就幽默带过，不说「这个话题我不能聊」这类话。本段优先于【记忆】里的旧口径条目。');
+  }
+
   // 记忆：只注入与本次对话相关群友的印象（控制 token）。
   // 成员口径随锚点模式变化：
   //   锚定 → 锚点成员集（不随追加条目扩展，保证前缀字节不变；新成员在【新加入成员】段）

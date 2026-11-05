@@ -310,6 +310,23 @@
   }
 
   /**
+   * 取某群的 reference-purge 内容口径开关状态（写 `engage.referencePurge.chats`）。
+   *
+   * @param {object} cfg 业务面配置
+   * @param {string} id 群号
+   * @returns {object|null} `{on, chats}`；群号非法返 null
+   */
+  function purgeStateOf(cfg, id) {
+    if (!/^\d{1,15}$/.test(String(id || ''))) return null;
+    const p = (cfg && cfg.engage && cfg.engage.referencePurge) || {};
+    const chats = (Array.isArray(p.chats) ? p.chats : []).map(String);
+    return {
+      on: chats.indexOf(String(id)) >= 0,
+      chats
+    };
+  }
+
+  /**
    * 某会话的整理状态：优先取后端 `consolidating`（唯一可信源）。
    *
    * @param {object} file 文件条目
@@ -820,13 +837,19 @@
     voiceChk.checked = voice.on;
     voiceChk.disabled = !voice.enabled;
     voiceChk.onchange = () => toggleVoice(id, key, voiceChk.checked);
+    // reference-purge：内容口径开关（放在语音伴随右边）——[qqbotb-purge:ui]
+    const purge = purgeStateOf(state.cfg, id);
+    const purgeChk = el('input', { type: 'checkbox' });
+    purgeChk.checked = !!(purge && purge.on);
+    purgeChk.onchange = () => togglePurge(id, key, purgeChk.checked);
     body.appendChild(el('div', { class: 'field' },
       el('label', { text: '🔊 语音伴随' }),
       el('div', { class: 'control' },
         el('label', { class: 'hint' }, voiceChk, voice.enabled ? ' 开' : ' 总开关已关（engage.voiceReply.enabled=false）'),
-        el('span', { class: 'note', text: voice.runMode + ' · 每句 ≤' + voice.maxChars + ' 字' }))));
+        el('span', { class: 'note', text: voice.runMode + ' · 每句 ≤' + voice.maxChars + ' 字' }),
+        el('label', { class: 'hint' }, purgeChk, ' reference-purge'))));
 
-    body.appendChild(el('p', { class: 'hint', text: '开关写业务面配置（engage.balance.chats / engage.voiceReply.chats），保存后按 /api/biz/config 读回值重渲染。' }));
+    body.appendChild(el('p', { class: 'hint', text: '开关写业务面配置（engage.balance.chats / engage.voiceReply.chats / engage.referencePurge.chats），保存后按 /api/biz/config 读回值重渲染。' }));
 
     return el('div', { class: 'sxm-card' },
       el('div', { class: 'sxm-head' },
@@ -1354,6 +1377,30 @@
       (cfg) => {
         const st = voiceStateOf(cfg, id);
         return !!st && (st.chats.indexOf(String(id)) >= 0) === !!on;
+      });
+    renderList();
+    if (state.currentKey === key) renderDetail();
+  }
+
+  /**
+   * 开 / 关某群的 reference-purge 内容口径（写 `engage.referencePurge.chats`）。
+   *
+   * @param {string} id 群号
+   * @param {string} key 会话键
+   * @param {boolean} on 是否开启
+   * @returns {Promise<void>} 完成
+   */
+  async function togglePurge(id, key, on) {
+    const cur = ((((state.cfg || {}).engage || {}).referencePurge || {}).chats || []).map(String);
+    const next = on
+      ? (cur.indexOf(String(id)) >= 0 ? cur : cur.concat([String(id)]))
+      : cur.filter((x) => x !== String(id));
+    await writeConfig(
+      { engage: { referencePurge: { chats: next } } },
+      'reference-purge ' + (on ? '开' : '关'),
+      (cfg) => {
+        const st = purgeStateOf(cfg, id);
+        return !!st && st.on === !!on;
       });
     renderList();
     if (state.currentKey === key) renderDetail();

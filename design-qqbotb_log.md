@@ -4409,3 +4409,36 @@ Rushiera 2026-11-01 拍 **甲案 = 先接线再启用**（弃乙案「维持 fal
 1. **重启后逐条人工验收**：① 人设页 → 点某群「编辑」→ 预览区标题变「按会话 … 组装」且出现该群的【角色设定】→ 清空后回到全局那份 ② 聊天设置 → 表情包 → 列表条数与 `data/stickers.json` 一致、改印象后重进仍在 ③ 删一条 → 刷新收藏（`force=1`）→ 不回流 ④ 概览页日志区实时滚动 ⑤ 业务设置 → 本地设置 → 改端口读回。
 2. **`hidden` 只增不减**：目前没有「恢复已删表情」的入口。需要时在界面上加一个「已删除 N 条 · 恢复」按钮，把 `config.sticker.hidden` 里的 id 逐个移除即可——数据面已具备，缺的只是 UI（已登记 `todo.md` UI-5）。
 3. **`panel()` 每次重算**：不缓存、按 `lastUsedAt / useCount` 排序。表情总量在几十条量级，可接受；若将来过千需加分页。
+
+## 九十七、reference-purge 内容口径开关 + 白毛红瞳群记忆重整与前文整理（2026-11-05）
+
+> 背景：bot 在群里老是硬拒擦边话题。根因取证（timeback #2696）：`_unpack/data/memory/group_361820329/_group.json` 群记 `gmw288t53-189`（lore）「…先声明这是角色扮演、涩门不开（跟他批不批是两套系统），其余可演」随【记忆】段逐轮注入（sessions 全域 grep「涩门」156 处）；persona（`config.json:78-87` 实读）与 `role/` 三件教材无内容尺度条款。病灶 = 纯禁令无出口（`ccbp:L1/Wisdom.md` §1.20）。
+
+### A · reference-purge 开关（三处落点，补丁标记 `[qqbotb-purge:*]`）
+
+| 面 | 落点 | 内容 |
+|:--|:--|:--|
+| 配置 | `app/src/business/config.js`（voiceReply 块后） | `engage.referencePurge: { chats: [] }`——按群清单，同 voiceReply 模式 |
+| 前文 | `app/src/business/prompt.js` buildUserPrompt（引导说明段后、记忆段前） | 「【内容口径】」段按开关分两套：**开** = R18 话题正常回复（不饥渴、不主动发情、不追着要，被撩才接），露骨性描写与未打码涩图两条产出线解除；**关**（默认）= 擦边话题接梗不接活（角色语气接梗/调侃，不解释、不拒绝、不说教），产出守两条线（不写露骨性描写、不发未打码涩图，发图遮挡关键部位）。段内显式声明「本段优先于【记忆】里的旧口径条目」 |
+| UI | `app/ui/views/memory.js` switchSection 语音伴随 control 行内 | 「reference-purge」checkbox（语音伴随右边）+ `purgeStateOf` / `togglePurge`（写 `engage.referencePurge.chats`，写后读回核对）；hint 行补第三键 |
+
+写面 = 既有 `POST /api/config` 深合并（UI `writeConfig` 样板），无新路由。口径唯一权威 = 开关 + 前文段；群记只记事实（谁批了什么档、群内梗）。
+
+### B · 白毛红瞳群（361820329）前文整理 + 记忆重整（一次收工轮语义）
+
+1. 记忆口径改写（memory API）：POST 新 lore（口径跟 reference-purge 开关走）→ DELETE `gmw288t53-189`（涩门条目）。
+2. 整理轮触发：`memory.sedimentIntervalMs` 60000（临时）→ 沉淀拍 `#sedimentDue` 命中 → `wake(chatKey,{quietOrganize:true})` → 收工轮语义（要点沉淀 + 归档 + 新会话）→ **恢复 43200000**。触发前实测该群 unread=0（`GET /api/chats`）——沉淀拍判据要求无未读（有未读走普通轮、会发言），先核实再动参数。
+3. 产出（实测）：`_session.json` 新要点（rollovers 23→24，旧要点归档 `archive/session-20261105.jsonl`——含旧「涩门仍然关着」行，现行面已清：全目录 grep「涩门」仅归档命中 1）；`session-state.json` `startedAt=1793845583511` / `readFloorTs=0`（已读窗口滚动到整理时刻）；**收工轮群记重整把 188 条重整为 60 条**（g0-g59 整体重写、合并压缩，API 计数 groupCount=60 / groupArchived=71；reference-purge 口径条目被重整吸收进 g13「…尺度跟 reference-purge 开关走」）。
+4. 要点修边：LLM 要点首部混入整理过程自述（「我先查一下本群已有的群记…写几条 member：」）——按「以合适的方式重写」剥掉过程自述，只留要点与话题词。
+
+### C · 自测与判例
+
+- 守门 `verify-ui-contract` **PASS 54/54** · `verify-import-integrity` **ALL PASS**（98 文件 426 符号）· `verify-qqagent-memory` **43/43** · `verify-persona` **27/27**。
+- 🐛 首轮 `verify-qqagent-memory` 8 FAIL + `ReferenceError: chatKey is not defined`（prompt.js 新段引用了作用域外变量——buildUserPrompt 的会话键是 `ctx.chatKey`）；改 `ctx.chatKey` 后 43/43。教训：域内侦察的行摘录会丢列前缀（`ctx.`），落笔改码前按回读规范取整行。
+- 附带影响（如实记录）：`sedimentIntervalMs` 临时值生效期间，其余冷群（unread=0）的沉淀拍也各触发了一轮整理（如 1097492606 updatedAt 1793845645406）——沉淀轮不发言、只重整各自记忆，无害；恢复默认值后不再触发。
+
+### D · 生效面与遗留
+
+- 全部代码改动**待业务面 + 单体重启**（与 v1.18 / v1.19 待重启项并一次做）：prompt.js / config.js 归业务面，memory.js 归单体 UI。
+- reference-purge 默认关（`chats: []`）——Rushiera 在记忆页按群开关卡自开。
+- **遗留**：收工轮要点的 LLM 产出首部会混入整理过程自述（本节 B-4 手工修边过一次）——根治要在要点生成提示词里加「只输出要点正文」约束，未立项。

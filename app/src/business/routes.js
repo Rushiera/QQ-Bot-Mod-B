@@ -390,6 +390,34 @@ export function createRoutes(deps) {
       }
     },
 
+    // ── 人设卡（人格的唯一载体是文件：personas/<id>.md）──────────────────
+    // 配置里只存 id / 库索引；卡正文永远从文件读，改人格 = 改文件。
+    {
+      method: 'GET', pattern: '/api/persona-profiles',
+      handler: async ({ res, json }) => {
+        const { listProfiles, DEFAULT_PROFILE_ID } = await import('./persona-cards.js');
+        const cfg = getConfig();
+        return json(res, 200, {
+          ok: true,
+          activeId: String(cfg.persona?.profileId || '').trim() || DEFAULT_PROFILE_ID,
+          profiles: listProfiles(cfg.personaProfiles)
+        });
+      }
+    },
+    {
+      method: 'GET', pattern: '/api/persona-card',
+      handler: async ({ res, json, url }) => {
+        const { readCard, DEFAULT_PROFILE_ID } = await import('./persona-cards.js');
+        const id = String((url && url.searchParams && url.searchParams.get('id')) || '').trim() || DEFAULT_PROFILE_ID;
+        const card = readCard(id, getConfig().personaProfiles);
+        if (!card.text) {
+          // 读不到就明说（路径带上）——不返回空正文让界面显示"空卡"冒充正常
+          return json(res, 404, { ok: false, id, path: card.path || '', error: `人设卡读不到：${card.path || '(空路径)'}` });
+        }
+        return json(res, 200, { ok: true, id: card.id, name: card.name, path: card.path, text: card.text, chars: card.text.length });
+      }
+    },
+
     // ── 多提供商模型目录 ─────────────────────────────────────────────
     {
       method: 'GET', pattern: '/api/providers',
@@ -779,7 +807,8 @@ export function createRoutes(deps) {
         // 与运行时同一条合并函数（不另写一份，避免预览与实发漂移）。
         // 用 effective（可能带未落盘 overrides）走合并——用户刚点的开关立刻反映。
         const persona = personaForChatOf(effective, chatKey);
-        const { buildSystemPrompt } = await import('./prompt.js');
+        const { buildSystemPrompt, personaCardOf } = await import('./prompt.js');
+        const card = personaCardOf(persona);
         const { buildToolDefs } = await import('./tools.js');
         const { getToolAvailability } = await import('./tool-registry.js');
         // 可用工具清单与 orchestrator 同一口径（tools.js 的 def → OpenAI 函数名）
@@ -791,9 +820,15 @@ export function createRoutes(deps) {
           // persona 摘要：预览要能 1:1 展示「这个会话实际用的那份」——
           // roleText 在运行时进**用户消息**的【角色设定】段（不在系统提示词里），
           // 只在系统提示词上做预览会漏掉它，用户看不到「填了之后前文变了哪一段」。
+          // roleText 字段 = **当前生效的角色卡正文**（卡优先，卡缺失回落旧单字段）——
+          // 界面靠它 1:1 展示"这个会话实际用哪张卡、卡里写了什么"。
           persona: {
             botName: persona.botName || '',
-            roleText: persona.roleText || '',
+            profileId: card.id,
+            profileName: card.name || card.id,
+            profilePath: card.path || '',
+            roleText: card.text,
+            cardMissing: card.missing === true,
             participation: persona.participation || '',
             customRules: persona.customRules || '',
             systemPromptOverride: persona.systemPromptOverride || ''

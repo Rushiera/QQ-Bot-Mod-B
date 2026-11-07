@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PERSONAS } from './personas.js';
+import { DEFAULT_PROFILE_ID } from './persona-cards.js';
 import { sliderToTier } from './tier-slider.js';   // 零依赖模块，避免循环依赖
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -168,7 +169,14 @@ export const DEFAULT_CONFIG = {
   persona: {
     botName: '小鲸鱼',
     selfNickname: '',                       // 在群里的展示名（留空用 QQ 昵称）
-    roleText: PERSONAS.xiaojingyu.text,     // 默认人设：原版"小鲸鱼"角色卡（适配版）
+    // 人设卡 id —— **人设的唯一载体是文件**（`personas/<id>.md`，路径即实体）。
+    // 卡正文不进配置：配置里只记 id，换人设 = 换一个 id，不在 config.json 里复制几万字。
+    // 库里有哪些卡 → `personaProfiles` + 内置两份（R喵 / 依田芳乃），见 persona-cards.js。
+    profileId: DEFAULT_PROFILE_ID,
+    // 兼容兜底：卡文件读不到时用这段文本（旧版单字段人设）。
+    // 正常路径不读它——roleText 一旦有值就会被当成"整段角色设定"，与卡正文重复注入。
+    // 出厂留空：新装的默认走 R喵卡（personas/rmiao.md），不留一份隐藏的旧人设。
+    roleText: '',
     participation: 'medium',                // low | medium | high —— 参与度参考
     customRules: '',                        // 追加自定义规则（可选）
     // 系统提示词覆盖（可选）：非空时**整体替换** buildSystemPrompt 的默认行为准则。
@@ -179,10 +187,16 @@ export const DEFAULT_CONFIG = {
   },
   // 用户自定义人设库（保存在配置里，可在设置页添加/选择）
   customPersonas: [],
-  // 按会话独立人设：{ [群号/QQ号]: { roleText, participation, customRules, systemPromptOverride } }
+  // 人设库索引（**卡正文在文件里，这里只记路径**）：
+  //   [{ id, name, path, note }] —— 与内置两份（R喵 / 依田芳乃）按 id 合并，
+  //   同 id 的条目按字段覆盖内置（改名 / 换卡路径），新 id 追加进库。
+  // 路径相对项目根（`QQBotB/`），也接受绝对路径。见 persona-cards.js。
+  personaProfiles: [],
+  // 按会话独立人设：{ [群号/QQ号]: { profileId, participation, customRules, systemPromptOverride, roleText } }
   // key 是白名单会话的 id（群号或私聊 QQ 号），值是该会话覆盖全局 persona 的字段；
   // 只覆盖写在这里的字段，其余（botName/selfNickname 等账号身份）永远用全局值 ——
   // 名字换了会和 @ 判定、存档里"我"的称呼对不上。
+  // **主用法是 `profileId`**：每个会话指定一张卡（不指定 = 跟随全局默认 R喵）。
   personaByChat: {},
   // 统一人设（人设页开关）：true = 所有用一套全局人设；false = 人设页展示分会话
   // 独立编辑入口（personaByChat 生效）。运行语义与 UI 一致（personaForChat 在
@@ -912,9 +926,13 @@ export function personaForChatOf(cfg, chatKey) {
   const pick = (v) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
   const out = { ...base };
   if (kind === 'group' || kind === 'private') {
+    // profileId：本会话用哪张人设卡（不填 = 跟随全局默认）。这是主用法——
+    // 每个会话只记一个 id，卡正文永远只有一份文件。
+    const profileId = pick(raw.profileId);
     const roleText = pick(raw.roleText);
     const customRules = pick(raw.customRules);
     const systemPromptOverride = pick(raw.systemPromptOverride);
+    if (profileId !== undefined) out.profileId = profileId;
     if (roleText !== undefined) out.roleText = roleText;
     if (customRules !== undefined) out.customRules = customRules;
     if (systemPromptOverride !== undefined) out.systemPromptOverride = systemPromptOverride;

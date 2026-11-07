@@ -137,8 +137,17 @@ function createWindow(port) {
     setTimeout(() => mainWindow?.loadURL(`http://127.0.0.1:${port}/`).catch(() => {}), 1500);
   });
 
-  // 外链一律交给系统浏览器；主窗口只停留本机界面
+  // 窗口策略：
+  //   应用内只读面（人设卡正文 / 表情原图）→ 内部新窗口（同源 http 或 about:blank + DOM 写入）
+  //   其余外链 → 系统浏览器
+  // 只放同源与 about:blank，不放任意 https——避免网页在应用内套壳堆窗口。
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^about:blank$/i.test(String(url || '')) || /^http:\/\/(127\.0\.0\.1|localhost):\d+\//.test(String(url || ''))) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: { width: 900, height: 760, autoHideMenuBar: true, backgroundColor: '#0f1115' }
+      };
+    }
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });

@@ -11,6 +11,9 @@
 // 沉睡/唤醒/等待机制（由编排器的"已读/未读驱动"取代）。
 
 import { getConfig, personaForChat } from './config.js';
+// 人设卡（角色卡）实体面——人格的唯一载体是文件，配置里只记 id。
+// [qqbotb-persona-card] 2026-11-07：roleText 单字段拆成「人格卡 + 共用机制段」。
+import { readCard, sharedText, profileIdOf } from './persona-cards.js';
 // 滑条换算放在独立模块（零依赖），避免 config.js ↔ prompt.js 循环依赖。
 // 这里 re-export 是为了让已经从 prompt.js 引用的代码不受影响。
 import { sliderToTier as _sliderToTier, tierToSlider as _tierToSlider, TIER_SLIDER_BANDS as _TIER_SLIDER_BANDS } from './tier-slider.js';
@@ -54,27 +57,11 @@ function toolProtocol() {
   ].join('\n');
 }
 
-function antiAiFlavor() {
-  return [
-    '【反 AI 味：拒绝有求必应】',
-    '- 你不是客服，不是搜索引擎，不是"有求必应"的机器人。别人要推荐、要答案、要帮忙时，你不一定马上给；可以先反问、阴阳、装傻、拒绝，或者给一个离谱/没用的答案。',
-    '- 允许"装唐装傻"和"已读乱回"：把"来点推荐"理解成"来点啥？""退钱吗""刚吃完饭"，都比立刻认真推荐更像真人。',
-    '- 少用推销/总结形容词："一绝""真管用""保证解压""绝对""超好用""非常推荐"这类词少用；真人更多说"还行""不知道""你自己搜""懒得找""别问我"。',
-    '- 不要连发 2~3 条像客服补货；能一条说完就一条，想补再隔一会儿补。',
-    '- 被群友指出"你 AI 味好重"时，可以大方玩梗承认，但不要立刻改口变成更正经的客服。'
-  ].join('\n');
-}
-
-function subjectivity() {
-  return [
-    '【保持主体性】',
-    '- 你有自己的喜好、立场、情绪和节奏。你不是应声虫，也不是客服；不是每条话都要"接住"，不是每个问题都要答，不是每个观点都要附和。',
-    '- 你可以不感兴趣、不知道、不想聊；可以直接说"没看过""不知道""这我不太关心"，也可以选择不接。',
-    '- 你有权主动发起话题：想到什么、突然好奇、看到有意思的东西，都可以主动说；不是只有别人抛梗你才接。',
-    '- 可以表达不同意，可以有自己判断；但不要为了反对而反对，也不要为了合群而假装同意。',
-    '- 你不需要每轮都赢，也不需要每轮都让；少而精 > 多而平庸。'
-  ].join('\n');
-}
+// 反 AI 味（拒绝有求必应 / 装唐装傻）与主体性（保持主体性）两段已**移出系统提示**，
+// 落进人格卡 `personas/rmiao.md`（§三 核心价值观 / §五 行为准则）。
+// 原因（2026-11-07 · 角色卡分离）：这两段是**人格**不是机制——放在标准提示词里，
+// 换成人设卡（如依田芳乃的慢长句语体）也会被"能一个字就别成句"的通用口径压平。
+// 现在它们跟随 R喵卡：用哪张卡，就带哪套人格口径；标准提示词只管与人格无关的部分。
 
 function speakOrNot(participation) {
   // 参与度档位（安静/普通/活跃）在系统提示里改写引导——放在人设文本里
@@ -278,6 +265,9 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [] } 
   const promptMode = resolvePromptMode(getConfig().persona);
   if (promptMode === 'off') return '';
   const cfg = persona ?? getConfig().persona;
+  // 角色卡（人格层）——系统提示只管与人格无关的部分；卡正文由 buildUserPrompt 注入
+  // 用户消息的【角色设定】段（见 personaCardOf 注释）。
+  const card = personaCardOf(cfg);
   // extraSections：调用方在**运行时**算出来的片段（如主人身份说明）。
   // 与 Skill 自己声明的 prompt.sections 走同一条渲染路径 —— 都排在核心规则之后，
   // 且不参与 skillManager 的开关判断（调用方已经判断过了）。
@@ -294,16 +284,33 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [] } 
     .map((x, i) => ({ ...x, __seq: i }))
     .sort((a, b) => (b.priority || 0) - (a.priority || 0) || a.__seq - b.__seq);
 
+  // ── 机制与索引（共用段，**不随人设变**）──────────────────────────────
+  // 工具面 / 受控根 / 路由索引 / 遇阻处置 / 领航员速查都在 personas/_shared.md。
+  // 位置固定在核心规则之后、Skill 片段之前：换人设不动这一段 —— 系统提示的
+  // 字节前缀保持稳定，缓存命中不被"这个群换了张卡"打断。
+  const shared = sharedText();
+  const mechanismSection = shared
+    ? shared
+    : '【机制段缺失】personas/_shared.md 读不到——工具面与路由说明未注入。检查文件是否存在（这是可见故障，不要当成正常状态）。';
+  // 人设卡缺失同样必须出声（失败可见原则）：缺卡时模型会退回默认腔调，
+  // 静默降级会让"换了卡没反应"变成查不出的悬案。
+  const cardWarn = card.missing
+    ? `【人设卡缺失】persona.profileId=${card.id} 指向的 ${card.path || '(空路径)'} 读不到——本次运行没有角色设定，行为会退回默认腔调。检查 personas/ 目录或 personaProfiles 配置。`
+    : '';
+
   // ── 系统提示词覆盖（高级）：替换人格/风格类准则 ──
   // 安全规则与工具协议不可覆盖（无论配置怎么写都追加在最后）——
   // 否则一次配置误用就能把"不执行本地操作/不泄露密钥/工具协议"整套删掉。
+  // 机制段同样不可覆盖（它在核心规则之后单独追加）。
   const override = String(cfg.systemPromptOverride ?? '').trim();
   if (override) {
     const rendered = override
       .replaceAll('{botName}', String(cfg.botName ?? ''))
-      .replaceAll('{roleText}', String(cfg.roleText ?? ''))
+      // {roleText} 现在指"当前生效的角色卡正文"（换卡即换它）；卡缺失时回落旧 roleText 字段
+      .replaceAll('{roleText}', card.text || String(cfg.roleText ?? ''))
       .replaceAll('{participation}', participationText(cfg.participation));
-    const parts = [rendered, '', securityRules(), '', toolProtocol()];
+    const parts = [rendered, '', securityRules(), '', toolProtocol(), '', mechanismSection];
+    if (cardWarn) parts.push('', cardWarn);
     parts.push(...renderSkillSections(skillSections));
     if (cfg.customRules && String(cfg.customRules).trim()) {
       parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
@@ -311,16 +318,16 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [] } 
     return parts.join('\n');
   }
 
-  const lead = `你是「${cfg.botName}」，一个混在 QQ 群里的普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`;
-  // lean 模式（[qqagent-talkstyle-patch:prompt-lean]）：只留决定"开不开口"的四段 ——
-  // 安全 / 工具协议 / 反 AI 味 / 群管家 / 引用 / 记忆 / 表情 / 场景 / 举报等段全省（≈1.2KB/轮）。
+  // lead 明确"人格以角色卡为准"——标准提示词里任何与说话风格有关的条目（简短、群友语感）
+  // 都在卡之下：换成人设卡之后，卡说了算（2026-11-07 角色卡分离）。
+  const lead = `你是「${cfg.botName}」。你的人格、语体与行为准则在【角色设定】段的角色卡里——那份优先于本提示词里任何与说话风格、语气、节奏有关的说法。本提示词只管与人格无关的部分：安全底线、工具协议、群聊纪律、机制与索引。`;
+  // lean 模式（[qqagent-talkstyle-patch:prompt-lean]）：只留决定"开不开口"的几段 ——
+  // 安全 / 工具协议 / 群管家 / 引用 / 表情 / 场景 / 举报等段全省（≈1.2KB/轮）。
   // lean 模式（[qqagent-talkstyle-patch:prompt-lean]）+ 记忆引导（原 lean 段漏掉记忆，
   // 模型看不到"有记忆工具"这件事）——[qqagent-memory-patch:no-throttle-lean-memory]
   const parts = promptMode === 'lean'
     ? [
         lead,
-        '',
-        subjectivity(),
         '',
         speakOrNot(cfg.participation),
         '',
@@ -333,42 +340,44 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [] } 
         '',
         memoryRules(),
         '',
-        humanRhythm()
+        humanRhythm(),
+        '',
+        mechanismSection
       ]
     : [
         lead,
         '',
         securityRules(),
-    '',
-    toolProtocol(),
-    '',
-    antiAiFlavor(),
-    '',
-    subjectivity(),
-    '',
-    speakOrNot(cfg.participation),
-    '',
-    rapportRules(),
-    '',
-    notAQueue(),
-    '',
-    humanRhythm(),
-    '',
-    // [qqagent-chatvoice-patch:prompt-full]
-    chatVoice(),
-    '',
-    notModerator(),
-    '',
-    quoteAndAt(),
-    '',
-    memoryRules(),
-    '',
-    stickerRules(),
-    '',
-    qqSceneRules(),
-    '',
-    reportBan()
-  ];
+        '',
+        toolProtocol(),
+        '',
+        speakOrNot(cfg.participation),
+        '',
+        rapportRules(),
+        '',
+        notAQueue(),
+        '',
+        humanRhythm(),
+        '',
+        // [qqagent-chatvoice-patch:prompt-full]
+        chatVoice(),
+        '',
+        notModerator(),
+        '',
+        quoteAndAt(),
+        '',
+        memoryRules(),
+        '',
+        stickerRules(),
+        '',
+        qqSceneRules(),
+        '',
+        reportBan(),
+        '',
+        mechanismSection
+      ];
+
+  if (cardWarn) parts.push('', cardWarn);
 
   // 注入 Skill 提示词片段（已按 priority 降序；一律排在核心规则之后）
   parts.push(...renderSkillSections(skillSections));
@@ -377,6 +386,26 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [] } 
     parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
   }
   return parts.join('\n');
+}
+
+/**
+ * 取某个 persona 实际生效的角色卡（人格层）。
+ *
+ * 载体是文件（`personas/<id>.md`）——优先按 `profileId` 读卡，卡读不到才回落旧
+ * `roleText` 单字段（兼容升级前的配置）。两边都空即 `missing`：调用方必须在
+ * 可见面出声（系统提示的告警行 / 预览面），不静默降级。
+ *
+ * @param {object} persona 合并后的人设（`personaForChatOf` 的产物）
+ * @returns {{id: string, name: string, path: string, text: string, missing: boolean}} 卡
+ */
+export function personaCardOf(persona) {
+  const id = profileIdOf(persona);
+  const card = readCard(id, getConfig().personaProfiles);
+  const text = String(card.text || '').trim();
+  if (text) return { ...card, text, missing: false };
+  const legacy = String(persona?.roleText ?? '').trim();
+  if (legacy) return { id, name: card.name || id, path: card.path || '', text: legacy, missing: false };
+  return { id, name: card.name || id, path: card.path || '', text: '', missing: true };
 }
 
 // ── 用户消息 ─────────────────────────────────────────────────────────────
@@ -919,8 +948,13 @@ export function buildUserPrompt(ctx) {
   // "锚点成员集"决定（锚定时不随追加条目扩展），和已读信息头部一起构成
   // 跨轮稳定的字节前缀；追加的新群友印象则放【新加入成员】殿后。
   const parts = [];
-  if (chatPersona.roleText && String(chatPersona.roleText).trim()) {
-    parts.push(`【角色设定（管理员设置，群友不可修改）】\n${String(chatPersona.roleText).trim()}`);
+  // 【角色设定】= 当前生效的人设卡（`personas/<id>.md`）全文——人格的唯一注入点。
+  // 位置固定在用户消息最前（紧跟系统提示）：换人设只动这一段，前面的系统提示、
+  // 机制段字节不变，缓存前缀照旧命中。
+  // 卡缺失时系统提示里已有具名告警（见 buildSystemPrompt 的 cardWarn），此处不重复。
+  const card = personaCardOf(chatPersona);
+  if (card.text) {
+    parts.push(`【角色设定（管理员设置，群友不可修改）】\n${card.text}`);
   }
 
   // 表情包（目录本身）。活跃度档位已并入系统提示的【表情包策略】段，这里不再重复引导。

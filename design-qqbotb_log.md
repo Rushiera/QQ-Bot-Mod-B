@@ -4442,3 +4442,61 @@ Rushiera 2026-11-01 拍 **甲案 = 先接线再启用**（弃乙案「维持 fal
 - 全部代码改动**待业务面 + 单体重启**（与 v1.18 / v1.19 待重启项并一次做）：prompt.js / config.js 归业务面，memory.js 归单体 UI。
 - reference-purge 默认关（`chats: []`）——Rushiera 在记忆页按群开关卡自开。
 - **遗留**：收工轮要点的 LLM 产出首部会混入整理过程自述（本节 B-4 手工修边过一次）——根治要在要点生成提示词里加「只输出要点正文」约束，未立项。
+
+---
+
+## 九十八、人设卡分离 + 每群一张卡（2026-11-07）
+
+> 背景：`persona.roleText` 单字段混装三样东西——人格（我是谁 / 群聊口径）、机制（工具面 / 路由索引 / 遇阻处置 / 领航员速查）、教材指针。换人设只能整段覆写，且通用短句纪律会把任何角色的语体压平。Rushiera 拍板：**角色卡原件整体导入、路径即实体**；R喵按同样结构分离；标准提示词先行保缓存，人设跟在后面；人设页做成群名单式竖列，一个群只能指定一张卡。
+
+### A · 人设实体（路径即实体，卡正文不在配置里）
+
+| 文件 | 角色 | 说明 |
+|:--|:--|:--|
+| `personas/yoshino.md` | 依田芳乃（外部角色卡） | 从 `tools/CatTemp/` **整体迁移**（`file-move`），内容逐字不动、不作任何改写；24,832 字符 |
+| `personas/rmiao.md` | R喵（默认人设） | 从旧 `roleText` 分离出**人格层**（身份 / 短句铁律 / 价值观 / 知识边界 / 行为准则 G1–G8），并把原系统提示里的「反 AI 味」「保持主体性」两段搬进来——这两段是人格不是机制 |
+| `personas/_shared.md` | 机制与索引（**不随人设变**） | 旧 `roleText` 的机制部分逐字搬出：四条底线 / CCBP 速览 / 工具面 / 路由索引 / 遇阻处置六条 / 领航员速查；顶部声明「人格看卡、机制看这里」 |
+| `app/src/business/persona-cards.js` | 新模块（零依赖） | `listProfiles` / `readCard` / `sharedText` / `profileIdOf`；自有根推导（不 import config.js，避免成环） |
+
+配置只记 id：`persona.profileId`（全局默认，出厂 `rmiao`）+ `personaByChat[id].profileId`（每会话）；`personaProfiles[]` 是库索引（同 id 按字段覆盖内置、新 id 追加）。卡正文永不进 `config.json`。
+
+### B · 装配分层（缓存优先）
+
+```
+system  = 标准提示词（与人格无关：lead / 安全 / 工具协议 / 该说不该说 / 回应参数 /
+          群聊不是客服队列 / 像真人 / 别露机器味 / 群管家 / 引用 / 记忆 / 表情 /
+          QQ 场景 / 汇报禁令）+ 【机制段 personas/_shared.md】
+user#1  = 【角色设定】卡全文 → 表情包 → 引导说明 → 记忆 → 已读 → 未读 → 时间
+```
+
+- **换卡只动 user 开头那一段**：系统提示 + 机制段字节不变（`verify-persona-card` 用「换卡前后系统提示全等」断言，实测通过）。
+- `lead` 改为中性并声明「人格以【角色设定】段的角色卡为准，本提示词只管与人格无关的部分」——否则标准提示词里的「简短 / 群友语感」会压平慢长句角色。
+- 人格段迁出：`antiAiFlavor()` / `subjectivity()` 两个函数从 `prompt.js` 删除（内容进 `personas/rmiao.md`）。
+- 卡/机制段读不到 → 系统提示里各插一行**具名告警**（「【人设卡缺失】…」/「【机制段缺失】…」），不静默降级。
+- 兼容：卡读不到时回落旧 `persona.roleText` 单字段；出厂 `roleText` 改为空串（不留隐藏旧人设）。
+
+### C · 人设页（`app/ui/views/settings-sections.js` · `renderPersona` 重做）
+
+三张卡（2026-11-07 二轮改稿：**默认卡与人设库合并**，全部点击切换、不用下拉）：
+
+1. **人设**（默认卡 + 人设库合一张，展开）：说明 → 统一开关 → 竖列每张卡（名称 / `path · N 字` / `设为默认` + `看正文`）；当前默认那张行高亮、按钮显示「默认中」且不可再点。
+2. **每个会话用哪张卡**（竖列，一行一个群）：主行 = **群名**（`GET /api/groups/online` 的 `{id,name}` 映射，取不到回落会话键）+ 次行 = `group:群号 · 当前：X` + 按钮组（`跟随默认` + 每张卡一张），**点哪个即写哪个**（无保存按钮）；点任一按钮同时把提示词预览切到该会话。群名只用于显示，取不到不挡切换。
+3. **提示词预览**（按当前预览的会话 1:1 组装，标题显示卡名 + 字符数 + 工具数，缺卡红字）。
+
+配套：**取消**按会话参与度覆盖（参与度统一走全局 `persona.participation`，`PARTICIPATION_OPTIONS` 与 `clearPerChat` 零引用已删——「跟随默认」写 `profileId: ''` 后 `savePerChat` 自动摘除空字段，等同清空）；`areaField` 零引用已删；`personaTemplates` 缓存改 `personaProfiles`（在途标志防自旋）。
+**看正文 = 应用内新窗口**（`openCardWindow`：`about:blank` + `textContent` 写入，卡里任何尖括号都按文本显示）。为此改 `app/main.js` 的 `setWindowOpenHandler`：同源 http 与 `about:blank` 放行进内部窗口（900×760），其余外链仍交系统浏览器——**该文件属主进程，需重启单体**（顺带修复既有「看图」按钮被 deny 的隐患）。
+
+新端点（业务面）：`GET /api/persona-profiles`（库索引 + 全局 activeId）· `GET /api/persona-card?id=`（卡全文，读不到 404 带路径）。`/api/prompt-preview` 的 persona 摘要增 `profileId / profileName / profilePath / cardMissing`，`roleText` 改为**生效卡正文**。
+
+### D · 自测与生效面
+
+- `verify-persona-card`（新增）**28/28**：库索引 / 卡全文原样 / 机制段不含人格 / profileId 回落 / 系统提示不含卡正文 / **换卡不动系统提示** / 同配置幂等 / 缺卡告警 / 库覆盖与追加。
+- `verify-qqagent-talkstyle` **25/25**（口径更新：lean 不再含「保持主体性」「反 AI 味」——属人格段；机制段两种模式常驻，故弃「lean 1~3KB」旧断言，改为「lean 比 full 省 ≥2000 字符」）。
+- `verify-ui-contract` **54/54** · `verify-import-integrity` **ALL PASS**（99 文件 430 符号）· `verify-suite` **28/29**（唯一红 = `verify-navigator` 的「apisite 读到合并用量」，ApiSiteAnalyzer 离线，环境面，与本轮无关）。
+- 🔴 **全部改动待业务面 + 单体重启**（与 §〇-A / UI-4 并一次做）——本轮到交付时业务面仍在跑旧代码（`GET 3210/api/persona-profiles` → 404 实测）。
+
+### E · 成本与遗留
+
+- 芳乃卡整份注入 = **24,832 字符 ≈ 1.4 万 token / 轮**（中文约 1.7 字/token）。这是「整卡不裁剪」的直接代价；卡自带 §十六 精简版（约 4K 字）可作备选口径，是否切换待 Rushiera 定。
+- 旧 `_unpack/data/config.json` 的 `persona.roleText`（R喵旧全文，约 5.9K）不再生效（卡优先），仍留在配置里作回落兜底——是否清空待重启后由接口处置。
+- 遗留：人设库目前只有两张内置卡；追加卡要改 `personaProfiles`（可直接写配置文件 / 后续给界面加导入按钮）。角色卡正文的编辑面刻意不做（芳乃卡是外部原件，改动只走文件）。

@@ -766,27 +766,8 @@
   // 三、搜索服务（原版 06-settings-render.js:262 renderSearchSection）
   // ══════════════════════════════════════════════════════════════════════
 
-  /**
-   * 多行文本框项。
-   *
-   * @param {object} ctx 渲染上下文
-   * @param {string} label 标签
-   * @param {*} value 现值
-   * @param {object} [opts] `{placeholder, note, minHeight}`
-   * @param {Function} onsave `(s) => void`
-   * @returns {Element} `.field`
-   */
-  function areaField(ctx, label, value, opts, onsave) {
-    const o = opts || {};
-    const node = ctx.h.el('textarea', {
-      class: 'persona-role-text',
-      placeholder: o.placeholder || '',
-      style: { minHeight: o.minHeight || '120px', width: '100%' }
-    });
-    node.value = value === null || value === undefined ? '' : String(value);
-    node.addEventListener('change', () => onsave(node.value));
-    return ctx.h.field(label, node, o.note || '');
-  }
+  // （原 `areaField` 多行文本框构建器已删：2026-11-07 人设页改「选卡」模式后零引用——
+  //   角色设定不再在界面里编辑，卡正文只改文件。要恢复编辑面时按当时需求重写。）
 
   /** 自定义搜索提供商缓存（`GET /api/biz/search-providers`）。 */
   const searchProviders = { items: [], loaded: false, error: '' };
@@ -1015,31 +996,132 @@
   // 五、人设（原版 06-settings-render.js:395 renderPersonaSection）
   // ══════════════════════════════════════════════════════════════════════
 
-  /** 人设模板缓存（`GET /api/biz/persona-templates`）。 */
-  const personaTemplates = { items: [], loaded: false, error: '' };
-
-  /** 参与度档位（原版 :413-417 同表）。 */
-  const PARTICIPATION_OPTIONS = [
-    ['low', '安静型'],
-    ['medium', '普通群友'],
-    ['high', '活跃型']
-  ];
+  /**
+   * 人设库缓存（`GET /api/biz/persona-profiles`）——卡正文在文件里，这里只取索引
+   * `{ id, name, path, note, chars, exists }` 与全局 `activeId`。
+   *
+   * 🔴 `loading` 标志不可省：`ctx.reload()` 会重进本节，没有在途标志时每次重绘都再发一次请求（自旋）。
+   */
+  const personaProfiles = { items: [], activeId: '', loaded: false, loading: false, error: '' };
 
   /**
-   * 人设页的界面态：当前编辑（同时也是预览）的会话键。
+   * 群名映射缓存（`GET /api/groups/online` → `{ [群号]: 群名 }`）。
    *
-   * 空串 = 全局人设。预览与编辑共用同一个键 —— 用户在某个会话上「填了」，
-   * 预览就换成该会话那份（1:1 互换）；清空后回到全局那份。
+   * 只用于人设页显示「群名 + 群号」——取不到不影响切换（行内生落群号）。同群名单页同源端点。
+   * `loading` 同理防自旋。
+   */
+  const personaChatNames = { map: {}, loaded: false, loading: false, error: '' };
+
+  // （原 `PARTICIPATION_OPTIONS` 已删：2026-11-07 人设页不再暴露按会话参与度覆盖——
+  //   参与度统一走全局 `persona.participation`，per-chat 只留「用哪张卡」。）
+
+  /**
+   * 人设页的界面态。
+   *
+   * `chatKey`：提示词预览按哪个会话组装（空串 = 默认人设）。点某行的任一选卡按钮
+   * 即把它设成预览对象——「点了哪张卡」，预览就跟着变成那个会话要发的那份。
+   *
+   * 选卡是点击切换（无保存按钮）；卡正文走弹窗（`openCardWindow`），不在本页展开。
    *
    * @type {{chatKey: string}}
    */
   const personaState = { chatKey: '' };
 
   /**
-   * 人设分节：分会话人设 + 提示词预览。
+   * 人设选择按钮组（**点击切换**，不用下拉框）。
    *
-   * 统一人设那张编辑卡已按Rushiera口径删除——人设内容改由 `role/` 系列文件承载；
-   * 统一开关保留在「分会话人设」卡内（关掉才轮得到逐会话编辑）。
+   * 一个会话/全局只可能选中一张卡：选中项高亮成实心，点另一个即切过去。
+   * `includeDefault` = 是否给「跟随默认」按钮（会话行用；默认卡自己要它没意义）。
+   *
+   * @param {object} ctx 渲染上下文
+   * @param {Array} cards 人设库 `[{id, name}]`
+   * @param {string} activeId 当前选中 id（空串 = 跟随默认）
+   * @param {Function} onPick `(id) => void`
+   * @param {boolean} includeDefault 是否含「跟随默认」
+   * @returns {Element} 按钮组
+   */
+  function pickChips(ctx, cards, activeId, onPick, includeDefault) {
+    const h = ctx.h;
+    const box = h.el('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } });
+    const make = (id, label) => {
+      const active = String(activeId || '') === id;
+      const btn = h.el('button', {
+        class: 'btn small groups-item-btn',
+        type: 'button',
+        text: label,
+        style: active
+          ? { background: 'var(--accent)', borderColor: 'var(--accent)', color: '#0b0d11' }
+          : {}
+      });
+      btn.addEventListener('click', () => onPick(id));
+      return btn;
+    };
+    if (includeDefault) box.appendChild(make('', '跟随默认'));
+    cards.forEach((p) => box.appendChild(make(p.id, p.name)));
+    return box;
+  }
+
+  /**
+   * 「看正文」弹窗：把人设卡全文放进**应用内新窗口**（只读）。
+   *
+   * 为什么开新窗口而不是内联展开：角色卡两万四千字，内联展开会把设置页整页顶开，
+   * 而且看正文时通常想同时对照别的群的人设。用 `about:blank` + DOM 写入
+   * （`textContent`，不拼 HTML）——卡里的任何尖括号都按文本显示，不会被当标记执行。
+   *
+   * 窗口策略见 `app/main.js` 的 `setWindowOpenHandler`：放同源与 about:blank，
+   * 其余外链仍交系统浏览器。
+   *
+   * @param {object} ctx 渲染上下文
+   * @param {string} id 人设 id
+   * @param {string} name 人设显示名
+   * @returns {void}
+   */
+  function openCardWindow(ctx, id, name) {
+    const win = window.open('', '_blank', 'width=900,height=760');
+    if (!win) {
+      ctx.notice('弹窗未打开：窗口被拦截（见 app/main.js 的 setWindowOpenHandler）', 'fail');
+      return;
+    }
+    /**
+     * 往弹窗里写正文（每次重写 body，幂等）。
+     *
+     * @param {string} text 正文
+     * @returns {void}
+     */
+    const render = (text) => {
+      try {
+        const doc = win.document;
+        doc.title = `人设卡 · ${name}`;
+        doc.body.textContent = '';
+        const style = doc.createElement('style');
+        style.textContent = 'html,body{margin:0;background:#0f1115;color:#d8dee9}'
+          + 'pre{white-space:pre-wrap;word-break:break-word;font:13px/1.75 Consolas,"Microsoft YaHei",monospace;'
+          + 'padding:22px 26px;margin:0;box-sizing:border-box}';
+        doc.head.appendChild(style);
+        const pre = doc.createElement('pre');
+        pre.textContent = text;
+        doc.body.appendChild(pre);
+      } catch (error) {
+        ctx.notice(`正文窗口写入失败：${String((error && error.message) || error)}`, 'fail');
+      }
+    };
+    render(`正在读取「${name}」…`);
+    ctx.api(`/api/biz/persona-card?id=${encodeURIComponent(id)}`).then((r) => {
+      render((r && r.ok) ? String(r.text || '') : `读取失败：${(r && r.error) || 'unknown'}`);
+    }).catch((error) => {
+      render(`读取失败：${String((error && error.message) || error)}`);
+    });
+  }
+
+  /**
+   * 人设分节（2026-11-07 重做：形态 = 群名单式竖列，**一个会话只能指定一张卡**）。
+   *
+   * 四张卡：① 人设（默认卡 + 统一开关）② 人设库（只读看正文）③ 每个会话用哪张卡
+   * ④ 提示词预览（按所选会话 1:1 组装）。
+   *
+   * 口径：人格的唯一载体是文件 `personas/<id>.md`；配置只记 id（默认 + 每会话）。
+   * 卡正文不在界面里编辑（芳乃卡是外部原件，逐字不动）；改人格改文件。
+   * 机制与工具面在 `personas/_shared.md`，所有卡共用——换卡只换人格，不动机制。
    *
    * @param {object} ctx 渲染上下文
    * @returns {Element} 分节根
@@ -1052,6 +1134,54 @@
     const allow = get(c, ['allow'], {});
     const root = h.el('div', { class: 'folds' });
 
+    // 人设库（卡正文在文件里，这里只有索引）
+    const cards = personaProfiles.loaded ? personaProfiles.items : [];
+    const globalId = String(get(c, ['persona', 'profileId'], '') || personaProfiles.activeId || '').trim();
+    const nameOf = (id) => {
+      const hit = cards.find((p) => p.id === id);
+      return hit ? hit.name : (id || '未指定');
+    };
+    const globalName = `${nameOf(globalId)}（默认）`;
+
+    // 人设库还没取到 → 取一次（在途标志防自旋）
+    if (!personaProfiles.loaded && !personaProfiles.error && !personaProfiles.loading) {
+      personaProfiles.loading = true;
+      ctx.api('/api/biz/persona-profiles').then((r) => {
+        if (r && r.ok && Array.isArray(r.profiles)) {
+          personaProfiles.items = r.profiles;
+          personaProfiles.activeId = String(r.activeId || '');
+          personaProfiles.loaded = true;
+        } else {
+          personaProfiles.error = (r && r.error) || '人设库读取失败';
+        }
+      }).catch((error) => {
+        personaProfiles.error = String((error && error.message) || error);
+      }).then(() => {
+        personaProfiles.loading = false;
+        ctx.reload();
+      });
+    }
+
+    // 群名映射（协议端群列表）：只用于显示「群名 + 群号」，取不到不挡切换
+    if (!personaChatNames.loaded && !personaChatNames.loading && !personaChatNames.error) {
+      personaChatNames.loading = true;
+      ctx.api('/api/groups/online').then((r) => {
+        if (r && r.ok && Array.isArray(r.groups)) {
+          const map = {};
+          r.groups.forEach((g) => { map[String(g.id)] = String(g.name || ''); });
+          personaChatNames.map = map;
+          personaChatNames.loaded = true;
+        } else {
+          personaChatNames.error = (r && r.error) || '协议端群列表未取到';
+        }
+      }).catch((error) => {
+        personaChatNames.error = String((error && error.message) || error);
+      }).then(() => {
+        personaChatNames.loading = false;
+        ctx.reload();
+      });
+    }
+
     const allowIds = []
       .concat((allow.groups || []).map((g) => `group:${g}`))
       .concat((allow.private || []).map((p) => `private:${p}`))
@@ -1060,98 +1190,94 @@
     // 会话清单 = 白名单 ∪ 已配置过独立人设的会话（白名单外的历史条目不能静默丢）
     const chatIds = allowIds.concat(configuredIds.filter((id) => allowIds.indexOf(id) < 0));
 
-    // 当前编辑 / 预览的会话（未选 = 全局）——预览与编辑共用同一个键，
-    // 「填了就 1:1 换掉预览，没填就是预览里的全局人设」由这个键决定。
+    // 预览的会话键（点某行任一选卡按钮即切过去；空 = 默认人设）
     if (personaState.chatKey && chatIds.indexOf(personaState.chatKey) < 0) personaState.chatKey = '';
     const current = personaState.chatKey;
 
-    // ── 卡 1：分会话人设（群名单式条目 + 编辑区；默认收起）──
-    const chatBody = h.el('div', {});
-    chatBody.appendChild(boolField(ctx, '为所有的群聊 / 私聊使用同一个人设', unified,
-      unified ? '开启中：各会话的独立设置会保存但不生效——关掉即生效。' : '已关闭：下面每个会话各用一套（留空跟随全局）。',
+    // ── 卡 1：人设（默认卡 + 人设库合成一张；点击切换）──
+    const head = h.el('div', {});
+    head.appendChild(h.hint('人格的唯一载体是文件：`personas/<id>.md`（卡正文）+ `personas/_shared.md`（机制与工具，所有卡共用）。'
+      + '换人格 = 换一个 id；卡正文不在界面里改，改文件即生效。'));
+    head.appendChild(boolField(ctx, '所有会话统用默认人设', unified,
+      unified ? '开启中：下面按会话指定的人设会保存但不生效——关掉即生效。' : '已关闭：每个会话可以指定自己的一张卡（未指定的跟随默认）。',
       (b) => push(ctx, { personaUnified: b })));
+    if (personaProfiles.error) head.appendChild(h.hint(`⚠ 人设库读取失败：${personaProfiles.error}`));
+    if (!cards.length) head.appendChild(h.hint(personaProfiles.error ? '人设库不可用（见上方原因）。' : '正在读取人设库…'));
 
+    cards.forEach((p) => {
+      const isDefault = p.id === globalId;
+      const row = h.el('div', { class: 'groups-item' + (isDefault ? ' on' : '') });
+      row.appendChild(h.el('div', { class: 'groups-item-main' },
+        h.el('div', { class: 'groups-item-name', text: p.name + (p.exists ? '' : '（读不到）') }),
+        h.el('div', {
+          class: 'groups-item-id mono',
+          text: `${p.path} · ${p.chars} 字${p.note ? ` · ${p.note}` : ''}`
+        })));
+      // 点击切换：点「设为默认」即把这张卡设为全局默认（当前默认那张显示实心、不可再点）
+      const defaultBtn = h.el('button', {
+        class: 'btn small groups-item-btn',
+        type: 'button',
+        text: isDefault ? '默认中' : '设为默认',
+        style: isDefault ? { background: 'var(--accent)', borderColor: 'var(--accent)', color: '#0b0d11' } : {}
+      });
+      defaultBtn.disabled = isDefault;
+      defaultBtn.addEventListener('click', () => push(ctx, { persona: { profileId: p.id } }));
+      const viewBtn = h.el('button', {
+        class: 'btn small groups-item-btn', type: 'button', text: '看正文'
+      });
+      // 弹新窗口看全文（只读；两万多字的卡不内联展开，免得把整页顶开）
+      viewBtn.addEventListener('click', () => openCardWindow(ctx, p.id, p.name));
+      row.appendChild(defaultBtn);
+      row.appendChild(viewBtn);
+      head.appendChild(row);
+    });
+    root.appendChild(h.fold({
+      icon: '🎭',
+      title: '人设',
+      sub: '默认卡 + 人设库（点「设为默认」切换；正文在文件里）',
+      val: globalName,
+      open: true,
+      body: head
+    }));
+
+    // ── 卡 2：每个会话用哪张卡（竖列，一行一个群）──
+    const chatBody = h.el('div', {});
     if (!chatIds.length) {
       chatBody.appendChild(h.hint('（群名单为空——先在「群名单」里添加群聊 / 私聊）'));
     } else {
-      chatBody.appendChild(h.hint('点「编辑」给该会话单独写人设；留空 = 用全局人设（右侧「提示词预览」显示的就是实际会发的那份）。'));
+      chatBody.appendChild(h.hint('点一下即切换（没有保存按钮）：一个会话只能指定一张卡，「跟随默认」= 用上面那张默认卡。运行下一轮即生效，下面的预览同步换成这个会话。'));
       chatIds.forEach((chatKey) => {
         const conf = perChat[chatKey] || {};
-        const hasCustom = Boolean(conf.roleText || conf.participation || conf.customRules || conf.systemPromptOverride);
+        const own = String(conf.profileId || '').trim();
+        const effective = own ? nameOf(own) : globalName;
         const row = h.el('div', {
-          class: 'groups-item' + (hasCustom ? ' on' : '') + (current === chatKey ? ' selected' : '')
+          class: 'groups-item' + (own ? ' on' : '') + (current === chatKey ? ' selected' : '')
         });
+        // 主行显示群名（取不到回落会话键），次行给「会话键 · 当前人设」——群名与群号都在
+        const chatId = String(chatKey).split(':')[1] || '';
+        const groupName = personaChatNames.map[chatId] || '';
         row.appendChild(h.el('div', { class: 'groups-item-main' },
-          h.el('div', { class: 'groups-item-name', text: chatKey }),
-          h.el('div', {
-            class: 'groups-item-id mono',
-            text: (hasCustom ? '独立人设' : '跟随全局') + (conf.participation ? ` · 参与度 ${conf.participation}` : '')
-          })));
-        const editBtn = h.el('button', {
-          class: 'btn small groups-item-btn', type: 'button',
-          text: current === chatKey ? '收起' : '编辑'
-        });
-        editBtn.addEventListener('click', () => {
-          personaState.chatKey = current === chatKey ? '' : chatKey;
-          ctx.reload();
-        });
-        const clearBtn = h.el('button', {
-          class: 'btn small groups-item-btn', type: 'button', text: '清空'
-        });
-        clearBtn.disabled = !hasCustom;
-        clearBtn.addEventListener('click', () => {
-          clearPerChat(ctx, chatKey);
-          if (personaState.chatKey === chatKey) personaState.chatKey = '';
-        });
-        row.appendChild(h.el('div', { style: { display: 'flex', gap: '6px' } }, editBtn, clearBtn));
+          h.el('div', { class: 'groups-item-name', text: groupName || chatKey }),
+          h.el('div', { class: 'groups-item-id mono', text: `${chatKey} · 当前：${effective}` })));
+        // 点击切换：点哪个就用哪个，并把提示词预览切到这个会话（一眼看到实发内容）
+        row.appendChild(pickChips(ctx, cards, own, (id) => {
+          personaState.chatKey = chatKey;
+          savePerChat(ctx, chatKey, { profileId: id });
+        }, true));
         chatBody.appendChild(row);
-
-        // 展开的编辑区：四字段 + 清空；留空即跟随全局
-        if (current === chatKey) {
-          const panel = h.el('div', {
-            class: 'persona-chat-editor',
-            style: { borderLeft: '2px solid var(--border)', paddingLeft: '10px', margin: '4px 0 10px 0' }
-          });
-          panel.appendChild(h.hint(unified
-            ? '⚠ 统一人设开关仍开着——这里保存的内容暂不生效。'
-            : '留空的字段跟随全局人设；填了就以这里为准（提示词预览会同步换成这份）。'));
-          panel.appendChild(selectField(ctx, '参与度（留空跟随全局）', conf.participation || '',
-            [['', '跟随全局']].concat(PARTICIPATION_OPTIONS), '',
-            (v) => savePerChat(ctx, chatKey, { participation: v })));
-          panel.appendChild(areaField(ctx, '角色设定（留空跟随全局）', conf.roleText || '', { minHeight: '140px' },
-            (v) => savePerChat(ctx, chatKey, { roleText: v })));
-          panel.appendChild(areaField(ctx, '管理员附加规则（可选）', conf.customRules || '', { minHeight: '80px' },
-            (v) => savePerChat(ctx, chatKey, { customRules: v })));
-          panel.appendChild(areaField(ctx, '系统提示词覆盖（高级 · 可选）', conf.systemPromptOverride || '', { minHeight: '80px' },
-            (v) => savePerChat(ctx, chatKey, { systemPromptOverride: v })));
-          panel.appendChild(h.hint('机器人名字 / 群内展示名不按会话变化（账号身份，改了会与 @ 判定对不上）。'));
-          chatBody.appendChild(panel);
-        }
       });
     }
     root.appendChild(h.fold({
       icon: '👥',
-      title: '分会话人设',
-      sub: '每个会话一套独立人设（留空跟随全局）',
-      val: `${Object.keys(perChat).length} 个已配置`,
+      title: '每个会话用哪张卡',
+      sub: '一个群只能指定一张（不指定跟随默认）',
+      val: `${Object.keys(perChat).length} 个已指定`,
       open: false,
       body: chatBody
     }));
 
-    // ── 卡 2：提示词预览（与分会话人设同节，一屏内可对照）──
+    // ── 卡 3：提示词预览（按当前预览的会话 1:1 组装）──
     root.appendChild(promptCard(ctx, current));
-
-    if (!personaTemplates.loaded && !personaTemplates.error) {
-      ctx.api('/api/biz/persona-templates').then((r) => {
-        if (r && r.ok) {
-          personaTemplates.items = Array.isArray(r.templates) ? r.templates : [];
-          personaTemplates.loaded = true;
-          ctx.reload();
-        } else {
-          personaTemplates.error = (r && r.error) || 'unknown';
-        }
-      }).catch((error) => { personaTemplates.error = String((error && error.message) || error); });
-    }
 
     return root;
   }
@@ -1177,19 +1303,8 @@
     push(ctx, { personaByChat: { __replace__: next } });
   }
 
-  /**
-   * 清空一个会话的独立人设。
-   *
-   * @param {object} ctx 渲染上下文
-   * @param {string} chatKey 会话键
-   * @returns {void}
-   */
-  function clearPerChat(ctx, chatKey) {
-    const cur = (ctx.config && ctx.config.personaByChat) || {};
-    const next = Object.assign({}, cur);
-    delete next[chatKey];
-    push(ctx, { personaByChat: { __replace__: next } });
-  }
+  // （原 `clearPerChat` 已删：2026-11-07 人设页取消「清空」按钮——点「跟随默认」
+  //   即写 `profileId: ''`，`savePerChat` 会把空值字段摘掉，效果等同清空。）
 
   // ══════════════════════════════════════════════════════════════════════
   // 六、群名单（取代原「聊天白名单」分节 + 独立「群名单」页签）
@@ -1667,7 +1782,10 @@
   // ══════════════════════════════════════════════════════════════════════
 
   /** 提示词预览缓存（`GET /api/biz/prompt-preview`；按 chatKey 分区缓存）。 */
-  const promptPreview = { chatKey: null, text: '', tools: [], loaded: false, loading: false, error: '' };
+  const promptPreview = {
+    chatKey: null, text: '', tools: [], loaded: false, loading: false, error: '',
+    profileId: '', profileName: '', cardMissing: false
+  };
 
   /**
    * 提示词预览卡：按当前启用态组装后的系统提示词 + 可用工具清单（只读）。
@@ -1689,6 +1807,9 @@
       promptPreview.error = '';
       promptPreview.text = '';
       promptPreview.tools = [];
+      promptPreview.profileId = '';
+      promptPreview.profileName = '';
+      promptPreview.cardMissing = false;
     }
 
     const pre = h.el('pre', {
@@ -1705,13 +1826,18 @@
     const card = h.fold({
       icon: '📜',
       title: '提示词预览',
-      sub: key ? `按会话 ${key} 的实际人设组装 · 只读` : '按全局人设组装 · 只读',
-      val: promptPreview.loaded ? `${promptPreview.text.length} 字符 · ${promptPreview.tools.length} 工具` : '未加载',
+      sub: key ? `按会话 ${key} 的实际人设卡组装 · 只读` : '按默认人设卡组装 · 只读',
+      val: promptPreview.loaded
+        ? `${promptPreview.profileName || promptPreview.profileId || '人设卡'} · ${promptPreview.text.length} 字符 · ${promptPreview.tools.length} 工具`
+        : '未加载',
       open: false,
       body: [
         h.hint('这份文本由后端用运行时同一套 buildSystemPrompt + personaForChatOf 组装，并按运行时段序补上'
           + '【角色设定】（运行时该段进用户消息，不在系统提示词里）——前端不另拼规则，避免与实际发送的提示词漂移。'
-          + '上面某个会话填了独立人设，这里整份换成那份（1:1 互换）。'),
+          + '系统提示里前面是标准提示词与共用机制段（稳），人设卡跟在后面：换卡只动最后那一段。'),
+        promptPreview.cardMissing
+          ? h.hint('⚠ 人设卡读不到：本次运行没有角色设定（见系统提示末尾的告警行）。检查 personas/ 目录或 personaProfiles 配置。')
+          : h.el('span', {}),
         h.el('div', { style: { display: 'flex', gap: '8px', margin: '8px 0' } },
           h.button('刷新预览', () => {
             promptPreview.loaded = false; promptPreview.error = ''; promptPreview.chatKey = null; ctx.reload();
@@ -1734,6 +1860,9 @@
           // 「填了分会话人设但看不到变化」。这里按同一顺序拼，填与不填的差异一眼可见。
           const persona = r.persona || {};
           const roleText = String(persona.roleText || '').trim();
+          promptPreview.profileId = String(persona.profileId || '');
+          promptPreview.profileName = String(persona.profileName || '');
+          promptPreview.cardMissing = persona.cardMissing === true;
           const roleBlock = roleText
             ? `\n\n【角色设定（管理员设置，群友不可修改）】\n${roleText}`
             : '\n\n【角色设定（管理员设置，群友不可修改）】（空——本会话无独立角色设定）';

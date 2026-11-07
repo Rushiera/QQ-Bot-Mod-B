@@ -3,9 +3,10 @@
 // 用法：node verify-qqagent-talkstyle.mjs
 // 判据（Rushiera 2026-10-10 拍板 · 方案 C = A + B）：
 //   A 系统提示精简模式
-//     1 lean 模式：组装非空，含「该说/不该说」「群聊不是客服队列」「像真人一样」「保持主体性」
+//     1 lean 模式：组装非空，含「该说/不该说」「群聊不是客服队列」「像真人一样」+ 共用机制段
+//        （「保持主体性」「反 AI 味」两段 2026-11-07 已移入人格卡 personas/rmiao.md——见 A1 注释）
 //     2 lean 模式：**不含**安全规则 / 工具协议 / 表情 / 记忆等段（省字符）
-//     3 lean 输出显著短于 full（≈1.2KB vs ≈4.4KB）
+//     3 lean 输出短于 full（省下的固定段集合 ≥ 2KB）；机制段两种模式都常驻
 //     4 off 模式：返回空串
 //     5 兼容：systemPromptEnabled=false 且无 mode → 按 lean 处理
 //   B 动态段强化
@@ -66,7 +67,12 @@ check('lean：组装非空', lean.length > 0, lean.length + ' 字符');
 check('lean：含「该说/不该说」段', lean.includes('【该说/不该说】'));
 check('lean：含「群聊不是客服队列」段', lean.includes('【群聊不是客服队列】'));
 check('lean：含「像真人一样」段', lean.includes('【像真人一样】'));
-check('lean：含「保持主体性」段', lean.includes('【保持主体性】'));
+// 2026-11-07 人设分离：「保持主体性」「反 AI 味」是**人格**不是机制——已移入
+// personas/rmiao.md（§三 核心价值观 / §五 行为准则）。系统提示不再携带，
+// 换成人设卡后由卡决定语体，不被通用口径压平。
+check('lean：不含人格段「保持主体性」（已移入人设卡）', !lean.includes('【保持主体性】'));
+check('lean：不含人格段「反 AI 味」（已移入人设卡）', !lean.includes('【反 AI 味'));
+check('lean：含共用机制段（不随人设 / 模式变）', lean.includes('四条底线（不可协商）'));
 check('lean：不含安全规则段', !lean.includes('【安全规则'));
 check('lean：不含工具协议段', !lean.includes('【工作方式'));
 check('lean：不含表情包段', !lean.includes('【表情包'));
@@ -75,8 +81,11 @@ check('lean：不含表情包段', !lean.includes('【表情包'));
 setPersona({ systemPromptMode: 'full' });
 const full = buildSystemPrompt({ persona: getConfig().persona });
 check('full：含安全规则段', full.includes('【安全规则'));
-check('lean 显著短于 full（< 40%）', lean.length < full.length * 0.4, lean.length + ' vs ' + full.length);
-check('lean 体积在 1~3KB', lean.length > 1000 && lean.length < 3000, lean.length + ' 字符');
+check('full：也含共用机制段（机制段不随模式变）', full.includes('四条底线（不可协商）'));
+// 机制段（personas/_shared.md ≈4.6KB）在两种模式下都常驻——lean 的"省"只省
+// 纪律类段落，不再按旧 1~3KB 口径断言（旧口径是机制段还在 roleText 时的快照）。
+check('lean 比 full 省下的段 ≥ 2000 字符', full.length - lean.length >= 2000, lean.length + ' vs ' + full.length);
+check('lean 仍短于 full（机制段常驻，但纪律段被省）', lean.length < full.length, lean.length + ' 字符');
 
 // ── A4. off 模式 ───────────────────────────────────────────────────────────
 setPersona({ systemPromptMode: 'off' });

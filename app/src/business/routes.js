@@ -417,6 +417,24 @@ export function createRoutes(deps) {
         return json(res, 200, { ok: true, id: card.id, name: card.name, path: card.path, text: card.text, chars: card.text.length });
       }
     },
+    {
+      // 写回卡正文（人设页「看 / 改正文」窗口的保存）。
+      // 边界全在 writeCard 里：id 必须已登记、目标必须在 personas/ 内、正文非空且有上限。
+      method: 'POST', pattern: '/api/persona-card',
+      handler: async ({ req, res, json }) => {
+        const body = await bodyOf(req);
+        const { writeCard } = await import('./persona-cards.js');
+        try {
+          const saved = writeCard(body?.id, body?.text, getConfig().personaProfiles);
+          return json(res, 200, { ok: true, id: saved.id, path: saved.path, chars: saved.chars });
+        } catch (error) {
+          const code = String(error?.code || 'CARD_WRITE_FAILED');
+          // 定位类错误（找不到这张卡 / 路径不许写）用 404，内容类（空 / 超长 / 写盘失败）用 400
+          const status = /^CARD_(UNKNOWN|PATH_EMPTY|OUT_OF_DIR)$/.test(code) ? 404 : 400;
+          return json(res, status, { ok: false, code, error: String(error?.message ?? error) });
+        }
+      }
+    },
 
     // ── 多提供商模型目录 ─────────────────────────────────────────────
     {

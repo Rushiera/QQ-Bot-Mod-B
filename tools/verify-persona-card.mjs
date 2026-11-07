@@ -1,9 +1,11 @@
 // verify-persona-card.mjs —— 人设卡（角色卡）分离自测
 //
 // 用法：node tools/verify-persona-card.mjs
-// 边界：只读 `personas/` 与内置库；不联网、不发群、不改配置（运行时配置只注入内存副本）。
+// 边界：`personas/` 内**只动自测临时卡**（`personas/_selftest-card.md`，测完删）；真卡只读。
+//       不联网、不发群、不改配置（运行时配置只注入内存副本）。
 // 覆盖：人设库索引 · 卡全文读取 · 共用机制段 · profileId 回落 · 卡缺失可见 ·
-//       装配分层（系统提示不含人格卡）· 换卡不动系统提示字节（缓存前缀稳定）。
+//       装配分层（系统提示不含人格卡）· 换卡不动系统提示字节（缓存前缀稳定）·
+//       卡正文写回（BOM / 换行风格保持 + 五条拒绝面）。
 //
 // 口径来源：2026-11-07 人设分离轮（Rushiera 拍板：原件整体导入 · 每群一张卡 · 标准提示词先行保缓存）。
 
@@ -13,8 +15,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  listProfiles, readCard, sharedText, profileIdOf,
-  DEFAULT_PROFILE_ID, DEFAULT_PROFILES, PROJECT_ROOT
+  listProfiles, readCard, sharedText, profileIdOf, writeCard,
+  CARD_MAX_CHARS, DEFAULT_PROFILE_ID, DEFAULT_PROFILES, PROJECT_ROOT
 } from '../app/src/business/persona-cards.js';
 
 let pass = 0;
@@ -117,6 +119,54 @@ const overridden = listProfiles([{ id: 'rmiao', name: 'R喵（改过名）' }, {
 check('同 id 覆盖显示名', overridden.find((p) => p.id === 'rmiao').name === 'R喵（改过名）');
 check('新 id 追加进库', Boolean(overridden.find((p) => p.id === 'temp')));
 check('追加项按路径读字数', overridden.find((p) => p.id === 'temp').chars > 5000);
+
+console.log('\n七、卡正文写回（人设页「看 / 改正文」保存路径）');
+
+/**
+ * 断言一次写入被拒绝。
+ *
+ * @param {string} label 用例名
+ * @param {string} id 人设 id
+ * @param {string} text 正文
+ * @param {Array|undefined} configured 人设库配置
+ * @param {string} want 期望的错误码
+ * @returns {void}
+ */
+function expectReject(label, id, text, configured, want) {
+  try {
+    writeCard(id, text, configured);
+    check(label, false, '没有抛错（应当拒绝）');
+  } catch (error) {
+    check(label, error.code === want, `${error.code}: ${error.message}`);
+  }
+}
+
+// 自测卡放在 personas/ 目录内（写回只允许该目录），测完即删——不碰真实卡
+const tmpCardRel = 'personas/_selftest-card.md';
+const tmpCardFile = path.join(PROJECT_ROOT, tmpCardRel);
+const tmpProfile = [{ id: 'selftest', name: '自测卡', path: tmpCardRel }];
+try {
+  // 造一份「有 BOM + CRLF」的原卡，验证写回不会把字节风格改掉
+  fs.writeFileSync(tmpCardFile, '\uFEFF旧正文\r\n第二行\r\n', 'utf8');
+  const body = '## 新正文\n第一行\n第二行\n';
+  const wrote = writeCard('selftest', body, tmpProfile);
+  check('写回返回 id / 路径 / 字数', wrote.id === 'selftest' && wrote.path === tmpCardRel && wrote.chars === body.length,
+    JSON.stringify(wrote));
+  const raw = fs.readFileSync(tmpCardFile);
+  check('原 BOM 保住', raw[0] === 0xEF && raw[1] === 0xBB && raw[2] === 0xBF, `首字节 ${raw[0]}`);
+  check('换行风格保住（CRLF）', wrote.crlf === true && raw.includes('\r\n'), String(wrote.crlf));
+  check('落盘正文与提交一致', raw.toString('utf8').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n') === body,
+    JSON.stringify(raw.toString('utf8').slice(0, 30)));
+  check('不留临时文件', fs.readdirSync(path.join(PROJECT_ROOT, 'personas')).every((n) => !n.endsWith('.tmp')));
+} finally {
+  fs.rmSync(tmpCardFile, { force: true });
+}
+
+expectReject('未知 id 拒绝', 'nope-does-not-exist', 'x', undefined, 'CARD_UNKNOWN');
+expectReject('空路径拒绝', 'nopath', 'x', [{ id: 'nopath', name: '无路径', path: '' }], 'CARD_PATH_EMPTY');
+expectReject('目录外路径拒绝', 'outside', 'x', [{ id: 'outside', name: '外卡', path: 'README.md' }], 'CARD_OUT_OF_DIR');
+expectReject('空正文拒绝', 'rmiao', '   \n ', undefined, 'CARD_EMPTY');
+expectReject('超上限拒绝', 'rmiao', 'x'.repeat(CARD_MAX_CHARS + 1), undefined, 'CARD_TOO_LONG');
 
 fs.rmSync(dataDir, { recursive: true, force: true });
 

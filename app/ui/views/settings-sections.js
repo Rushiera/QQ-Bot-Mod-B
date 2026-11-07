@@ -1062,11 +1062,14 @@
   }
 
   /**
-   * 「看正文」弹窗：把人设卡全文放进**应用内新窗口**（只读）。
+   * 「看 / 改正文」窗口：卡全文放进**应用内新窗口**，可直接编辑并保存回文件。
    *
-   * 为什么开新窗口而不是内联展开：角色卡两万四千字，内联展开会把设置页整页顶开，
+   * 为什么开新窗口而不是内联编辑：角色卡两万多字，内联展开会把设置页整页顶开，
    * 而且看正文时通常想同时对照别的群的人设。用 `about:blank` + DOM 写入
-   * （`textContent`，不拼 HTML）——卡里的任何尖括号都按文本显示，不会被当标记执行。
+   * （`textContent` / `value`，不拼 HTML）——卡里的任何尖括号都按文本处理。
+   *
+   * 保存走 `POST /api/biz/persona-card`：后端只写 `personas/` 内的卡、原子写、
+   * 保持原文件 BOM 与换行风格；成功后把人设库与提示词预览两处缓存置无效并重绘。
    *
    * 窗口策略见 `app/main.js` 的 `setWindowOpenHandler`：放同源与 about:blank，
    * 其余外链仍交系统浏览器。
@@ -1077,50 +1080,147 @@
    * @returns {void}
    */
   function openCardWindow(ctx, id, name) {
-    const win = window.open('', '_blank', 'width=900,height=760');
+    const win = window.open('', '_blank', 'width=980,height=780');
     if (!win) {
       ctx.notice('弹窗未打开：窗口被拦截（见 app/main.js 的 setWindowOpenHandler）', 'fail');
       return;
     }
+    const doc = win.document;
+    doc.title = `人设卡 · ${name}`;
+    doc.body.textContent = '';
+    const style = doc.createElement('style');
+    style.textContent = 'html,body{margin:0;height:100%;background:#0f1115;color:#d8dee9;'
+      + 'font:13px/1.6 "Microsoft YaHei",system-ui,sans-serif}'
+      + 'body{display:flex;flex-direction:column}'
+      + '.bar{display:flex;align-items:center;gap:10px;padding:10px 14px;'
+      + 'border-bottom:1px solid #232833;flex:0 0 auto}'
+      + '.bar .title{font-weight:600}'
+      + '.bar .meta{color:#7d8698;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
+      + '.bar .grow{flex:1 1 auto}'
+      + 'button{font:12px/1 inherit;padding:7px 14px;border-radius:6px;border:1px solid #2b3240;'
+      + 'background:#1b2130;color:#d8dee9;cursor:pointer}'
+      + 'button[disabled]{opacity:.55;cursor:default}'
+      + 'button.primary{background:#4f8cff;border-color:#4f8cff;color:#0b0d11;font-weight:600}'
+      + 'textarea{flex:1 1 auto;width:100%;box-sizing:border-box;border:0;outline:0;resize:none;'
+      + 'padding:16px 18px;background:#0f1115;color:#d8dee9;'
+      + 'font:13px/1.75 Consolas,"Microsoft YaHei",monospace}';
+    doc.head.appendChild(style);
+
+    const bar = doc.createElement('div');
+    bar.className = 'bar';
+    const title = doc.createElement('span');
+    title.className = 'title';
+    title.textContent = name;
+    const meta = doc.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = '正在读取…';
+    const grow = doc.createElement('span');
+    grow.className = 'grow';
+    const saveBtn = doc.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.type = 'button';
+    saveBtn.textContent = '保存';
+    saveBtn.disabled = true;
+    bar.appendChild(title);
+    bar.appendChild(meta);
+    bar.appendChild(grow);
+    bar.appendChild(saveBtn);
+    doc.body.appendChild(bar);
+
+    const area = doc.createElement('textarea');
+    area.spellcheck = false;
+    area.disabled = true;
+    doc.body.appendChild(area);
+
+    /** 载入时的正文（统一按 LF 比较——textarea 会把 CRLF 规范成 LF，不能据此误报「已修改」）。 */
+    let loaded = '';
+    /** 卡的文件路径（保存回执里取，显示在顶栏）。 */
+    let pathHint = '';
+    let saving = false;
+
     /**
-     * 往弹窗里写正文（每次重写 body，幂等）。
+     * 顶栏元信息：字数 + 是否未保存 + 文件路径。
      *
-     * @param {string} text 正文
      * @returns {void}
      */
-    const render = (text) => {
-      try {
-        const doc = win.document;
-        doc.title = `人设卡 · ${name}`;
-        doc.body.textContent = '';
-        const style = doc.createElement('style');
-        style.textContent = 'html,body{margin:0;background:#0f1115;color:#d8dee9}'
-          + 'pre{white-space:pre-wrap;word-break:break-word;font:13px/1.75 Consolas,"Microsoft YaHei",monospace;'
-          + 'padding:22px 26px;margin:0;box-sizing:border-box}';
-        doc.head.appendChild(style);
-        const pre = doc.createElement('pre');
-        pre.textContent = text;
-        doc.body.appendChild(pre);
-      } catch (error) {
-        ctx.notice(`正文窗口写入失败：${String((error && error.message) || error)}`, 'fail');
-      }
+    const showMeta = () => {
+      const dirty = loaded && area.value !== loaded;
+      meta.textContent = `${area.value.length} 字${dirty ? ' · 已修改未保存' : ''}${pathHint ? ` · ${pathHint}` : ''}`;
     };
-    render(`正在读取「${name}」…`);
+
+    /**
+     * 保存正文（按钮与 Ctrl+S 共用）。
+     *
+     * 空正文不提交（后端也会拒）——这里先出声，省一次往返。
+     *
+     * @returns {void}
+     */
+    const save = () => {
+      if (saving) return;
+      const text = area.value;
+      if (!text.trim()) {
+        meta.textContent = '正文为空，没有保存';
+        return;
+      }
+      saving = true;
+      saveBtn.disabled = true;
+      meta.textContent = '保存中…';
+      ctx.api('/api/biz/persona-card', { method: 'POST', body: { id, text } }).then((r) => {
+        if (r && r.ok) {
+          loaded = text;
+          pathHint = String(r.path || pathHint);
+          meta.textContent = `已保存：${r.chars} 字 → ${pathHint}`;
+          // 卡正文变了：人设库字数与提示词预览都得重取（不重取就是旧正文冒充新正文）
+          personaProfiles.loaded = false;
+          promptPreview.chatKey = null;
+          promptPreview.loaded = false;
+          promptPreview.error = '';
+          ctx.reload();
+        } else {
+          meta.textContent = `保存失败：${(r && r.error) || 'unknown'}`;
+        }
+      }).catch((error) => {
+        meta.textContent = `保存失败：${String((error && error.message) || error)}`;
+      }).then(() => {
+        saving = false;
+        saveBtn.disabled = false;
+      });
+    };
+
+    saveBtn.addEventListener('click', save);
+    area.addEventListener('input', showMeta);
+    doc.addEventListener('keydown', (event) => {
+      if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 's') {
+        event.preventDefault();
+        save();
+      }
+    });
+
     ctx.api(`/api/biz/persona-card?id=${encodeURIComponent(id)}`).then((r) => {
-      render((r && r.ok) ? String(r.text || '') : `读取失败：${(r && r.error) || 'unknown'}`);
+      if (r && r.ok) {
+        loaded = String(r.text || '').replace(/\r\n/g, '\n');
+        area.value = loaded;
+        area.disabled = false;
+        saveBtn.disabled = false;
+        pathHint = String(r.path || '');
+        showMeta();
+      } else {
+        meta.textContent = `读取失败：${(r && r.error) || 'unknown'}`;
+      }
     }).catch((error) => {
-      render(`读取失败：${String((error && error.message) || error)}`);
+      meta.textContent = `读取失败：${String((error && error.message) || error)}`;
     });
   }
 
   /**
    * 人设分节（2026-11-07 重做：形态 = 群名单式竖列，**一个会话只能指定一张卡**）。
    *
-   * 四张卡：① 人设（默认卡 + 统一开关）② 人设库（只读看正文）③ 每个会话用哪张卡
+   * 四张卡：① 人设（默认卡 + 统一开关）② 人设库（看 / 改正文，保存写回文件）③ 每个会话用哪张卡
    * ④ 提示词预览（按所选会话 1:1 组装）。
    *
    * 口径：人格的唯一载体是文件 `personas/<id>.md`；配置只记 id（默认 + 每会话）。
-   * 卡正文不在界面里编辑（芳乃卡是外部原件，逐字不动）；改人格改文件。
+   * 卡正文在「看 / 改正文」窗口里直接改并保存（写回文件，原子写）；芳乃卡是外部原件，
+   * 改动前建议自己留一份副本。
    * 机制与工具面在 `personas/_shared.md`，所有卡共用——换卡只换人格，不动机制。
    *
    * @param {object} ctx 渲染上下文
@@ -1197,7 +1297,7 @@
     // ── 卡 1：人设（默认卡 + 人设库合成一张；点击切换）──
     const head = h.el('div', {});
     head.appendChild(h.hint('人格的唯一载体是文件：`personas/<id>.md`（卡正文）+ `personas/_shared.md`（机制与工具，所有卡共用）。'
-      + '换人格 = 换一个 id；卡正文不在界面里改，改文件即生效。'));
+      + '换人格 = 换一个 id；点「看 / 改正文」可在窗口里直接编辑，保存即写回该文件并立刻反映到下面的预览。'));
     head.appendChild(boolField(ctx, '所有会话统用默认人设', unified,
       unified ? '开启中：下面按会话指定的人设会保存但不生效——关掉即生效。' : '已关闭：每个会话可以指定自己的一张卡（未指定的跟随默认）。',
       (b) => push(ctx, { personaUnified: b })));
@@ -1223,9 +1323,9 @@
       defaultBtn.disabled = isDefault;
       defaultBtn.addEventListener('click', () => push(ctx, { persona: { profileId: p.id } }));
       const viewBtn = h.el('button', {
-        class: 'btn small groups-item-btn', type: 'button', text: '看正文'
+        class: 'btn small groups-item-btn', type: 'button', text: '看 / 改正文'
       });
-      // 弹新窗口看全文（只读；两万多字的卡不内联展开，免得把整页顶开）
+      // 弹新窗口看全文并可编辑保存（两万多字的卡不内联展开，免得把整页顶开）
       viewBtn.addEventListener('click', () => openCardWindow(ctx, p.id, p.name));
       row.appendChild(defaultBtn);
       row.appendChild(viewBtn);
@@ -1234,7 +1334,7 @@
     root.appendChild(h.fold({
       icon: '🎭',
       title: '人设',
-      sub: '默认卡 + 人设库（点「设为默认」切换；正文在文件里）',
+      sub: '默认卡 + 人设库（点「设为默认」切换；正文可编辑保存）',
       val: globalName,
       open: true,
       body: head

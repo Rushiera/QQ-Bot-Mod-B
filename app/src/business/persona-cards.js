@@ -17,7 +17,9 @@
 //   user#1  = 【角色设定】卡全文 → 表情包 → 引导说明 → 记忆 → 已读 → 未读 → 时间
 //   稳定段在前，易变段在后；换人设只动 user 开头那一段。
 //
-// 本模块只读文件，不写配置、不改卡内容。
+// 写入面：**只有一条**——`writeCard()` 供人设页「看 / 改正文」窗口把编辑结果写回
+// `personas/<id>.md`（目录内、原子写、保持 BOM 与换行风格）。本模块不写配置：
+// 新增卡 / 换卡路径仍走 `personaProfiles`。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -120,6 +122,81 @@ export function readCard(id, configured) {
   const hit = list.find((p) => p.id === wanted);
   if (!hit) return { id: wanted, name: wanted, path: '', text: '' };
   return { id: hit.id, name: hit.name, path: hit.path, text: readText(hit.path) };
+}
+
+// ── 写回（人设页「看 / 改正文」窗口）────────────────────────────────────
+// 卡正文可以在界面里改，但写入面只有一条：落到 `personas/` 内的卡文件。
+
+/** 人设目录的绝对路径——写回的唯一允许范围。 */
+const PERSONA_ROOT = path.join(PROJECT_ROOT, PERSONA_DIR);
+
+/** 单张卡正文长度上限（字符）——超出按非法参数拒绝（防误贴巨物）。 */
+export const CARD_MAX_CHARS = 200000;
+
+/**
+ * 造一个带 `code` 的错误（路由按 code 分派状态码，界面按 message 出声）。
+ *
+ * @param {string} code 错误码
+ * @param {string} message 人话原因
+ * @returns {Error} 错误
+ */
+function cardError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+/**
+ * 写回一张卡的正文（人设页「看 / 改正文」窗口的保存动作）。
+ *
+ * 拒绝面（不静默修正）：id 未登记 / 路径空 / 目标不在 `personas/` 内 / 正文为空 / 超上限。
+ * 落盘：临时文件 + rename（原子，不留半截卡）；保持原文件的 BOM 与换行风格
+ * （前端 `textarea` 会把值规范成 LF，直接落盘会把 CRLF 卡整体改写）。
+ *
+ * @param {string} id 人设 id
+ * @param {string} text 新正文
+ * @param {Array} [configured] `config.personaProfiles`
+ * @returns {{id: string, path: string, chars: number, crlf: boolean}} 写回实况
+ * @throws {Error} `code` ∈ `CARD_UNKNOWN` / `CARD_PATH_EMPTY` / `CARD_OUT_OF_DIR` / `CARD_EMPTY` / `CARD_TOO_LONG` / `CARD_WRITE_FAILED`
+ */
+export function writeCard(id, text, configured) {
+  const wanted = String(id || '').trim();
+  const hit = listProfiles(configured).find((p) => p.id === wanted);
+  if (!hit) throw cardError('CARD_UNKNOWN', `人设库里没有这张卡：${wanted || '(空 id)'}`);
+  if (!hit.path) throw cardError('CARD_PATH_EMPTY', `人设卡没有配路径：${hit.id}`);
+  const file = absoluteOf(hit.path);
+  const rel = path.relative(PERSONA_ROOT, file);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw cardError('CARD_OUT_OF_DIR', `只允许写 ${PERSONA_DIR}/ 里的卡：${hit.path}`);
+  }
+  const body = String(text == null ? '' : text);
+  if (!body.trim()) throw cardError('CARD_EMPTY', '人设卡正文不能为空');
+  if (body.length > CARD_MAX_CHARS) {
+    throw cardError('CARD_TOO_LONG', `人设卡正文超上限：${body.length} > ${CARD_MAX_CHARS} 字`);
+  }
+
+  // 原文件的 BOM 与换行风格要保住——「只改内容，不改字节风格」
+  let bom = false;
+  let crlf = false;
+  try {
+    const raw = fs.readFileSync(file);
+    bom = raw.length >= 3 && raw[0] === 0xEF && raw[1] === 0xBB && raw[2] === 0xBF;
+    crlf = raw.includes('\r\n');
+  } catch {
+    // 文件刚被删 / 从没存在：按无 BOM + LF 落盘——不冒充原状
+  }
+  const out = (bom ? '\uFEFF' : '') + (crlf ? body.replace(/\r?\n/g, '\r\n') : body);
+
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, out, 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* 临时文件清不掉不掩盖主错误 */ }
+    throw cardError('CARD_WRITE_FAILED', `人设卡写盘失败：${String(error?.message ?? error)}`);
+  }
+  return { id: hit.id, path: hit.path, chars: body.length, crlf };
 }
 
 /**

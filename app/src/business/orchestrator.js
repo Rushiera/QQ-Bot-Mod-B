@@ -1147,12 +1147,12 @@ export class Orchestrator {
     // 浏览节拍提示（[qqagent-browse-patch:orchestrator-hint-def]）—— 与配额同段：
     // 都是"本轮动态状态"，追加在用户消息末尾（不打断缓存前缀）。
     // 升档时强调"额度没变、越热越要省着说" —— 节拍快 ≠ 能多说。
+    // 本轮是否被点名（@ 或拍一拍）——【群节奏】与【发言档位】共用同一判定。
+    const atMeRound = (triggerEntries || []).some((m) => m
+      && (m.atMe === true || (m.isPoke && /拍了拍\s*我/.test(String(m.text ?? '')))));
     const browseLine = (() => {
       try {
-        return browseHint(chatKey, {
-          atMe: (triggerEntries || []).some((m) => m
-            && (m.atMe === true || (m.isPoke && /拍了拍\s*我/.test(String(m.text ?? '')))))
-        });
+        return browseHint(chatKey, { atMe: atMeRound });
       } catch { return ''; }
     })();
     // 安静模式提示（[qqagent-quiet-patch:orchestrator-hint-def]）—— 与配额同段：
@@ -1162,7 +1162,10 @@ export class Orchestrator {
     })();
     // 发言档位提示（[qqagent-level-patch:orchestrator-hint-def]）—— 与配额同段：
     // 冰封档已由 quietHint 覆盖，两者互斥（有 quietLine 就不再加 levelLine）。
+    // 🔴 点名轮不施加档位提示（Rushiera 2026-11-07 裁定）：被 @ / 拍一拍 就必须照常回，
+    // 冰封档也一样——档位只管「没被叫到时接不接」，不能稀释「点名必须回」这一条。
     const levelLine = (() => {
+      if (atMeRound) return '';
       try { return quietLine ? '' : levelHint(chatKey); } catch { return ''; }
     })();
     // 回应参数提示（[qqagent-rapport-patch:orchestrator-hint]）—— 与配额同段：

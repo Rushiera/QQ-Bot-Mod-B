@@ -53,8 +53,8 @@
 | 字段 | 值 |
 |:--|:--|
 | 上次同步时间 | 2026-11-07 16:5x |
-| 上次同步 commit | `03f2126`（v1.21 人设卡分离 + 每群一张卡 · 16 文件 +1990/−193 · 新增 `personas/` 三件 + `persona-cards.js` + `verify-persona-card.mjs`） |
-| 远程状态 | 与 origin 同步（`420bcf0..03f2126 main -> main`） |
+| 上次同步 commit | `c390bfb`（v1.21 人设卡分离 + 每群一张卡 · 16 文件 +1990/−193 · 新增 `personas/` 三件 + `persona-cards.js` + `verify-persona-card.mjs`） |
+| 远程状态 | 与 origin 同步（`420bcf0..c390bfb main -> main`，经本地代理 `127.0.0.1:7897` 推送——直连两次 `Connection was reset`） |
 
 ## 五、项目特有规则
 

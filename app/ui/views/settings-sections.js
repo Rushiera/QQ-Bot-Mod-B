@@ -1941,6 +1941,11 @@
         h.el('div', { style: { display: 'flex', gap: '8px', margin: '8px 0' } },
           h.button('刷新预览', () => {
             promptPreview.loaded = false; promptPreview.error = ''; promptPreview.chatKey = null; ctx.reload();
+          }),
+          // 就地入口：预览看到哪张卡，就从这里改哪张卡（保存后本卡自动重取）
+          h.button('改这张卡的正文', () => {
+            const id = promptPreview.profileId || personaProfiles.activeId || 'rmiao';
+            openCardWindow(ctx, id, promptPreview.profileName || id);
           })),
         pre
       ]

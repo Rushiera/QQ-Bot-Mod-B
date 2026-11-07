@@ -45,11 +45,12 @@ ok('2a 约束一（后台的事不进群）', fnBody.includes('后台的事不�
 ok('2b 约束二（不点评 / 不做技术判断）', fnBody.includes('不点评、不做技术判断'));
 ok('2c 约束三（一条消息一次说完）', fnBody.includes('一条消息一次说完'));
 
-// 3 lean 接入且次序正确
+// 3 lean 接入且次序正确 —— 用「紧随其后的 memoryRules」判序
+// （v1.27 起 R喵 走 self 卡、不再注入风格段；此处只验 styleParts 的 lean 段序）
 const leanIdx = prompt.indexOf('[qqagent-chatvoice-patch:prompt-lean]');
-const leanMemIdx = prompt.indexOf('        memoryRules(),');
+const leanOrder = /chatVoice\(\),\s*'',\s*memoryRules\(\)/.test(prompt);
 ok('3a lean 接入标记在位', leanIdx > 0);
-ok('3b lean 次序（chatVoice 在 memoryRules 之前）', leanIdx > 0 && leanMemIdx > leanIdx);
+ok('3b lean 次序（chatVoice 在 memoryRules 之前）', leanIdx > 0 && leanOrder);
 
 // 4 full 接入且次序正确
 const fullIdx = prompt.indexOf('[qqagent-chatvoice-patch:prompt-full]');

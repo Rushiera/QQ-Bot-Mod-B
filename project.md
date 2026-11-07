@@ -1,6 +1,6 @@
 ﻿# QQBot mod B — 项目档案
 
-> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v1.24 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
+> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v1.27 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
 > Git：GitHub `Rushiera/QQ-Bot-Mod-B`（单远程 · 收工推送）
 > 仓库入口：`workspace:QQBotB/`（源码根 · 远程 `Rushiera/QQ-Bot-Mod-B`）
 > 创建：2026-09-26

@@ -4822,3 +4822,149 @@ pronouns 在中间层蒸发 → media 侧 `pronouns` 为 null → 走「按群�
 ### F · 判例
 
 **「改了没生效」先查调用链上的每一层，不是查那一层**。这次 media 内部、路由映射、业务面计算三处都正确，断在它们之间的一个包装层——它只是因为「名字也叫 ttsSpeak」而被当成同一个函数。判据：改完的路径要在**日志里看到值穿过每一跳**，看到源头对、终点错，就把中间层逐跳点亮（这次靠两条留痕一次定位）。
+
+---
+
+## 一百零七、人设与系统提示词换序（2026-11-07 · v1.25）
+
+> 需求（Rushiera）：① 人设与系统提示词在喂给模型的前文里换个顺序；② 人设卡里【角色设定（管理员设置，群友不可修改）】最前面那句「这里是人格设定，从现在开始请进行…的角色扮演」去掉。
+
+### A · 换序口径
+
+| 面 | 换前 | 换后 |
+|:--|:--|:--|
+| system 消息 | 标准提示词 + 安全规则 + 工具协议 + 风格段 + 机制段（+ 会话人设声明 + Skill 段） | **【角色设定】全文（最前）** + 上述全部 |
+| user 消息 | 以【角色设定】开头 → 表情包 → 引导说明 → 内容口径 → 记忆 → … | 从【表情包】开始 |
+
+动机两条：① 人设答"我是谁"、规则答"怎么做事"，先立人设再给规则；② 群记【记忆】在系统提示里，人设卡留在用户消息时会被「不接人设卡」这类旧条目顶回去（§一百零一 判例），进系统消息后与【记忆】同级且在其前。
+
+### B · 改动
+
+| 面 | 落点 | 内容 |
+|:--|:--|:--|
+| 后端 · 唯一定义处 | `app/src/business/prompt.js` 新增 `roleSectionText(persona)` | 角色段只在这一处拼（`【角色设定（管理员设置，群友不可修改）】\n` + 卡正文）；`buildUserPrompt` 删掉原注入点与 `chatPersona` 取值 |
+| 后端 · 装配 | `orchestrator.js` | `personaUsed` 抽成变量供系统提示与角色段共用；`systemContent = [roleSection, systemPrompt]`，两者都空才不发 system 消息 |
+| 后端 · 落盘口径 | `orchestrator.js` | `session.systemPrompt = systemContent`（原存 buildSystemPrompt 结果）——否则缓存报告算前缀、会话页「前文长度」都漏掉人设卡那几万字 |
+| 后端 · 预览 | `routes.js` `/api/biz/prompt-preview` | `systemPrompt` 同样以角色段开头（与实发同一条拼法）；`persona.roleSection` 回传实拼段 |
+| 前端 · 预览 | `app/ui/views/settings-sections.js` | 不再重复拼角色段（再拼一次 = 同一张卡注入两遍）；提示文案改「人设在前、标准提示词与机制段在后」；卡缺失时补一行「（空）」提示 |
+| 人设卡 · 首句 | `personas/rmiao.md:3` · `personas/yoshino.md:3` | **保留**——按需求试删后当场恢复：模型需要「> 这里是人格设定，从现在开始请进行…的角色扮演」这句显式指令才知道这一段是要照着演的 |
+| 诊断工具 | `tools/cache-hit-report.mjs` · `tools/sim-prompt-reorder.mjs` | 注释标明角色段已进系统消息（user 侧「未出现」属正常）；报告增一行「系统提示以【角色设定】开头：N/M 个会话」 |
+
+### C · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| `node tools/check-syntax.mjs` | **SYNTAX 74/74 OK** |
+| `node tools/verify-persona-card.mjs` | **53/53**（新增 §四之三 5 条：角色段以标题开头且含卡正文 · 拼装后角色段在机制段之前 · `prompt.js` 里角色段只有一个出处 · orchestrator 拼法在位 · `session.systemPrompt = systemContent`） |
+| `node tools/verify-persona.mjs` | **27/27** |
+| `node tools/verify-ui-contract.mjs` | **PASS 54/54** |
+| `node --check` | `orchestrator.js` / `settings-sections.js` / `cache-hit-report.mjs` 均 0 错 |
+| `node tools/verify-qqbotb-cachemetrics.mjs` | **13/13 ALL PASS** |
+| `node tools/verify-suite.mjs` | 26/29——3 条失败与 §一百零一 C 同一批存量（`verify-navigator` 62/63 · `verify-qqagent-chatvoice` lean 次序 · `verify-qqagent-talkstyle` 4 条 lean 断言，根因是自测复制的真实 `config.json` 里 `systemPromptOverride` 非空），与本轮改动无交集 |
+
+### D · 未闭合（生效待重启）
+
+代码与卡都在 `app/` + `personas/`——**业务面进程未重启，运行态仍是旧装配**。重启 `启动QQBotB.vbs` 后验四条：① 预览 `systemPrompt` 以【角色设定】开头、其后是标准提示词与机制段 ② 会话 JSON 的 `inputMessages[1]`（user）不含角色段 ③ 群里发一句 → 回复语体仍按卡 ④ 人设卡首句仍在（`> 这里是人格设定，从现在开始请进行…的角色扮演`，rmiao / yoshino 两张卡都保留）。
+
+### E · 附注：缓存影响
+
+人设卡进系统消息最前，跨群共享前缀从"标准提示词那一段"起算——各群卡不同，跨群可共享前缀变短（同群同卡不受影响）。§十九 已裁定「不为共享缓存做段落顺序优化」，本条按用户要求优先；实测口径以重启后 `tools/cache-hit-report.mjs` 为准（新增的「系统提示以【角色设定】开头」一行是位置证据）。
+
+### F · 旧默认系统提示词存档
+
+R喵 说话方式的变化需要对照改前的原文，故把 v1.20 的默认系统提示词逐字存档到 `ref-prompt-baseline.md` §六（来源：旧会话 `_unpack/data/sessions/mw140w1g-0939f815.json` 的 `systemPrompt` + `git show 036a81a:app/src/business/prompt.js`）。差异三条：① 语体口径从「默认 1 段、上限 2 段」变卡里的「默认一句话 1~10 字」② 反 AI 味 / 主体性两整段压缩成卡里的表格行 ③ lead 从人格断言（「普通群友，不是助手不是客服，发言必须像真人」）改成规则层级说明。
+
+---
+
+## 一百零八、R喵卡自带系统提示词 + 旧写法恢复（2026-11-07 · v1.26）
+
+> 需求（Rushiera）：① R喵 恢复以前的说话方式；② 「系统提示词」不适用于 R喵——R喵人设卡包含整个系统提示词；③ 现在的标准系统提示词只留给用了其他人设卡的场景；④ 后续要能一个人（一张卡）专门配一份系统提示词。
+
+### A · 口径：每卡一份系统提示词（`systemPrompt` 三态）
+
+| 值 | 含义 | 用在 |
+|:--|:--|:--|
+| `inherit`（默认） | 标准提示词照常注入：lead + 风格段 | 依田芳乃卡等外部角色卡 |
+| `self` | 卡**自带**人格与说话纪律，标准提示词整段不注入——「系统提示词不适用于这张卡」 | R喵 |
+| `<相对路径>` | 该文件替代 lead + 风格段（同一张卡专配一份） | 扩展点，本期未实例化；读不到具名告警 |
+
+**机制面仍恒追加**：安全规则 / 工具协议 / 机制段（`_shared.md`）/ 回应参数 / 记忆教程 / 表情策略 / 引用与 @ / QQ 场景 / 汇报禁令 / 参与度口径。理由：这些不是「怎么说话」，缺了它们模型不会用工具（rapport 自测当场红了 3 条就是证据）。交给卡承载的只有：lead 的语义 / 该说不该说的人格口径 / 群聊不是客服队列 / 别露出机器味 / 像真人一样 / 反 AI 味 / 保持主体性。
+
+### B · 改动
+
+| 面 | 落点 | 内容 |
+|:--|:--|:--|
+| 库定义 | `persona-cards.js` | `DEFAULT_PROFILES` 给 rmiao 加 `systemPrompt: 'self'`、yoshino 显式 `'inherit'`；`listProfiles` / `readCard` 透传该字段（配置可覆盖内置） |
+| 装配 | `prompt.js` `buildSystemPrompt` | 新增卡带提示词分支，判定放在 `systemPromptOverride` **之前**（卡自带时全局覆盖不再叠一层）；self = 只留机制面；路径态 = 读文件替代风格段，读不到出声 |
+| 卡 · 语体 | `personas/rmiao.md` §2.1 | 从「默认一句话 1~10 字」改回**旧口径「默认 1 段、上限 2 段」**（一条消息最多一处表情或颜文字；要表达完整意思，别只剩语气词） |
+| 卡 · 说话纪律 | `personas/rmiao.md` §2.4 新增 | 旧系统提示词原文整段落卡：保持主体性 / 群聊不是客服队列 / 别露出机器味 / 像真人一样 / 反 AI 味（「该说-不该说」不写死，仍由系统按参与度注入） |
+| 预览 | `routes.js` · `settings-sections.js` | persona 摘要增 `systemPromptMode`；预览 hint 按 self 说明「本卡自带系统提示词」 |
+
+### C · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| `node tools/verify-persona-card.mjs` | **57/57**（§四 改写为 self 卡断言 + §四之四 专配提示词缺失告警 2 条） |
+| `node tools/verify-qqagent-rapport.mjs` | **52/52**（self 分支注入机制面后，回应参数教程恢复） |
+| `node tools/verify-qqagent-talkstyle.mjs` | **27/27**（lean/full 段序改用 inherit 卡测；顺带清掉运行态 `systemPromptOverride` 对自测的污染——存量 4 红根治） |
+| `node tools/verify-qqagent-chatvoice.mjs` | **19/19**（同上，存量红消解） |
+| `node tools/verify-qqagent-persona.mjs` | **27/27** |
+| `node tools/check-syntax.mjs` | 74/74 OK |
+| `node tools/verify-ui-contract.mjs` | PASS 54/54 |
+| `node tools/verify-suite.mjs` | **28/29**——唯一红 `verify-navigator` 62/63 属既有存量（会话截图源码段），与本轮无交集 |
+
+### D · 未闭合（生效待重启）
+
+业务面重启（`启动QQBotB.vbs`）后验：① 群里发一句 → R喵 回到「1~2 段、正常句」，不是「一个字一条」② 记忆 / 表情 / 引用 / 回应参数仍能用（机制段在）③ 芳乃群照旧（inherit 卡 + 标准提示词 + override）。
+
+### E · 取舍记录
+
+- **参与度口径仍在系统侧**：写进卡会与 `participation` 配置打架，故「该说/不该说」保持运行时注入，卡里只留指针句。
+- **机制面不可由卡删除**：卡能改「怎么说话」，改不了「工具怎么用」——那部分丢了是功能故障，不是风格选择。
+- **扩展点**：`systemPrompt: 'personas/<id>.prompt.md'` 已在 `buildSystemPrompt` 分支里实现（读不到具名告警），本期只实例化 `self` / `inherit` 两态。
+
+---
+
+## 一百零九、R喵卡搬全系统提示词（2026-11-07 · v1.27）
+
+> 需求（Rushiera）：搬全；R喵 不留公共设计依赖，只有新来的角色卡才依赖公共设计，组装 R喵 前文时**绕过公共设计**。
+
+### A · 口径变化（相对 v1.26）
+
+| 面 | v1.26（半搬） | v1.27（搬全） |
+|:--|:--|:--|
+| 卡 | 人格 + 语体 + 说话纪律（4,122 字符） | 再加 §六 机制与索引（`_shared.md` 全文）· §七 工作方式与安全底线 · §八 工具纪律 —— **12,434 字符** |
+| `self` 卡的系统提示 | 安全规则 + 工具协议 + 机制段 + 回应参数等（≈8.9k） | **空**：标准提示词、机制段、安全规则、工具协议、Skill 段、`systemPromptOverride` 一律不注入；只留卡缺失告警与「管理员附加规则」 |
+| `inherit` 卡 | 照旧 | 照旧（公共设计对它们仍然生效）——新来的角色卡继续依赖公共段 |
+
+### B · 改动
+
+| 面 | 落点 | 内容 |
+|:--|:--|:--|
+| 装配 | `prompt.js` `buildSystemPrompt` | `systemPrompt:'self'` 分支改为只返回「卡缺失告警 + 会话人设声明 + 管理员附加规则」；公共段与 override 全绕过（override 判定在 self 分支之后，天然不生效） |
+| 卡 | `personas/rmiao.md` | 追加 §六（四条底线 / CCBP 速览 / 工具面 / 路由索引 / 遇阻处置 / 领航员速查——`_shared.md` 全文搬入）· §七（安全规则 5 条 + 工作方式 8 条 + 引用与 @）· §八（记忆 / 回应参数 / QQ 场景 / 表情与拍一拍 / 汇报禁令） |
+| 预览 | `settings-sections.js` | 提示文案按 self 说明「人格 + 说话纪律 + 机制与工具纪律全在卡里，标准提示词 / 机制段 / 全局覆盖都不生效」 |
+| 自测 | `verify-persona-card.mjs` | 「R喵卡不再含机制段」→「R喵卡自带机制段（绕过公共设计）」；「系统提示含机制段」改为「self 卡系统提示为空」「inherit 卡仍注入公共机制段」 |
+| 自测 | `verify-qqagent-talkstyle.mjs` · `verify-qqagent-chatvoice.mjs` · `verify-qqagent-rapport.mjs` | 标准提示词的段序断言改用 inherit 卡（yoshino）测；chatvoice 的 lean 次序改判 `chatVoice(), '', memoryRules()` 相邻关系（全文级位置已不能代表段序） |
+
+### C · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| `node tools/verify-persona-card.mjs` | **57/57** |
+| `node tools/verify-qqagent-talkstyle.mjs` | **26/26** |
+| `node tools/verify-qqagent-chatvoice.mjs` | **19/19** |
+| `node tools/verify-qqagent-rapport.mjs` | **52/52** |
+| `node tools/check-syntax.mjs` | 74/74 OK |
+| `node tools/verify-suite.mjs` | **28/29**——唯一红 `verify-navigator` 61~62/63（会话截图源码段），既有存量 |
+
+**卡片字数**：`personas/rmiao.md` = **12,434 字符**（26,890 字节）；对照 `_shared.md` 5,482 · `yoshino.md` 24,834。
+
+### D · 未闭合（生效待重启）
+
+业务面重启后验：① 群里 @ 一句 → R喵 语体与旧版一致 ② 记忆 / 表情 / 引用 / 回应参数 / 领航员 / 看图 / 搜索仍可用（这些说明现在只在卡里）③ 芳乃群照旧（inherit 卡 + 标准提示词 + override）④ 预览里 R喵 的系统提示应只剩`【角色设定】`卡正文。
+
+### E · 取舍
+
+- **副本成立，接受漂移风险**：`_shared.md` 的内容在 R喵卡里有一份副本。工具面演进时两处都要改——只改 `_shared.md` 会让 R喵 看到的说明落后。这是「R喵 不依赖公共设计」的必然代价，已在此记录，改 `_shared` 时**同步改卡 §六**。
+- **安全规则进了卡**：代码里的 `securityRules()` 是「你没有本地工具」的旧口径，与 R喵 实际有 `read_file` / `list_dir` 相矛盾；卡内版本按真实能力重写（只读受控根、越界拒绝），比原段更准。

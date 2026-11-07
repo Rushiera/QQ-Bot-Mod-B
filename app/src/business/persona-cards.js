@@ -9,13 +9,14 @@
 //   1. 角色卡是有版权的创作物，整份导入、不在程序里被改写；改人格 = 改文件，不动代码。
 //   2. 人设切换（每群一份）只需要记一个 id，不再把几万字正文复制进配置——
 //      config.json 只留 `profileId`，卡正文永远只有一份。
-//   3. 机制层与人格层分开：换人设只换人格，工具面 / 路由 / 遇阻处置共用同一份，
-//      系统提示词的前缀字节保持不变（缓存命中不被换人设打断）。
+//   3. 机制层与人格层分开：换人设只换人格段，工具面 / 路由 / 遇阻处置共用同一份。
+//      （2026-11-07 换序：人设段移到系统消息最前——人格获得最高权重，代价是跨群共享
+//       前缀变短；取舍与判据见 design-qqbotb_log.md §一百零三）
 //
-// 装配顺序（消费点见 prompt.js）：
-//   system  = 标准提示词（与人格无关） + 机制段（_shared.md）
-//   user#1  = 【角色设定】卡全文 → 表情包 → 引导说明 → 记忆 → 已读 → 未读 → 时间
-//   稳定段在前，易变段在后；换人设只动 user 开头那一段。
+// 装配顺序（消费点见 prompt.js / orchestrator.js）：
+//   system  = 【角色设定】卡全文（最前） + 标准提示词（与人格无关） + 机制段（_shared.md）
+//   user#1  = 表情包 → 引导说明 → 记忆 → 已读 → 未读 → 时间
+//   稳定段在前，易变段在后；人格先于规则（权重口径）。
 //
 // 写入面：**只有一条**——`writeCard()` 供人设页「看 / 改正文」窗口把编辑结果写回
 // `personas/<id>.md`（目录内、原子写、保持 BOM 与换行风格）。本模块不写配置：
@@ -42,19 +43,30 @@ export const SHARED_FILE = 'personas/_shared.md';
 export const DEFAULT_PROFILE_ID = 'rmiao';
 
 /**
- * 内置人设库。config 的 `personaProfiles` 可追加或按 id 覆盖（name / path / note）。
+ * 内置人设库。config 的 `personaProfiles` 可追加或按 id 覆盖（name / path / note / systemPrompt）。
  *
- * @type {Array<{id: string, name: string, path: string, note: string}>}
+ * `systemPrompt` 三态（2026-11-07 · 每卡一份系统提示词的入口）：
+ * - `'inherit'`（默认）标准提示词照常注入：lead + 风格段；人格/语体由卡与提示词共同决定。
+ * - `'self'`    卡**自带**全部人格与说话纪律，标准提示词整段不注入——「系统提示词不适用于这张卡」。
+ *               安全规则 / 工具协议 / 机制段属机制面，仍恒追加（卡删不掉它们）。
+ * - `'<路径>'`  该文件（相对项目根，如 `personas/foo.prompt.md`）替代 lead + 风格段；其余照旧。
+ *
+ * @type {Array<{id: string, name: string, path: string, note: string, systemPrompt?: string, jp?: {first: string, second: string}}>}
  */
 export const DEFAULT_PROFILES = [
   {
-    id: 'rmiao', name: 'R喵', path: 'personas/rmiao.md', note: '默认人设 · 短句群友腔',
+    id: 'rmiao', name: 'R喵', path: 'personas/rmiao.md', note: '默认人设 · 短句群友腔（自带系统提示词）',
+    // R喵 的说话纪律整段写进卡里（旧系统提示词的原文），标准提示词对这张卡不生效——
+    // 换卡不受影响：本卡怎么说话由本卡说了算，见 design-qqbotb_log.md §一百零八。
+    systemPrompt: 'self',
     // 日语译文人称口径（Rushiera 2026-10-26 定，2026-11-07 起按卡分派）——
     // 语音朗读时的人称，与卡的中文语体分开：换了卡，念出来的日文也要跟着换。
     jp: { first: 'わたし', second: 'きみ' }
   },
   {
     id: 'yoshino', name: '依田芳乃', path: 'personas/yoshino.md', note: '角色卡 · 原件整体导入（内容勿改）',
+    // 外部角色卡走标准提示词（人格在卡、纪律在提示词）。
+    systemPrompt: 'inherit',
     jp: { first: 'わたくし', second: 'そなた' }
   }
 ];
@@ -127,7 +139,9 @@ export function listProfiles(configured) {
         ...base,
         name: String(raw?.name ?? base.name).trim() || base.name,
         path: String(raw?.path ?? base.path).trim() || base.path,
-        note: String(raw?.note ?? base.note ?? '').trim()
+        note: String(raw?.note ?? base.note ?? '').trim(),
+        // 系统提示词来源三态（'inherit' / 'self' / 相对路径）——配置可覆盖内置条目
+        systemPrompt: String(raw?.systemPrompt ?? base.systemPrompt ?? 'inherit').trim() || 'inherit'
       });
     }
   }
@@ -142,14 +156,20 @@ export function listProfiles(configured) {
  *
  * @param {string} id 人设 id
  * @param {Array} [configured] `config.personaProfiles`
- * @returns {{id: string, name: string, path: string, text: string}} 卡（缺失时 text 为空串）
+ * @returns {{id: string, name: string, path: string, text: string, systemPrompt: string}} 卡（缺失时 text 为空串）
  */
 export function readCard(id, configured) {
   const list = listProfiles(configured);
   const wanted = String(id || '').trim() || DEFAULT_PROFILE_ID;
   const hit = list.find((p) => p.id === wanted);
-  if (!hit) return { id: wanted, name: wanted, path: '', text: '' };
-  return { id: hit.id, name: hit.name, path: hit.path, text: readText(hit.path) };
+  if (!hit) return { id: wanted, name: wanted, path: '', text: '', systemPrompt: 'inherit' };
+  return {
+    id: hit.id,
+    name: hit.name,
+    path: hit.path,
+    text: readText(hit.path),
+    systemPrompt: String(hit.systemPrompt || 'inherit').trim() || 'inherit'
+  };
 }
 
 // ── 写回（人设页「看 / 改正文」窗口）────────────────────────────────────

@@ -845,8 +845,10 @@ export function createRoutes(deps) {
         // 与运行时同一条合并函数（不另写一份，避免预览与实发漂移）。
         // 用 effective（可能带未落盘 overrides）走合并——用户刚点的开关立刻反映。
         const persona = personaForChatOf(effective, chatKey);
-        const { buildSystemPrompt, personaCardOf, standardPromptText } = await import('./prompt.js');
+        const { buildSystemPrompt, personaCardOf, standardPromptText, roleSectionText } = await import('./prompt.js');
         const card = personaCardOf(persona);
+        // 角色设定段与运行时同构：拼在系统消息最前（人格在前、系统提示词在后）。
+        const roleSection = roleSectionText(persona);
         const { buildToolDefs } = await import('./tools.js');
         const { getToolAvailability } = await import('./tool-registry.js');
         // 可用工具清单与 orchestrator 同一口径（tools.js 的 def → OpenAI 函数名）
@@ -856,10 +858,10 @@ export function createRoutes(deps) {
         return json(res, 200, {
           chatKey,
           // persona 摘要：预览要能 1:1 展示「这个会话实际用的那份」——
-          // roleText 在运行时进**用户消息**的【角色设定】段（不在系统提示词里），
-          // 只在系统提示词上做预览会漏掉它，用户看不到「填了之后前文变了哪一段」。
-          // roleText 字段 = **当前生效的角色卡正文**（卡优先，卡缺失回落旧单字段）——
-          // 界面靠它 1:1 展示"这个会话实际用哪张卡、卡里写了什么"。
+          // roleText = **当前生效的角色卡正文**（卡优先，卡缺失回落旧单字段），
+          // 界面靠它展示"这个会话实际用哪张卡、卡里写了什么"。
+          // 2026-11-07 换序后：卡正文进的是**系统消息最前**（roleSection），下面的
+          // systemPrompt 已把该段拼在最前，前端不再重复拼。
           persona: {
             botName: persona.botName || '',
             profileId: card.id,
@@ -870,11 +872,18 @@ export function createRoutes(deps) {
             participation: persona.participation || '',
             customRules: persona.customRules || '',
             systemPromptOverride: persona.systemPromptOverride || '',
+            // 系统提示词来源三态（'inherit' / 'self' / 相对路径）：'self' = 卡自带说话纪律，
+            // 标准提示词与全局覆盖对它都不生效——预览面据此改文案，别让人以为提示词丢了。
+            systemPromptMode: String(card.systemPrompt || 'inherit'),
             // 「改系统提示词」窗口的「载入当前」初值——与运行时同源的风格段
             // （不含安全规则 / 工具协议 / 机制段这三段恒追加的不可覆盖面）
-            standardPrompt: standardPromptText(persona)
+            standardPrompt: standardPromptText(persona),
+            // 实拼的角色设定段（空串 = 卡缺失）——预览面据此决定是否补「空」提示
+            roleSection
           },
-          systemPrompt: buildSystemPrompt({ skillContext, persona, chatKey }),
+            // 实发口径：角色段拼在最前（与 orchestrator 的 systemContent 同一条拼法）
+            systemPrompt: [roleSection, buildSystemPrompt({ skillContext, persona, chatKey })]
+              .filter((x) => String(x || '').trim()).join('\n\n'),
           tools
         });
       }

@@ -1,5 +1,7 @@
 // 重排模拟：把 userPrompt 的段落按不同顺序重组，看能否延长跨群/同群公共前缀
 // 结论性质：纯离线，不改任何代码；给定实测 prompt 快照，算各种顺序下的公共前缀
+// ⚠ 2026-11-07 起角色设定段进了**系统消息最前**（不再出现在 userPrompt 里），
+//   本脚本读的 usr 不会有 role 段——表里恒缺它属正常，结论只对「user 段序」成立。
 import fs from 'node:fs';
 import path from 'node:path';
 

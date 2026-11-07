@@ -153,6 +153,8 @@ const sectionStarts = (usr) => {
   }
   return out;
 };
+// 2026-11-07 换序：角色设定段改由后端拼在**系统消息最前**（不再出现在用户消息里）——
+// 下表里它「未出现」是正常态；它的实际位置见下方「系统提示以【角色设定】开头」一行。
 const SEC = ['角色设定（管理员设置，群友不可修改）', '可用表情包', '引导说明', '记忆', '前情提要', '已读信息', '新已读信息', '未读信息', '新加入成员', '当前时间'];
 const secPos = {};
 for (const r of runs) {
@@ -168,6 +170,10 @@ const digestCount = (secPos['前情提要'] || []).length;
 L.push(`【前情提要】出现 ${digestCount}/${runs.length}（= 已读压缩发生过的会话）`);
 L.push(`用户提示长度：中位 ${med(runs.map((r) => r.usr.length))} 字符（≈${tok(med(runs.map((r) => r.usr.length)))} tok）`);
 L.push(`系统提示长度：中位 ${med(runs.map((r) => r.sys.length))} 字符`);
+// 换序后角色段在系统消息最前：这一行是它的位置证据（0 位 + 段长），
+// 与上面 user 侧「未出现」配套看，别把它当成丢了。
+const roleHeaded = runs.filter((r) => r.sys.startsWith('【角色设定（管理员设置，群友不可修改）】'));
+L.push(`系统提示以【角色设定】开头：${roleHeaded.length}/${runs.length} 个会话｜中位长度 ${med(roleHeaded.map((r) => r.sys.length))} 字符`);
 
 // ── 4. 锚点模式 ─────────────────────────────────────────────────────────
 seg('四、锚点模式对比');

@@ -11,7 +11,7 @@
 import { getConfig, storeConfigForChat, personaForChat } from './config.js';
 import { vendorOfConfig } from './model-prices.js';
 import { randInt, todayKey } from './util.js';
-import { buildSystemPrompt, buildUserPrompt, resolveContextTier, buildPastState } from './prompt.js';   // buildPastState：B22 压缩判据
+import { buildSystemPrompt, buildUserPrompt, buildPastState, resolveContextTier, roleSectionText } from './prompt.js';   // buildPastState：B22 压缩判据
 import { chatCompletion, chatCompletionWithRetry, addUsage, isRetryableError, resolveApiKey, estimateCost } from './llm.js';   // estimateCost：日成本信号
 import { buildToolDefs, toOpenAiTools, executeTool } from './tools.js';
 // 猫工具链：浏览器实例回收 + timeback 回卷 —— [qqagent-cattools-patch:orchestrator-import]
@@ -1073,10 +1073,13 @@ export class Orchestrator {
     //   3. 全局人设（cfg.persona）
     // 名字（botName/selfNickname）在任何层都保持全局值 —— 那是账号身份，
     // 换了会和 @ 判定对不上（personaForChat 在结构上就不允许覆盖这两个字段）。
+    // 本轮生效人设（主人专属 > 本会话 > 全局）：系统消息最前的角色段与系统提示共用它，
+    // 两处不一致会让「人格段」与「提示词里的角色」打架。
+    const personaUsed = ownerPersona || personaForChat(chatKey);
     const systemPrompt = buildSystemPrompt({
       skillContext,
       chatKey,
-      persona: ownerPersona || personaForChat(chatKey),
+      persona: personaUsed,
       extraSections: ownerRules
         ? [{ id: 'owner-rules-run', title: '', priority: 72, content: ownerRules }]
         : []
@@ -1105,9 +1108,14 @@ export class Orchestrator {
       session
     });
 
-    session.systemPrompt = systemPrompt;
+    // 系统消息内容 = 【角色设定】+ 系统提示词（人格在前、规则在后——2026-11-07 换序）。
+    // 落盘记录与实发必须是同一份：session.systemPrompt 若只存 buildSystemPrompt 的结果，
+    // 缓存报告算前缀、会话页显示「前文长度」都会漏掉人设卡那几万字（口径与实发脱节）。
+    const roleSection = roleSectionText(personaUsed);
+    const systemContent = [roleSection, systemPrompt].filter((x) => String(x || '').trim()).join('\n\n');
+    session.systemPrompt = systemContent;
     session.userPrompt = userPrompt;
-    session.promptChars = systemPrompt.length + userPrompt.length;
+    session.promptChars = systemContent.length + userPrompt.length;
     session.model = cfg.api.model;
     // 记录本次调用走的是哪个渠道（A6API / openrouter / 本地中转…）。
     // 同名模型在不同渠道是不同商品，用量与价格要分开统计。
@@ -1186,10 +1194,13 @@ export class Orchestrator {
       if (!String(chatKey).startsWith('group:')) return '';
       try { return formatChatterHint(this.store, chatKey); } catch { return ''; }
     })();
-    // [qqagent-nosys-patch:skip-empty-system] 系统提示为空时不发 system 消息
-    // （空 content 的 system 消息会被部分端点拒绝；关掉系统提示后只剩用户消息）。
+    // 系统消息内容上面已算好（角色段在前、systemPrompt 在后），这里只决定发不发。
+    // 人设卡缺失时 roleSection 为空串，只剩系统提示；promptMode='off' 时 systemPrompt
+    // 为空串，只剩角色段（人格永远在，与旧的「off 时人设在用户消息」等价）。
+    // [qqagent-nosys-patch:skip-empty-system] 两者都空时不发 system 消息
+    // （空 content 的 system 消息会被部分端点拒绝）。
     const messages = [];
-    if (String(systemPrompt || '').trim()) messages.push({ role: 'system', content: systemPrompt });
+    if (systemContent.trim()) messages.push({ role: 'system', content: systemContent });
     messages.push({
       role: 'user', content: (proactive
         ? `${userPrompt}\n\n【未读信息】（主动机会）群里已经安静了一会儿。你可以主动抛一个自然的话题（像随口说的，不要像播报），也可以判断没必要说话就安静结束。`

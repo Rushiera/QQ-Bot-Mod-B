@@ -258,9 +258,10 @@ async function trySend(text, options = {}) {
 {
   const cfgNow = getConfig();
   const old = { ...(cfgNow.persona || {}) };
-  cfgNow.persona = { ...old, systemPromptMode: 'lean' };
+  // 用 inherit 卡测标准提示词（R喵 走 self：卡自带提示词，系统提示为空——段序断言不适用）
+  cfgNow.persona = { ...old, profileId: 'yoshino', systemPromptMode: 'lean' };
   const lean = buildSystemPrompt({ persona: cfgNow.persona, skillContext: {} });
-  cfgNow.persona = { ...old, systemPromptMode: 'full' };
+  cfgNow.persona = { ...old, profileId: 'yoshino', systemPromptMode: 'full' };
   const full = buildSystemPrompt({ persona: cfgNow.persona, skillContext: {} });
   cfgNow.persona = old;
   check('lean 模式含【回应参数】教程', /【回应参数：看人下菜碟】/.test(lean));

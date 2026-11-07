@@ -40,7 +40,9 @@ cfg.engage = {
   quota: { enabled: true, windowMs: 120000, maxPerWindow: 5 },
   hardLimit: { enabled: false, windowMs: 60000, maxPerWindow: 1 }
 };
-cfg.persona = { ...(cfg.persona || {}), systemPromptMode: 'lean', systemPromptEnabled: undefined };
+// 隔离：清掉运行态的 systemPromptOverride——它会整体替换标准提示词，
+// 两种模式被替换成同一份，lean/full 的段序断言必然失真（存量红根因）。
+cfg.persona = { ...(cfg.persona || {}), systemPromptMode: 'lean', systemPromptEnabled: undefined, profileId: 'yoshino', systemPromptOverride: '' };
 fs.writeFileSync(CFG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
 
 process.env.QQ_AGENT_DATA_DIR = DATA;
@@ -87,11 +89,19 @@ check('full：也含共用机制段（机制段不随模式变）', full.include
 check('lean 比 full 省下的段 ≥ 2000 字符', full.length - lean.length >= 2000, lean.length + ' vs ' + full.length);
 check('lean 仍短于 full（机制段常驻，但纪律段被省）', lean.length < full.length, lean.length + ' 字符');
 
+// ── A3b. R喵走 self（卡自带系统提示词）——标准提示词的段序断言不适用于它 ──
+// 本文件的 lean/full 断言用 inherit 卡（yoshino）测标准提示词；R喵的装配由
+// verify-persona-card §四 覆盖。这里只守住两条边界：人格段不进、机制段仍在。
+setPersona({ profileId: 'rmiao', systemPromptMode: 'lean' });
+const rmiaoLean = buildSystemPrompt({ persona: getConfig().persona });
+check('self 卡（R喵）：系统提示为空（公共设计全绕过，内容在卡里）', rmiaoLean === '', rmiaoLean.length + ' 字符');
+
 // ── A4. off 模式 ───────────────────────────────────────────────────────────
 setPersona({ systemPromptMode: 'off' });
 check('off：返回空串', buildSystemPrompt({ persona: getConfig().persona }) === '');
 
 // ── A5. 兼容旧字段 ─────────────────────────────────────────────────────────
+setPersona({ profileId: 'yoshino' });   // 标准提示词口径用 inherit 卡测（R喵走 self，系统提示为空）
 setPersona({ systemPromptMode: undefined, systemPromptEnabled: false });
 const compat = buildSystemPrompt({ persona: getConfig().persona });
 check('兼容：systemPromptEnabled=false → 按 lean 处理', compat.length > 0 && compat.includes('【该说/不该说】'), compat.length + ' 字符');

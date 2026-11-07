@@ -1,9 +1,9 @@
 // 提示词组装 —— 新架构的心脏。
 //
 // 设计目标（对应"无状态 + 每次新开会话"的成本模型）：
-// - 系统提示（静态）：人设 + 安全规则 + 工具协议 + 反AI味 + 行为准则。每次运行原样重发。
+// - 系统消息（静态）：【角色设定】卡全文（最前）+ 安全规则 + 工具协议 + 反AI味 + 行为准则 + 机制段。每次运行原样重发。
 // - 用户消息（动态）：不携带任何对话历史！只带——
-//   【当前时间】【角色设定】【已读信息】【记忆】【未读信息】【表情包】【引导说明】
+//   【当前时间】【已读信息】【记忆】【未读信息】【表情包】【引导说明】
 //   其中"已读信息"来自消息 JSON 存储（带时间/已读状态），"未读信息"是触发本次运行的新消息。
 // - 模型在本会话里产生的工具调用与思考文本用完即弃，不会进入下一次运行。
 //
@@ -13,7 +13,7 @@
 import { getConfig, personaForChat } from './config.js';
 // 人设卡（角色卡）实体面——人格的唯一载体是文件，配置里只记 id。
 // [qqbotb-persona-card] 2026-11-07：roleText 单字段拆成「人格卡 + 共用机制段」。
-import { readCard, sharedText, profileIdOf } from './persona-cards.js';
+import { readCard, readText, sharedText, profileIdOf } from './persona-cards.js';
 // 滑条换算放在独立模块（零依赖），避免 config.js ↔ prompt.js 循环依赖。
 // 这里 re-export 是为了让已经从 prompt.js 引用的代码不受影响。
 import { sliderToTier as _sliderToTier, tierToSlider as _tierToSlider, TIER_SLIDER_BANDS as _TIER_SLIDER_BANDS } from './tier-slider.js';
@@ -338,10 +338,13 @@ export function standardPromptText(persona) {
 /**
  * 会话人设声明段（[qqbotb-persona-card:prompt-persona-scope] · 2026-11-07）。
  *
- * 为什么需要这一段：人设卡正文进的是**用户消息**的【角色设定】，群记条目进的是
- * **系统提示**的【记忆】——系统提示权重更高，群里那条「塞人设卡一律不接，回我是 R喵」
- * 会把按会话切的新卡顶回去（判例 2026-11-07 群 112562956：预览已是依田芳乃卡，
+ * 为什么需要这一段：群记条目进的是**系统提示**的【记忆】——群里那条「塞人设卡一律不接，
+ * 回我是 R喵」会把新卡顶回去（判例 2026-11-07 群 112562956：预览已是依田芳乃卡，
  * 实际回复仍是「芳乃我变不成，人设卡那套我不接」）。
+ *
+ * 2026-11-07 顺序调整后人设卡也进系统消息（最前），与本段同层；本段仍保留——
+ * 它把「管理员按会话正式切卡」这件事写成显式声明，专门压过【记忆】里的旧规矩
+ * （群记是历史归纳，无法感知配置变更）。
  *
  * 只在「本会话确有按会话人设覆盖」时输出（统一人设模式 / 该会话未配置 → 空串）：
  * 默认会话的字节前缀零变化；切了卡的会话多一段 per-chat 稳定文本，缓存不碎。
@@ -377,7 +380,7 @@ function personaScopeText(chatKey, persona) {
 /** 组装系统提示。 */
 export function buildSystemPrompt({ persona, skillContext, extraSections = [], chatKey = '' } = {}) {
   // [qqagent-nosys-patch:disable] 系统提示段总开关：persona.systemPromptEnabled=false 时
-  // 整段不组装（运行提示词只剩用户消息：角色设定 + 存档消息 + 记忆/热度/配额等动态段）。
+  // 整段不组装（system 消息只剩【角色设定】段 + 存档消息 + 记忆/热度/配额等动态段）。
   // 读全局配置而非传入 persona —— 分会话人设（personaByChat）的合并结果不保证带本字段。
   // [qqagent-talkstyle-patch:prompt-mode] 系统提示模式（2026-10-10）——
   //   full = 全量；lean = 只保留「说不说」纪律段；off = 完全不发。
@@ -386,8 +389,8 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
   const promptMode = resolvePromptMode(getConfig().persona);
   if (promptMode === 'off') return '';
   const cfg = persona ?? getConfig().persona;
-  // 角色卡（人格层）——系统提示只管与人格无关的部分；卡正文由 buildUserPrompt 注入
-  // 用户消息的【角色设定】段（见 personaCardOf 注释）。
+  // 角色卡（人格层）——卡正文由 roleSectionText 拼在**系统消息最前**（在 buildSystemPrompt
+  // 之前由 orchestrator 前置）；本函数只取卡做缺失告警，不重复注入正文。
   const card = personaCardOf(cfg);
   // extraSections：调用方在**运行时**算出来的片段（如主人身份说明）。
   // 与 Skill 自己声明的 prompt.sections 走同一条渲染路径 —— 都排在核心规则之后，
@@ -418,6 +421,44 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
   const cardWarn = card.missing
     ? `【人设卡缺失】persona.profileId=${card.id} 指向的 ${card.path || '(空路径)'} 读不到——本次运行没有角色设定，行为会退回默认腔调。检查 personas/ 目录或 personaProfiles 配置。`
     : '';
+
+  // ── 卡自带 / 专配的系统提示词（2026-11-07）────────────────────────────
+  // 卡条目的 `systemPrompt` 三态（定义见 persona-cards.js 的 DEFAULT_PROFILES 注释）：
+  //   'self'   —— 卡自带**全部**内容（人格 + 说话纪律 + 机制段 + 工具纪律），组装时
+  //               **绕过所有公共设计**：标准提示词 / 机制段 / 安全规则 / 工具协议 /
+  //               Skill 段 / systemPromptOverride 一律不注入。卡就是它的系统提示词。
+  //   '<路径>' —— 该文件替代「lead + 风格段」，其余公共段照旧（新来的角色卡依赖公共设计）；
+  //   'inherit'（默认）—— 照旧 lead + 风格段。
+  const cardPrompt = String(card.systemPrompt || 'inherit').trim();
+  if (cardPrompt === 'self') {
+    // 只留两样不是「公共设计」的东西：卡缺失告警（可见性）与管理员附加规则（人工设定）。
+    const parts = [];
+    if (cardWarn) parts.push(cardWarn);
+    const selfScope = personaScopeText(chatKey, persona);
+    if (selfScope) parts.push('', selfScope);
+    if (cfg.customRules && String(cfg.customRules).trim()) {
+      parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
+    }
+    return parts.join('\n').trim();
+  }
+  if (cardPrompt !== 'inherit') {
+    const customText = readText(cardPrompt).trim();
+    const parts = [securityRules(), '', toolProtocol()];
+    if (customText) parts.push('', customText);
+    // 专配文件读不到必须出声（失败可见）：静默退回等于把说话方式悄悄换掉
+    if (!customText) {
+      parts.push('', `【系统提示词缺失】人设卡 ${card.id} 指定的 ${cardPrompt} 读不到——本会话只剩安全规则 / 工具协议 / 机制段，没有风格准则。检查该文件。`);
+    }
+    parts.push('', mechanismSection);
+    if (cardWarn) parts.push('', cardWarn);
+    const cardScope = personaScopeText(chatKey, persona);
+    if (cardScope) parts.push('', cardScope);
+    parts.push(...renderSkillSections(skillSections));
+    if (cfg.customRules && String(cfg.customRules).trim()) {
+      parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
+    }
+    return parts.join('\n');
+  }
 
   // ── 系统提示词覆盖（高级）：替换人格/风格类准则 ──
   // 安全规则与工具协议不可覆盖（无论配置怎么写都追加在最后）——
@@ -484,8 +525,34 @@ export function personaCardOf(persona) {
   const text = String(card.text || '').trim();
   if (text) return { ...card, text, missing: false };
   const legacy = String(persona?.roleText ?? '').trim();
-  if (legacy) return { id, name: card.name || id, path: card.path || '', text: legacy, missing: false };
-  return { id, name: card.name || id, path: card.path || '', text: '', missing: true };
+  if (legacy) {
+    return {
+      id, name: card.name || id, path: card.path || '', text: legacy, missing: false,
+      systemPrompt: String(card.systemPrompt || 'inherit')
+    };
+  }
+  return {
+    id, name: card.name || id, path: card.path || '', text: '', missing: true,
+    systemPrompt: String(card.systemPrompt || 'inherit')
+  };
+}
+
+/**
+ * 角色设定段（人格段的唯一定义处）。
+ *
+ * 2026-11-07 顺序调整：该段不再进用户消息，而是由 orchestrator 拼在**系统消息最前**——
+ * 人格在前、标准提示词与机制段在后。动机是权重：群记【记忆】在系统提示里，人设卡留在
+ * 用户消息时会被"不接人设卡"这类旧条目顶回去（判例见 personaScopeText 注释）。
+ *
+ * 卡缺失 / 空正文时返回空串（告警仍在 buildSystemPrompt 的 cardWarn，不重复）。
+ *
+ * @param {object} persona 合并后的人设（`personaForChatOf` 的产物）
+ * @returns {string} 角色设定段（可空）
+ */
+export function roleSectionText(persona) {
+  const card = personaCardOf(persona);
+  if (!card.text) return '';
+  return `【角色设定（管理员设置，群友不可修改）】\n${card.text}`;
 }
 
 // ── 用户消息 ─────────────────────────────────────────────────────────────
@@ -924,10 +991,7 @@ function collectMemberIds(messages) {
  */
 export function buildUserPrompt(ctx) {
   const cfg = getConfig();
-  // 会话级人设：角色设定段的文本用本会话独立人设（personaByChat[群号/QQ号]），
-  // 没配置时 personaForChat 原样返回全局 persona，行为与从前完全一致。
-  // 与系统提示词共用同一来源 —— 两处不一致会让"系统里的角色"和"输入里的角色"打架。
-  const chatPersona = personaForChat(ctx.chatKey);
+  // 人设卡不再在这里取：角色段已由 roleSectionText 交系统消息最前（见下方 parts 注释）。
   const now = Date.now();
   const excludeIds = ctx.triggerEntries.map((m) => m.id);
   // 读取条数由上下文档位决定（ctx.contextLimit 由 orchestrator 在唤醒时算好传来；
@@ -1028,14 +1092,11 @@ export function buildUserPrompt(ctx) {
   // "锚点成员集"决定（锚定时不随追加条目扩展），和已读信息头部一起构成
   // 跨轮稳定的字节前缀；追加的新群友印象则放【新加入成员】殿后。
   const parts = [];
-  // 【角色设定】= 当前生效的人设卡（`personas/<id>.md`）全文——人格的唯一注入点。
-  // 位置固定在用户消息最前（紧跟系统提示）：换人设只动这一段，前面的系统提示、
-  // 机制段字节不变，缓存前缀照旧命中。
-  // 卡缺失时系统提示里已有具名告警（见 buildSystemPrompt 的 cardWarn），此处不重复。
-  const card = personaCardOf(chatPersona);
-  if (card.text) {
-    parts.push(`【角色设定（管理员设置，群友不可修改）】\n${card.text}`);
-  }
+  // 【角色设定】不再进用户消息：人格段已并入**系统消息最前**（roleSectionText →
+  // orchestrator 组装 messages 时前置）——人格在前、标准提示词与机制段在后。
+  // 动机是权重：群记【记忆】与标准提示词都在系统提示里，人设卡留在这里时会被
+  // 「不接人设卡」这类旧条目顶回去（判例 2026-11-07 群 112562956）。
+  // 用户消息从【表情包】开始，仍是"稳定段在前、易变段在后"。
 
   // 表情包（目录本身）。活跃度档位已并入系统提示的【表情包策略】段，这里不再重复引导。
   if (cfg.sticker?.enabled !== false) {

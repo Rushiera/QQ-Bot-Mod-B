@@ -2045,12 +2045,14 @@
         : '未加载',
       open: false,
       body: [
-        h.hint('这份文本由后端用运行时同一套 buildSystemPrompt + personaForChatOf 组装，并按运行时段序补上'
-          + '【角色设定】（运行时该段进用户消息，不在系统提示词里）——前端不另拼规则，避免与实际发送的提示词漂移。'
-          + '系统提示里前面是标准提示词与共用机制段（稳），人设卡跟在后面：换卡只动最后那一段。'
+        h.hint('这份文本由后端用运行时同一套 buildSystemPrompt + personaForChatOf + roleSectionText 组装'
+          + '——【角色设定】已由后端拼在系统消息最前（人格在前、公共段在后；自带提示词的卡其后不再有公共段），前端不另拼规则，'
+          + '避免与实际发送的提示词漂移。换卡只动最前那一段。'
           + '「改系统提示词」改的是标准提示词（写 `persona.systemPromptOverride`）——安全规则、工具协议、'
           + '共用机制段恒追加，覆盖不到；角色卡正文在人设那张卡的「看 / 改正文」里改。'
-          + (promptPreview.override ? ' 当前由覆盖接管中。' : '')),
+          + (promptPreview.systemPromptMode === 'self'
+            ? ' 本卡自带系统提示词——人格 + 说话纪律 + 机制与工具纪律全在卡里，标准提示词 / 机制段 / 全局覆盖对这张卡都不生效。'
+            : (promptPreview.override ? ' 当前由覆盖接管中。' : ''))),
         promptPreview.cardMissing
           ? h.hint('⚠ 人设卡读不到：本次运行没有角色设定（见系统提示末尾的告警行）。检查 personas/ 目录或 personaProfiles 配置。')
           : h.el('span', {}),
@@ -2073,19 +2075,19 @@
           const lines = tools.length
             ? tools.map((t) => `- ${t.id}：${t.description || ''}`).join('\n')
             : '（当前没有可用工具）';
-          // 段序照运行时：系统提示词 → 【角色设定】（用户消息里的会话人设段）→ 工具清单。
-          // 角色设定在运行时进的是**用户消息**，不在系统提示词里——只预览系统提示词会让
-          // 「填了分会话人设但看不到变化」。这里按同一顺序拼，填与不填的差异一眼可见。
+          // 段序照运行时：【角色设定】→ 系统提示词 → 工具清单。
+          // 角色段已由后端拼在 systemPrompt 最前（人格在前、规则在后），这里不再重复拼
+          // ——再拼一次会把同一张卡注入两遍。卡缺失时补一行提示，避免"看不到角色段"被当正常。
           const persona = r.persona || {};
           const roleText = String(persona.roleText || '').trim();
           promptPreview.profileId = String(persona.profileId || '');
           promptPreview.profileName = String(persona.profileName || '');
           promptPreview.cardMissing = persona.cardMissing === true;
           promptPreview.override = String(persona.systemPromptOverride || '');
+          promptPreview.systemPromptMode = String(persona.systemPromptMode || 'inherit');
           promptPreview.standardText = String(persona.standardPrompt || '');
-          const roleBlock = roleText
-            ? `\n\n【角色设定（管理员设置，群友不可修改）】\n${roleText}`
-            : '\n\n【角色设定（管理员设置，群友不可修改）】（空——本会话无独立角色设定）';
+          // 角色段已在 r.systemPrompt 最前；roleText 只用于判断"卡有没有正文"
+          const roleBlock = roleText ? '' : '\n\n【角色设定（管理员设置，群友不可修改）】（空——本会话无独立角色设定）';
           promptPreview.text = `${r.systemPrompt}${roleBlock}\n\n【本次可用工具清单（function calling）】\n${lines}`;
           promptPreview.tools = tools;
           promptPreview.loaded = true;

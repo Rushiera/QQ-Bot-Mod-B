@@ -45,7 +45,7 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qqbotb-persona-card-'));
 process.env.QQ_AGENT_DATA_DIR = dataDir;
 
 const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../app/src/business/config.js');
-const { buildSystemPrompt, personaCardOf } = await import('../app/src/business/prompt.js');
+const { buildSystemPrompt, personaCardOf, roleSectionText } = await import('../app/src/business/prompt.js');
 
 console.log('\n一、人设库索引');
 const profiles = listProfiles();
@@ -63,8 +63,11 @@ check('芳乃卡读到正文', yoshino.text.length > 5000, String(yoshino.text.l
 check('芳乃卡内容原样（含身份锚点与红线）', yoshino.text.includes('依田芳乃') && yoshino.text.includes('硬禁用件'));
 check('芳乃卡含语体规则', yoshino.text.includes('わたくし') && yoshino.text.includes('そなた'));
 const rmiao = readCard('rmiao');
-check('R喵卡含短句铁律', rmiao.text.includes('能用一个字') && rmiao.text.includes('不用一段话'));
-check('R喵卡不再含机制段（已分离到 _shared.md）', !rmiao.text.includes('四条底线（不可协商）') && !rmiao.text.includes('领航员速查'));
+check('R喵卡含短句铁律（旧口径：默认 1 段、上限 2 段）',
+  rmiao.text.includes('默认 1 段、上限 2 段') && rmiao.text.includes('一处表情或颜文字'));
+// 2026-11-07 二改：R喵 组装绕过公共设计，机制段整份搬进卡（§六）
+check('R喵卡自带机制段（绕过公共设计 · §六）',
+  rmiao.text.includes('四条底线（不可协商）') && rmiao.text.includes('领航员速查') && rmiao.text.includes('路由索引'));
 const shared = sharedText();
 check('机制段非空', shared.length > 1000, String(shared.length));
 check('机制段含四条底线 / 路由 / 领航员', shared.includes('四条底线（不可协商）') && shared.includes('路由索引') && shared.includes('领航员速查'));
@@ -96,17 +99,22 @@ function configOf(profileId) {
 setRuntimeConfig(configOf('rmiao'));
 const sysRmiao = buildSystemPrompt({ skillContext: {} });
 const cardRmiao = personaCardOf({ profileId: 'rmiao' });
-check('系统提示含共用机制段', sysRmiao.includes('四条底线（不可协商）') && sysRmiao.includes('领航员速查'));
-check('系统提示不含 R喵卡正文', !sysRmiao.includes('能用一个字、一个表情'));
-check('卡正文由 personaCardOf 提供', cardRmiao.text.includes('能用一个字、一个表情'), String(cardRmiao.text.length));
-check('系统提示声明"角色卡优先"', sysRmiao.includes('角色设定') && sysRmiao.includes('优先于本提示词'));
+check('self 卡：系统提示为空（公共设计全部绕过）', sysRmiao === '', String(sysRmiao.length));
+check('R喵卡自带系统提示词（systemPrompt=self）', cardRmiao.systemPrompt === 'self', cardRmiao.systemPrompt);
+check('自带提示词的卡不注入标准提示词',
+  !sysRmiao.includes('【像真人一样】') && !sysRmiao.includes('【反 AI 味') && !sysRmiao.includes('你的人格、语体与行为准则'),
+  String(sysRmiao.length));
+check('卡正文由 personaCardOf 提供', cardRmiao.text.includes('说话纪律（本卡自带系统提示词'), String(cardRmiao.text.length));
+check('R喵卡恢复旧语体口径（默认 1 段、上限 2 段）', cardRmiao.text.includes('默认 1 段、上限 2 段'));
 
 setRuntimeConfig(configOf('yoshino'));
 const sysYoshino = buildSystemPrompt({ skillContext: {} });
 const cardYoshino = personaCardOf({ profileId: 'yoshino' });
-check('换卡后卡正文跟着换', cardYoshino.text.includes('依田芳乃') && !cardYoshino.text.includes('能用一个字'));
-check('换卡不动系统提示（缓存前缀稳定）', sysRmiao === sysYoshino,
-  `rmiao=${sysRmiao.length} / yoshino=${sysYoshino.length}`);
+check('换卡后卡正文跟着换', cardYoshino.text.includes('依田芳乃') && !cardYoshino.text.includes('说话纪律（本卡自带'));
+check('inherit 卡照旧注入标准提示词（lead + 风格段）',
+  sysYoshino.includes('优先于本提示词') && sysYoshino.includes('【像真人一样】'));
+check('inherit 卡仍注入公共机制段（R喵 不注入，内容在卡里）',
+  sysYoshino.includes('四条底线（不可协商）') && !sysRmiao.includes('四条底线（不可协商）'));
 check('两次组装字节一致（同配置幂等）', buildSystemPrompt({ skillContext: {} }) === sysYoshino);
 
 console.log('\n四之二、会话人设声明段（按会话切卡压过【记忆】旧条目）');
@@ -132,6 +140,40 @@ const sysOwner = buildSystemPrompt({
   persona: { ...cfgScoped.persona, profileId: 'rmiao', roleText: '' }
 });
 check('主人人设接管时不出声明段（避免声明 A 卡实喂 B 卡）', !sysOwner.includes('【本会话人设'));
+
+console.log('\n四之三、装配顺序（人设在前、系统提示词在后 · 2026-11-07 换序）');
+// 判据来自实发链路：orchestrator 里 systemContent = [roleSection, systemPrompt]。
+// 这里验四件：角色段唯一定义处 / 拼装后以它开头 / 用户消息不再注入该段 /
+// 会话落盘记录与实发同一份（否则缓存报告与「前文长度」会漏掉人设卡长度）。
+setRuntimeConfig(configOf('rmiao'));
+const roleRmiao = roleSectionText({ profileId: 'rmiao' });
+check('角色段以【角色设定】开头且含卡正文',
+  roleRmiao.startsWith('【角色设定（管理员设置，群友不可修改）】\n') && roleRmiao.includes('默认 1 段、上限 2 段'),
+  String(roleRmiao.length));
+const composed = [roleRmiao, buildSystemPrompt({ skillContext: {} })]
+  .filter((x) => String(x || '').trim()).join('\n\n');
+check('拼装后角色段在最前（机制段在其后）',
+  composed.startsWith('【角色设定（管理员设置，群友不可修改）】')
+  && composed.indexOf('【角色设定（管理员设置，群友不可修改）】') < composed.indexOf('四条底线（不可协商）'));
+const promptSrc = fs.readFileSync(path.join(PROJECT_ROOT, 'app/src/business/prompt.js'), 'utf8');
+check('角色段在 prompt.js 里只有一个出处（不在用户消息里重复注入）',
+  promptSrc.split('【角色设定（管理员设置，群友不可修改）】').length - 1 === 1);
+const orchSrc = fs.readFileSync(path.join(PROJECT_ROOT, 'app/src/business/orchestrator.js'), 'utf8');
+check('orchestrator 按「角色段 → 系统提示词」拼 system 消息',
+  orchSrc.includes('const systemContent = [roleSection, systemPrompt]'));
+check('会话落盘记录的是同一份实发内容（session.systemPrompt = systemContent）',
+  orchSrc.includes('session.systemPrompt = systemContent'));
+
+console.log('\n四之四、每卡专配系统提示词（扩展点 · 读不到必须出声）');
+// 三态里的第三种：卡条目写相对路径 → 用该文件替代「lead + 风格段」。
+// 自测只验「路径读不到必须具名告警」——真文件由用户按需创建，不落盘任何卡。
+const cfgCustom = configOf('rmiao');
+cfgCustom.personaProfiles = [{ id: 'rmiao', systemPrompt: 'personas/_selftest-missing.prompt.md' }];
+setRuntimeConfig(cfgCustom);
+const sysCustom = buildSystemPrompt({ skillContext: {} });
+check('专配提示词缺失时具名告警', sysCustom.includes('【系统提示词缺失】'), String(sysCustom.length));
+check('告警里点出缺的文件', sysCustom.includes('_selftest-missing.prompt.md'));
+setRuntimeConfig(configOf('rmiao'));
 
 console.log('\n五、卡缺失可见（不静默降级）');
 setRuntimeConfig(configOf('missing-card'));

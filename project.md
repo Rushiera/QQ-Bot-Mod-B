@@ -106,3 +106,17 @@ QQBotB/
 ├── _unpack/                   拆包产物（386MB · 可弃）
 └── tools/                     拆包工具（7zip-bin）+ 入口生成器（`entry.cmd` = 单体启动体）+ QQ Agent 配置 / 补丁 / 自测 / 迁移脚本
 ```
+
+---
+
+## [继续会话指令]
+
+上工 `QQBotB`，按 `todo.md` §〇-F 待办优先序执行：第 2 项重启业务面（B31 + v1.19–v1.22 四轮代码的唯一生效前置）→ 第 6 项人设卡验收 → 第 7 项 @ 轮档位段验收。
+
+**已拍板：** ① 点名轮（@ / 拍一拍）不注入【发言档位】——`levelLine` 首行短路，冰封档同样（v1.22 · Rushiera 2026-11-07）；② 业务面重启 = 人的动作，Rushiera 执行，猫不擅自重启。
+
+**硬约束：** 不动发言配额（5 条/120 秒）· 不动节拍表（240/120/60）· 不动 `levelHint()` 签名（不参数化）· `patch-qqagent-level.mjs` 已退役（R2 吸收），不做补丁脚本同步。
+
+**改后判据：** `node tools/check-syntax.mjs` → 74/74 · `node tools/verify-qqagent-level.mjs` → 80/80 · 重启后 @ 轮的会话 JSON user 段末尾无【发言档位】段、回复经 `send_message` 发出。
+
+**排除面：** 「@ 轮无 `send_*` 调用落具名日志」未拍板（候选处置 → `design-qqbotb_log.md` §九十九 E），不自行实现。

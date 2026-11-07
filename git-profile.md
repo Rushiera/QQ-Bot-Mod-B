@@ -52,13 +52,14 @@
 
 | 字段 | 值 |
 |:--|:--|
-| 上次同步时间 | 2026-11-07 18:09 |
-| 上次同步 commit | `36bd00e`（v1.22 点名轮不注入发言档位提示 · 7 文件 +327/−115 · 含 v1.21 人设卡代码面补提交） |
-| 远程状态 | 与 origin 同步（`4f2f87f..36bd00e main -> main`） |
+| 上次同步时间 | 2026-11-07 19:45 |
+| 上次同步 commit | `48a745c`（v1.24 人设压群记忆 + 日语人称按卡 · 16 文件 +532/−45） |
+| 远程状态 | 与 origin 同步（`b835934..48a745c main -> main`） |
 
 ## 五、项目特有规则
 
 - commit message 格式：`vX.Y: 变更摘要`——版本号取 `project.md` 文件头 / `CHANGELOG.md` 最新行
+- 🔴 **push 要走代理**：直连 github.com 超时（2026-11-07 实测 21 s 后 `Could not connect`）；命令带 `-c http.proxy=http://127.0.0.1:7897` 即通。代理未开时如实报失败，不重试同路径
 - `runtime/` 与 `_unpack/` 不入库——重装后按 `tools/apply-*.mjs` 补丁链复现
 - 入口启动器是 `tools/apply-entry.mjs` 的产物——**改入口改生成器**，不手改产物（.bat / .vbs 受 ASCII + CRLF 硬约束）
 - 本档案在仓库内（workspace 独立立项）——随本仓库 push

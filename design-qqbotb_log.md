@@ -4500,3 +4500,41 @@ user#1  = 【角色设定】卡全文 → 表情包 → 引导说明 → 记忆 
 - 芳乃卡整份注入 = **24,832 字符 ≈ 1.4 万 token / 轮**（中文约 1.7 字/token）。这是「整卡不裁剪」的直接代价；卡自带 §十六 精简版（约 4K 字）可作备选口径，是否切换待 Rushiera 定。
 - 旧 `_unpack/data/config.json` 的 `persona.roleText`（R喵旧全文，约 5.9K）不再生效（卡优先），仍留在配置里作回落兜底——是否清空待重启后由接口处置。
 - 遗留：人设库目前只有两张内置卡；追加卡要改 `personaProfiles`（可直接写配置文件 / 后续给界面加导入按钮）。角色卡正文的编辑面刻意不做（芳乃卡是外部原件，改动只走文件）。
+
+---
+
+## 九十九、@ 轮不注入发言档位提示（2026-11-07 · v1.22）
+
+### A · 现场取证（保守档 @ 不回）
+
+| 面 | 实况 |
+|:--|:--|
+| 样本 | `_unpack/data/sessions/mw66bmqd-4f18cb20.json`（群 1135074533 · 2026-11-07 17:01） |
+| 进场 | `atMeImmediate=true`，@ 走 `orchestrator.js:278-301` 的 immediate 路径；档位概率闸 `rollParticipation` 只在 `browseTick`（`:2232-2256`），不作用于 @ |
+| 提示词 | `:251` 的 user 段末尾两段相邻：`【群节奏】这一拍里有 @ 你 / 拍了拍你的消息 —— 那是点名找你，要回应。` 紧跟 `【发言档位】本群是保守档（2/5，入场率 25%）…看完自己决定接不接，不用每条都接。` |
+| 模型行为 | `finishReason: "回了个问号，等对方说明来意"` · `activity: "正在调用 finish…"`——把正文里的「?」当成已回复，未调 `send_message` |
+| 结论 | 两条独立缺陷：① `levelHint` 无 @ 豁免，档位句话在 @ 轮仍印「不用每条都接」，且排在「要回应」之后；② 正文 ≠ 发送（`finish` 描述已写明，模型仍错位），用户侧表现为静默 |
+
+### B · 改动（`app/src/business/orchestrator.js`）
+
+| 位置 | 内容 |
+|:--|:--|
+| `:1150-1157` | 抽 `atMeRound`（`m.atMe === true` 或 `m.isPoke && /拍了拍\s*我/`），`browseHint(chatKey, { atMe: atMeRound })` 改吃该常量 |
+| `:1163-1170` | `levelLine` 首行 `if (atMeRound) return ''`——点名轮连 `levelHint()` 都不调；冰封档的 organizeOnly 文案同样不出现 |
+
+`engage-level.js` 的 `levelHint()` 签名与语义未动（无新增参数）；`patch-qqagent-level.mjs` 已退役（R2 吸收，默认 RETIRED exit 0），其 target 是 `_unpack/resources/app` 旧版，无需同步。
+
+### C · 验证
+
+| 项 | 命令 | 结果 |
+|:--|:--|:--|
+| 语法 | `node tools/check-syntax.mjs` | `SYNTAX 74/74 OK` |
+| 档位自测 | `node tools/verify-qqagent-level.mjs` | `80/80` 全通过（含 [7] 源码在位：`? '' : levelHint(chatKey)` 仍命中、冰封/平静互斥仍成立） |
+
+### D · 未闭合（生效待重启）
+
+`app/src/business` 只在业务面进程启动时加载——**代码已落盘、运行态仍是旧逻辑**。重启 `启动QQBotB.vbs` 后按 todo §〇-F 第 7 项验两条：user 段末尾无【发言档位】· 回复真经 `send_message` 发出。
+
+### E · 遗留（独立缺陷，未处置）
+
+「正文 ≠ 发送」的错位独立存在：模型把正文当成已回复后 `finish`，用户侧静默。可选处置（未拍板）= @ 轮结束且本轮无任何 `send_*` 时落一条具名日志（`@ 轮未发送`），把静默变成可数的数。

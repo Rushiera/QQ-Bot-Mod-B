@@ -253,6 +253,88 @@ function resolvePromptMode(persona) {
   return 'full';
 }
 
+/**
+ * 系统提示的开场句（lead）——声明「人格以角色卡为准」。
+ *
+ * 抽成函数是为了「改系统提示词」窗口能拿到与运行时同一份文本（`standardPromptText`），
+ * 不在界面侧重抄一遍。
+ *
+ * @param {object} cfg 生效的人设配置
+ * @returns {string} lead 文本
+ */
+function leadText(cfg) {
+  return `你是「${cfg?.botName ?? ''}」。你的人格、语体与行为准则在【角色设定】段的角色卡里——那份优先于本提示词里任何与说话风格、语气、节奏有关的说法。本提示词只管与人格无关的部分：安全底线、工具协议、群聊纪律、机制与索引。`;
+}
+
+/**
+ * 「人格 / 风格类」准则段——**系统提示词里可被 override 替换掉的那部分**。
+ *
+ * 不含安全规则、工具协议、机制段：那三段无论怎么配都恒追加，既不进替换面，
+ * 也不进界面「载入当前」的初值（抄进去会重复注入）。
+ *
+ * @param {object} cfg 生效的人设配置
+ * @param {'full'|'lean'} promptMode 系统提示模式
+ * @returns {string[]} 段数组（含分隔空行，与运行时拼装同源）
+ */
+function styleParts(cfg, promptMode) {
+  if (promptMode === 'lean') {
+    return [
+      speakOrNot(cfg.participation),
+      '',
+      rapportRules(),
+      '',
+      notAQueue(),
+      '',
+      // [qqagent-chatvoice-patch:prompt-lean]
+      chatVoice(),
+      '',
+      memoryRules(),
+      '',
+      humanRhythm()
+    ];
+  }
+  return [
+    speakOrNot(cfg.participation),
+    '',
+    rapportRules(),
+    '',
+    notAQueue(),
+    '',
+    humanRhythm(),
+    '',
+    // [qqagent-chatvoice-patch:prompt-full]
+    chatVoice(),
+    '',
+    notModerator(),
+    '',
+    quoteAndAt(),
+    '',
+    memoryRules(),
+    '',
+    stickerRules(),
+    '',
+    qqSceneRules(),
+    '',
+    reportBan()
+  ];
+}
+
+/**
+ * 当前生效的「标准提示词」正文（= 系统提示里会被 override 替换掉的那一段）。
+ *
+ * 供人设页「改系统提示词」窗口的「载入当前」：把现在跑的这段抄进编辑框当基底改，
+ * 不必从零写。**不含**安全规则 / 工具协议 / 机制段——那三段恒追加。
+ *
+ * @param {object} [persona] 生效的人设（缺省 = 全局 persona）
+ * @returns {string} 文本（系统提示整段关闭时为空串）
+ */
+export function standardPromptText(persona) {
+  const promptMode = resolvePromptMode(getConfig().persona);
+  if (promptMode === 'off') return '';
+  const cfg = persona ?? getConfig().persona;
+  return [leadText(cfg), '', ...styleParts(cfg, promptMode)].join('\n');
+}
+
 /** 组装系统提示。 */
 export function buildSystemPrompt({ persona, skillContext, extraSections = [] } = {}) {
   // [qqagent-nosys-patch:disable] 系统提示段总开关：persona.systemPromptEnabled=false 时
@@ -320,62 +402,14 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [] } 
 
   // lead 明确"人格以角色卡为准"——标准提示词里任何与说话风格有关的条目（简短、群友语感）
   // 都在卡之下：换成人设卡之后，卡说了算（2026-11-07 角色卡分离）。
-  const lead = `你是「${cfg.botName}」。你的人格、语体与行为准则在【角色设定】段的角色卡里——那份优先于本提示词里任何与说话风格、语气、节奏有关的说法。本提示词只管与人格无关的部分：安全底线、工具协议、群聊纪律、机制与索引。`;
+  const lead = leadText(cfg);
   // lean 模式（[qqagent-talkstyle-patch:prompt-lean]）：只留决定"开不开口"的几段 ——
   // 安全 / 工具协议 / 群管家 / 引用 / 表情 / 场景 / 举报等段全省（≈1.2KB/轮）。
   // lean 模式（[qqagent-talkstyle-patch:prompt-lean]）+ 记忆引导（原 lean 段漏掉记忆，
   // 模型看不到"有记忆工具"这件事）——[qqagent-memory-patch:no-throttle-lean-memory]
   const parts = promptMode === 'lean'
-    ? [
-        lead,
-        '',
-        speakOrNot(cfg.participation),
-        '',
-        rapportRules(),
-        '',
-        notAQueue(),
-        '',
-        // [qqagent-chatvoice-patch:prompt-lean]
-        chatVoice(),
-        '',
-        memoryRules(),
-        '',
-        humanRhythm(),
-        '',
-        mechanismSection
-      ]
-    : [
-        lead,
-        '',
-        securityRules(),
-        '',
-        toolProtocol(),
-        '',
-        speakOrNot(cfg.participation),
-        '',
-        rapportRules(),
-        '',
-        notAQueue(),
-        '',
-        humanRhythm(),
-        '',
-        // [qqagent-chatvoice-patch:prompt-full]
-        chatVoice(),
-        '',
-        notModerator(),
-        '',
-        quoteAndAt(),
-        '',
-        memoryRules(),
-        '',
-        stickerRules(),
-        '',
-        qqSceneRules(),
-        '',
-        reportBan(),
-        '',
-        mechanismSection
-      ];
+    ? [lead, '', ...styleParts(cfg, 'lean'), '', mechanismSection]
+    : [lead, '', securityRules(), '', toolProtocol(), '', ...styleParts(cfg, 'full'), '', mechanismSection];
 
   if (cardWarn) parts.push('', cardWarn);
 

@@ -435,6 +435,26 @@ export function createRoutes(deps) {
         }
       }
     },
+    {
+      // 写「系统提示词覆盖」（人设页「改系统提示词」窗口的保存）。
+      // 语义与运行时一致（prompt.js 的 override 分支）：非空 = **整体替换**标准提示词里的
+      // 人格 / 风格类准则；安全规则 / 工具协议 / 共用机制段恒追加，覆盖不到。
+      // 空串 = 恢复内置标准提示词。
+      method: 'POST', pattern: '/api/persona/system-prompt',
+      handler: async ({ req, res, json }) => {
+        const body = await bodyOf(req);
+        const text = String(body?.text ?? '');
+        // 上限按「够写一大段准则、又不至于把配置撑爆」定：现标准提示词约 5K 字符
+        if (text.length > 20000) {
+          return json(res, 400, {
+            ok: false, code: 'PROMPT_TOO_LONG',
+            error: `系统提示词覆盖超上限：${text.length} > 20000 字`
+          });
+        }
+        updateConfig({ persona: { systemPromptOverride: text } });
+        return json(res, 200, { ok: true, chars: text.length, active: text.trim().length > 0 });
+      }
+    },
 
     // ── 多提供商模型目录 ─────────────────────────────────────────────
     {
@@ -825,7 +845,7 @@ export function createRoutes(deps) {
         // 与运行时同一条合并函数（不另写一份，避免预览与实发漂移）。
         // 用 effective（可能带未落盘 overrides）走合并——用户刚点的开关立刻反映。
         const persona = personaForChatOf(effective, chatKey);
-        const { buildSystemPrompt, personaCardOf } = await import('./prompt.js');
+        const { buildSystemPrompt, personaCardOf, standardPromptText } = await import('./prompt.js');
         const card = personaCardOf(persona);
         const { buildToolDefs } = await import('./tools.js');
         const { getToolAvailability } = await import('./tool-registry.js');
@@ -849,7 +869,10 @@ export function createRoutes(deps) {
             cardMissing: card.missing === true,
             participation: persona.participation || '',
             customRules: persona.customRules || '',
-            systemPromptOverride: persona.systemPromptOverride || ''
+            systemPromptOverride: persona.systemPromptOverride || '',
+            // 「改系统提示词」窗口的「载入当前」初值——与运行时同源的风格段
+            // （不含安全规则 / 工具协议 / 机制段这三段恒追加的不可覆盖面）
+            standardPrompt: standardPromptText(persona)
           },
           systemPrompt: buildSystemPrompt({ skillContext, persona }),
           tools

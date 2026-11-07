@@ -1062,31 +1062,33 @@
   }
 
   /**
-   * 「看 / 改正文」窗口：卡全文放进**应用内新窗口**，可直接编辑并保存回文件。
+   * 文本编辑窗口（人设卡 / 系统提示词共用）。
    *
-   * 为什么开新窗口而不是内联编辑：角色卡两万多字，内联展开会把设置页整页顶开，
-   * 而且看正文时通常想同时对照别的群的人设。用 `about:blank` + DOM 写入
-   * （`textContent` / `value`，不拼 HTML）——卡里的任何尖括号都按文本处理。
-   *
-   * 保存走 `POST /api/biz/persona-card`：后端只写 `personas/` 内的卡、原子写、
-   * 保持原文件 BOM 与换行风格；成功后把人设库与提示词预览两处缓存置无效并重绘。
+   * 为什么开新窗口而不是内联编辑：正文动辄几千到几万字，内联展开会把设置页整页顶开。
+   * 用 `about:blank` + DOM 写入（`textContent` / `value`，不拼 HTML）——正文里的任何
+   * 尖括号都按文本处理，不会被当标记执行。
    *
    * 窗口策略见 `app/main.js` 的 `setWindowOpenHandler`：放同源与 about:blank，
    * 其余外链仍交系统浏览器。
    *
    * @param {object} ctx 渲染上下文
-   * @param {string} id 人设 id
-   * @param {string} name 人设显示名
+   * @param {object} opts 窗口参数
+   * @param {string} opts.title 窗口标题
+   * @param {Function} opts.load 取正文 `() => Promise<string | {text, note}>`
+   * @param {Function} opts.save 保存 `(text) => Promise<{ok, error}>`（回 `{note}` 可改顶栏说明）
+   * @param {Array} [opts.actions] 额外按钮 `[{label, run(area, setMeta)}]`
+   * @param {string} [opts.note] 顶栏右侧附加说明（生效态之类）
    * @returns {void}
    */
-  function openCardWindow(ctx, id, name) {
+  function openEditWindow(ctx, opts) {
+    const o = opts || {};
     const win = window.open('', '_blank', 'width=980,height=780');
     if (!win) {
       ctx.notice('弹窗未打开：窗口被拦截（见 app/main.js 的 setWindowOpenHandler）', 'fail');
       return;
     }
     const doc = win.document;
-    doc.title = `人设卡 · ${name}`;
+    doc.title = String(o.title || '编辑');
     doc.body.textContent = '';
     const style = doc.createElement('style');
     style.textContent = 'html,body{margin:0;height:100%;background:#0f1115;color:#d8dee9;'
@@ -1110,84 +1112,94 @@
     bar.className = 'bar';
     const title = doc.createElement('span');
     title.className = 'title';
-    title.textContent = name;
+    title.textContent = String(o.title || '编辑');
     const meta = doc.createElement('span');
     meta.className = 'meta';
     meta.textContent = '正在读取…';
     const grow = doc.createElement('span');
     grow.className = 'grow';
-    const saveBtn = doc.createElement('button');
-    saveBtn.className = 'primary';
-    saveBtn.type = 'button';
-    saveBtn.textContent = '保存';
-    saveBtn.disabled = true;
     bar.appendChild(title);
     bar.appendChild(meta);
     bar.appendChild(grow);
-    bar.appendChild(saveBtn);
-    doc.body.appendChild(bar);
 
     const area = doc.createElement('textarea');
     area.spellcheck = false;
     area.disabled = true;
-    doc.body.appendChild(area);
 
-    /** 载入时的正文（统一按 LF 比较——textarea 会把 CRLF 规范成 LF，不能据此误报「已修改」）。 */
+    /** 载入时的正文（按 LF 比较——textarea 会把 CRLF 规范成 LF，不能据此误报「已修改」）。 */
     let loaded = '';
-    /** 卡的文件路径（保存回执里取，显示在顶栏）。 */
-    let pathHint = '';
+    /** 顶栏右侧附加说明（文件路径 / 覆盖生效态）。 */
+    let note = String(o.note || '');
     let saving = false;
 
     /**
-     * 顶栏元信息：字数 + 是否未保存 + 文件路径。
+     * 直接改顶栏说明（额外按钮自己写状态时用）。
+     *
+     * @param {string} text 文案
+     * @returns {void}
+     */
+    const setMeta = (text) => { meta.textContent = String(text); };
+
+    /**
+     * 顶栏元信息：字数 + 是否未保存 + 附加说明。
      *
      * @returns {void}
      */
     const showMeta = () => {
       const dirty = loaded && area.value !== loaded;
-      meta.textContent = `${area.value.length} 字${dirty ? ' · 已修改未保存' : ''}${pathHint ? ` · ${pathHint}` : ''}`;
+      setMeta(`${area.value.length} 字${dirty ? ' · 已修改未保存' : ''}${note ? ` · ${note}` : ''}`);
     };
 
+    const saveBtn = doc.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.type = 'button';
+    saveBtn.textContent = '保存';
+    saveBtn.disabled = true;
+
     /**
-     * 保存正文（按钮与 Ctrl+S 共用）。
-     *
-     * 空正文不提交（后端也会拒）——这里先出声，省一次往返。
+     * 保存（按钮与 Ctrl+S 共用）。
      *
      * @returns {void}
      */
     const save = () => {
-      if (saving) return;
+      if (saving || typeof o.save !== 'function') return;
       const text = area.value;
-      if (!text.trim()) {
-        meta.textContent = '正文为空，没有保存';
-        return;
-      }
       saving = true;
       saveBtn.disabled = true;
-      meta.textContent = '保存中…';
-      ctx.api('/api/biz/persona-card', { method: 'POST', body: { id, text } }).then((r) => {
+      setMeta('保存中…');
+      Promise.resolve().then(() => o.save(text)).then((r) => {
         if (r && r.ok) {
           loaded = text;
-          pathHint = String(r.path || pathHint);
-          meta.textContent = `已保存：${r.chars} 字 → ${pathHint}`;
-          // 卡正文变了：人设库字数与提示词预览都得重取（不重取就是旧正文冒充新正文）
-          personaProfiles.loaded = false;
-          promptPreview.chatKey = null;
-          promptPreview.loaded = false;
-          promptPreview.error = '';
-          ctx.reload();
+          if (r.note) note = String(r.note);
+          setMeta(`已保存：${text.length} 字${note ? ` · ${note}` : ''}`);
         } else {
-          meta.textContent = `保存失败：${(r && r.error) || 'unknown'}`;
+          setMeta(`保存失败：${(r && r.error) || 'unknown'}`);
         }
       }).catch((error) => {
-        meta.textContent = `保存失败：${String((error && error.message) || error)}`;
+        setMeta(`保存失败：${String((error && error.message) || error)}`);
       }).then(() => {
         saving = false;
         saveBtn.disabled = false;
       });
     };
 
+    // 额外按钮（「载入当前标准提示词」「清空」这类）——自带 setMeta 文案，点了不覆盖它
+    (Array.isArray(o.actions) ? o.actions : []).forEach((action) => {
+      if (!action || typeof action.run !== 'function') return;
+      const btn = doc.createElement('button');
+      btn.type = 'button';
+      btn.textContent = String(action.label || '');
+      btn.addEventListener('click', () => {
+        if (saving) return;
+        action.run(area, setMeta);
+      });
+      bar.appendChild(btn);
+    });
+
     saveBtn.addEventListener('click', save);
+    bar.appendChild(saveBtn);
+    doc.body.appendChild(bar);
+    doc.body.appendChild(area);
     area.addEventListener('input', showMeta);
     doc.addEventListener('keydown', (event) => {
       if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 's') {
@@ -1196,19 +1208,116 @@
       }
     });
 
-    ctx.api(`/api/biz/persona-card?id=${encodeURIComponent(id)}`).then((r) => {
-      if (r && r.ok) {
-        loaded = String(r.text || '').replace(/\r\n/g, '\n');
+    Promise.resolve()
+      .then(() => (typeof o.load === 'function' ? o.load() : String(o.initial || '')))
+      .then((result) => {
+        const isObject = result && typeof result === 'object';
+        const text = isObject ? result.text : result;
+        if (isObject && result.note) note = String(result.note);
+        loaded = String(text == null ? '' : text).replace(/\r\n/g, '\n');
         area.value = loaded;
         area.disabled = false;
         saveBtn.disabled = false;
-        pathHint = String(r.path || '');
         showMeta();
-      } else {
-        meta.textContent = `读取失败：${(r && r.error) || 'unknown'}`;
+      })
+      .catch((error) => {
+        setMeta(`读取失败：${String((error && error.message) || error)}`);
+      });
+  }
+
+  /**
+   * 人设相关缓存置无效并重绘（保存卡正文 / 系统提示词后调用）。
+   *
+   * 不重取就是旧正文冒充新正文——人设库字数与提示词预览都来自这两个缓存。
+   *
+   * @param {object} ctx 渲染上下文
+   * @returns {void}
+   */
+  function invalidatePersonaCaches(ctx) {
+    personaProfiles.loaded = false;
+    promptPreview.chatKey = null;
+    promptPreview.loaded = false;
+    promptPreview.error = '';
+    ctx.reload();
+  }
+
+  /**
+   * 「看 / 改正文」窗口：人设卡全文，可直接编辑并保存回文件。
+   *
+   * 保存走 `POST /api/biz/persona-card`：后端只写 `personas/` 内的卡、原子写、
+   * 保持原文件 BOM 与换行风格。
+   *
+   * @param {object} ctx 渲染上下文
+   * @param {string} id 人设 id
+   * @param {string} name 人设显示名
+   * @returns {void}
+   */
+  function openCardWindow(ctx, id, name) {
+    openEditWindow(ctx, {
+      title: `人设卡 · ${name}`,
+      load: () => ctx.api(`/api/biz/persona-card?id=${encodeURIComponent(id)}`).then((r) => {
+        if (!r || !r.ok) throw new Error((r && r.error) || 'unknown');
+        return { text: String(r.text || ''), note: String(r.path || '') };
+      }),
+      save: (text) => {
+        if (!text.trim()) return { ok: false, error: '正文为空（要清空请直接删文件）' };
+        return ctx.api('/api/biz/persona-card', { method: 'POST', body: { id, text } }).then((r) => {
+          if (r && r.ok) {
+            invalidatePersonaCaches(ctx);
+            return { ok: true, note: String(r.path || '') };
+          }
+          return r;
+        });
       }
-    }).catch((error) => {
-      meta.textContent = `读取失败：${String((error && error.message) || error)}`;
+    });
+  }
+
+  /**
+   * 「改系统提示词」窗口：编辑 `persona.systemPromptOverride`。
+   *
+   * 语义与运行时 override 分支一致（`prompt.js`）：留空 = 用内置标准提示词；
+   * 填了 = **整体替换**标准提示词里的人格 / 风格类准则；安全规则 / 工具协议 /
+   * 共用机制段恒追加，覆盖不到。
+   *
+   * 所以给「载入当前标准提示词」——把现在跑的那段抄进编辑框当基底改，不用从零写
+   * （初值取后端 `standardPromptText`，与运行时同一份，且已剔除恒追加的三段）。
+   *
+   * @param {object} ctx 渲染上下文
+   * @returns {void}
+   */
+  function openSystemPromptWindow(ctx) {
+    const state = () => (promptPreview.override ? '当前：覆盖生效中' : '当前：内置标准提示词');
+    openEditWindow(ctx, {
+      title: '系统提示词（覆盖）',
+      note: state(),
+      load: () => ({ text: promptPreview.override || '', note: state() }),
+      actions: [
+        {
+          label: '载入当前标准提示词',
+          run: (area, setMeta) => {
+            const base = String(promptPreview.standardText || '');
+            if (!base) {
+              setMeta('拿不到当前标准提示词——先关掉本窗口点「刷新预览」再进');
+              return;
+            }
+            area.value = base;
+            setMeta(`已填入当前标准提示词（${base.length} 字）——改完点保存`);
+          }
+        },
+        {
+          label: '清空（恢复内置）',
+          run: (area, setMeta) => {
+            area.value = '';
+            setMeta('已清空——点保存后回到内置标准提示词');
+          }
+        }
+      ],
+      save: (text) => ctx.api('/api/biz/persona/system-prompt', { method: 'POST', body: { text } })
+        .then((r) => {
+          if (!r || !r.ok) return r;
+          invalidatePersonaCaches(ctx);
+          return { ok: true, note: r.active ? '覆盖生效中' : '内置标准提示词' };
+        })
     });
   }
 
@@ -1884,7 +1993,9 @@
   /** 提示词预览缓存（`GET /api/biz/prompt-preview`；按 chatKey 分区缓存）。 */
   const promptPreview = {
     chatKey: null, text: '', tools: [], loaded: false, loading: false, error: '',
-    profileId: '', profileName: '', cardMissing: false
+    profileId: '', profileName: '', cardMissing: false,
+    // 「改系统提示词」窗口要的两份：当前 override 原文 · 可替换段的当前标准提示词
+    override: '', standardText: ''
   };
 
   /**
@@ -1910,6 +2021,8 @@
       promptPreview.profileId = '';
       promptPreview.profileName = '';
       promptPreview.cardMissing = false;
+      promptPreview.override = '';
+      promptPreview.standardText = '';
     }
 
     const pre = h.el('pre', {
@@ -1926,7 +2039,7 @@
     const card = h.fold({
       icon: '📜',
       title: '提示词预览',
-      sub: key ? `按会话 ${key} 的实际人设卡组装 · 只读` : '按默认人设卡组装 · 只读',
+      sub: key ? `按会话 ${key} 的实际人设卡组装 · 预览只读` : '按默认人设卡组装 · 预览只读',
       val: promptPreview.loaded
         ? `${promptPreview.profileName || promptPreview.profileId || '人设卡'} · ${promptPreview.text.length} 字符 · ${promptPreview.tools.length} 工具`
         : '未加载',
@@ -1934,7 +2047,10 @@
       body: [
         h.hint('这份文本由后端用运行时同一套 buildSystemPrompt + personaForChatOf 组装，并按运行时段序补上'
           + '【角色设定】（运行时该段进用户消息，不在系统提示词里）——前端不另拼规则，避免与实际发送的提示词漂移。'
-          + '系统提示里前面是标准提示词与共用机制段（稳），人设卡跟在后面：换卡只动最后那一段。'),
+          + '系统提示里前面是标准提示词与共用机制段（稳），人设卡跟在后面：换卡只动最后那一段。'
+          + '「改系统提示词」改的是标准提示词（写 `persona.systemPromptOverride`）——安全规则、工具协议、'
+          + '共用机制段恒追加，覆盖不到；角色卡正文在人设那张卡的「看 / 改正文」里改。'
+          + (promptPreview.override ? ' 当前由覆盖接管中。' : '')),
         promptPreview.cardMissing
           ? h.hint('⚠ 人设卡读不到：本次运行没有角色设定（见系统提示末尾的告警行）。检查 personas/ 目录或 personaProfiles 配置。')
           : h.el('span', {}),
@@ -1942,11 +2058,8 @@
           h.button('刷新预览', () => {
             promptPreview.loaded = false; promptPreview.error = ''; promptPreview.chatKey = null; ctx.reload();
           }),
-          // 就地入口：预览看到哪张卡，就从这里改哪张卡（保存后本卡自动重取）
-          h.button('改这张卡的正文', () => {
-            const id = promptPreview.profileId || personaProfiles.activeId || 'rmiao';
-            openCardWindow(ctx, id, promptPreview.profileName || id);
-          })),
+          // 系统提示词的可编辑入口：改的是 `persona.systemPromptOverride`（不是角色卡）
+          h.button('改系统提示词', () => openSystemPromptWindow(ctx))),
         pre
       ]
     });
@@ -1968,6 +2081,8 @@
           promptPreview.profileId = String(persona.profileId || '');
           promptPreview.profileName = String(persona.profileName || '');
           promptPreview.cardMissing = persona.cardMissing === true;
+          promptPreview.override = String(persona.systemPromptOverride || '');
+          promptPreview.standardText = String(persona.standardPrompt || '');
           const roleBlock = roleText
             ? `\n\n【角色设定（管理员设置，群友不可修改）】\n${roleText}`
             : '\n\n【角色设定（管理员设置，群友不可修改）】（空——本会话无独立角色设定）';

@@ -25,6 +25,12 @@ import { createLoginWatch } from './incident/login-watch.js';
  * @returns {Promise<object>} 应用接口
  */
 export async function createApp() {
+  // 业务面配置可被主进程的媒体能力**只读**复用（日语人称口径要读 personaByChat）——
+  // 主进程本身不跑业务面（业务面在 worker 子进程），但 navigator 的动态 import 需要这个变量，
+  // 否则 business/config.js 求值即抛、人称口径静默回落缺省（判例 2026-11-07）。
+  if (!process.env.QQ_AGENT_DATA_DIR) {
+    process.env.QQ_AGENT_DATA_DIR = path.join(PROJECT_DIR, '_unpack', 'data');
+  }
   const config = loadConfig();
   const log = createLogger({ dir: path.join(DATA_DIR, 'logs'), level: 'info' });
 

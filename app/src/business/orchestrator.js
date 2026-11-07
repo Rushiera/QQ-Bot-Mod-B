@@ -1075,6 +1075,7 @@ export class Orchestrator {
     // 换了会和 @ 判定对不上（personaForChat 在结构上就不允许覆盖这两个字段）。
     const systemPrompt = buildSystemPrompt({
       skillContext,
+      chatKey,
       persona: ownerPersona || personaForChat(chatKey),
       extraSections: ownerRules
         ? [{ id: 'owner-rules-run', title: '', priority: 72, content: ownerRules }]

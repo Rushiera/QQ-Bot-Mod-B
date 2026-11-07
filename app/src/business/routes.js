@@ -874,7 +874,7 @@ export function createRoutes(deps) {
             // （不含安全规则 / 工具协议 / 机制段这三段恒追加的不可覆盖面）
             standardPrompt: standardPromptText(persona)
           },
-          systemPrompt: buildSystemPrompt({ skillContext, persona }),
+          systemPrompt: buildSystemPrompt({ skillContext, persona, chatKey }),
           tools
         });
       }

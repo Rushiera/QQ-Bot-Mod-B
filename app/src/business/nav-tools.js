@@ -21,6 +21,9 @@
 import { registerTool } from './tool-registry.js';
 // 记忆回溯点（收工轮取材回溯到领航员开启那一刻）——[qqagent-navigator-patch:memory-reach-import]
 import { setMemoryFloor } from './session-state.js';
+// 日语人称口径（语音台词用）——按本群生效的人设卡取，随请求体交给单体
+import { personaForChat } from './config.js';
+import { jpPronounsOf, DEFAULT_JP_PRONOUNS } from './persona-cards.js';
 
 /** 自研单体的界面 / API 端口。 */
 const ENDPOINT = 'http://127.0.0.1:3280';
@@ -680,9 +683,14 @@ export function registerNavTools() {
       const chat = groupChatOf(ctx);
       if (!chat) return err('语音只在群里用——当前会话没有可用的群号。');
       try {
+        // 人称口径随请求带走（「念一下」这条也是语音，口径不能靠单体猜）
+        let pronouns = DEFAULT_JP_PRONOUNS;
+        try {
+          pronouns = jpPronounsOf(personaForChat(`group:${chat}`).profileId);
+        } catch { /* 口径取不到就让单体按缺省念，别让整条语音失败 */ }
         const data = await call('/api/nav/tts', {
           method: 'POST',
-          body: { by: 'qq', chat, text, caption: args?.caption ?? '' }
+          body: { by: 'qq', chat, text, caption: args?.caption ?? '', pronouns }
         }, 120000);
         if (data?.ok !== true) return err(`语音生成未受理：${data?.error ?? JSON.stringify(data).slice(0, 200)}`);
         return ok(`已提交语音合成（中文已自动翻成日语）——语音做好后系统自动发回本群，你不用回话。`);

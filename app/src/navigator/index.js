@@ -18,6 +18,11 @@ import { createIntentService } from './intent.js';
 import { createIngress } from './ingress.js';
 import { createPersonaService } from './persona.js';
 import { PROJECT_DIR } from '../config.js';
+// 日语译文人称口径按「该群当前生效的人设卡」取（2026-11-07）——芳乃卡要 わたくし / そなた，
+// R喵 卡要 わたし / きみ。口径数据在 persona-cards.js（零依赖，可静态 import）。
+// 🔴 business/config.js 只能**动态 import**：它在模块求值期就断言 QQ_AGENT_DATA_DIR，
+//    静态 import 会在单体启动时（环境变量注入之前）把整个 app 拉崩（2026-11-07 实测）。
+import { jpPronounsOf } from '../business/persona-cards.js';
 
 /** 空闲巡检间隔（毫秒）。 */
 const WATCH_INTERVAL_MS = 60 * 1000;
@@ -262,8 +267,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   async function translateForMedia(text, target, options = {}) {
     if (translateConf.enabled === false) return String(text ?? '');
     const jsonMode = options?.json === true;
+    // 日语人称口径按当前人设卡（芳乃 → わたくし / そなた；默认 → わたし / きみ）——
+    // 与 normalizeJapanesePronouns 的兜底同口径，两边一起看才不串味。
+    const jpFirst = String(options?.pronouns?.first || '').trim() || 'わたし';
+    const jpSecond = String(options?.pronouns?.second || '').trim() || 'きみ';
     const prompt = target === 'ja'
-      ? '把下面的文本翻译成自然、口语化的日语。只输出日语译文，不要解释、不要加引号、不要保留中文。这是给日语语音合成用的台词，保留语气词和停顿。\n人称口径（Rushiera 2026-10-26 定 · 仅本日语译文有效）：第一人称一律用「わたし」，禁 俺 / 僕 / おれ / ぼく / わし / わたくし 等男性或老人自称；第二人称优先用「きみ」，对长辈或需要敬语时用「あなた」，禁 お前 / 貴様 / てめえ / あんた 等不礼貌说法。人称用平假名写（わたし / きみ），不要写汉字「私」。'
+      ? `把下面的文本翻译成自然、口语化的日语。只输出日语译文，不要解释、不要加引号、不要保留中文。这是给日语语音合成用的台词，保留语气词和停顿。\n人称口径（按当前人设卡 · 仅本日语译文有效）：第一人称一律用「${jpFirst}」，第二人称一律用「${jpSecond}」；人称用平假名写，不要写成汉字（不写「私」「君」）。`
       : (jsonMode
         ? '把下面 JSON 里所有中文文本翻译成英文。只输出翻译后的 JSON，保持键名、结构和 bbox 不变，不要解释、不要加代码围栏。'
         : '把下面的中文翻译成语法正确、自然的英文。只输出英文译文，不要解释、不要加引号、不要保留中文。这是给图像生成模型用的提示词，保留逗号分隔的 tag 风格，不要扩写。');
@@ -277,6 +286,26 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     });
   }
 
+  /**
+   * 群号 → 该群当前生效人设卡的日语人称口径（只给语音翻译用）。
+   *
+   * 解析失败回落缺省口径（わたし / きみ）——读音口味不对不该让整条语音失败。
+   * 返回 Promise：业务面 config 只能动态 import（见文件头的 🔴 注释）。
+   *
+   * @param {string|number} chat 群号（`group:123` / `123` 都认）
+   * @returns {Promise<{first: string, second: string}>} 人称口径
+   */
+  async function jpPronounsForChat(chat) {
+    try {
+      const key = String(chat ?? '').trim();
+      const chatKey = key.includes(':') ? key : `group:${key}`;
+      const { personaForChat } = await import('../business/config.js');
+      return jpPronounsOf(personaForChat(chatKey).profileId);
+    } catch {
+      return jpPronounsOf('');
+    }
+  }
+
   const media = createMediaService({
     log,
     dataDir,
@@ -286,7 +315,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     sendText: (chat, text) => say(chat, text),
     sendRecord: (chat, file, caption) => sayRecord(chat, file, caption),
     record,
-    translate: translateForMedia
+    translate: translateForMedia,
+    jpPronounsOf: jpPronounsForChat
   });
   let watchTimer = null;
   let ticking = false;
@@ -2803,10 +2833,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string} [options.runMode] 强制档位（small = 依田芳乃 · v4.1-Small）
    * @returns {Promise<object>} { ok, text?, message?, error?, vipOnly?, queued? }
    */
-  async function ttsSpeak({ by = 'app', chat = null, text = '', caption = '', auto = false, runMode = '', queue = false } = {}) {
+  async function ttsSpeak({ by = 'app', chat = null, text = '', caption = '', auto = false, runMode = '', queue = false, pronouns = null } = {}) {
     const gate = mediaGate({ by, chat, feature: auto ? '群自动语音' : '语音生成' });
     if (!gate.ok) return gate;
-    const result = await media.ttsSpeak({ chat: gate.chat, text, caption, auto, runMode, queue });
+    // 🔴 pronouns 必须一路带到 media —— 少了这一层，「人称口径」在 media 侧永远是 null，
+    // 只能走单体的自解析兜底（那里拿不到业务面配置就回落 わたし / きみ）。判例 2026-11-07。
+    const result = await media.ttsSpeak({ chat: gate.chat, text, caption, auto, runMode, queue, pronouns });
     if (result.ok) {
       const label = auto ? '（自动语音）' : '（语音）';
       state.noteCommand({ chat: gate.chat, target: '', text: `${label}${String(text).slice(0, 60)}`, result: result.queued ? `排队第 ${result.queued} 句` : '已提交' });
@@ -2981,7 +3013,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         caption: body?.caption ?? '',
         auto: body?.auto === true,
         runMode: body?.runMode ?? '',
-        queue: body?.queue === true
+        queue: body?.queue === true,
+        // 人称口径由调用方（业务面）带来；没带则 media 侧按群号自解析
+        pronouns: body?.pronouns && typeof body.pronouns === 'object' ? body.pronouns : null
       })
     }),
     'POST /api/nav/tagger': async ({ body }) => ({

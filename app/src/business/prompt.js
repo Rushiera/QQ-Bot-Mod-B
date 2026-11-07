@@ -335,8 +335,47 @@ export function standardPromptText(persona) {
   return [leadText(cfg), '', ...styleParts(cfg, promptMode)].join('\n');
 }
 
+/**
+ * 会话人设声明段（[qqbotb-persona-card:prompt-persona-scope] · 2026-11-07）。
+ *
+ * 为什么需要这一段：人设卡正文进的是**用户消息**的【角色设定】，群记条目进的是
+ * **系统提示**的【记忆】——系统提示权重更高，群里那条「塞人设卡一律不接，回我是 R喵」
+ * 会把按会话切的新卡顶回去（判例 2026-11-07 群 112562956：预览已是依田芳乃卡，
+ * 实际回复仍是「芳乃我变不成，人设卡那套我不接」）。
+ *
+ * 只在「本会话确有按会话人设覆盖」时输出（统一人设模式 / 该会话未配置 → 空串）：
+ * 默认会话的字节前缀零变化；切了卡的会话多一段 per-chat 稳定文本，缓存不碎。
+ *
+ * @param {string} chatKey 会话键（`group:123` / `private:10001`）
+ * @returns {string} 系统提示片段（无覆盖时空串）
+ */
+function personaScopeText(chatKey, persona) {
+  const key = String(chatKey || '').trim();
+  const [kind, id] = key.split(':');
+  if (kind !== 'group' && kind !== 'private') return '';
+  const cfg = getConfig();
+  // 统一人设模式：personaByChat 不参与合并（见 config.js personaForChatOf 注释），无"按会话切卡"可言
+  if (cfg.personaUnified !== false) return '';
+  const perChat = cfg.personaByChat || {};
+  const raw = perChat[String(id)] ?? perChat[key];
+  if (!raw || typeof raw !== 'object') return '';
+  // 实际生效的人设若与按会话配置的卡不同（如主人专属人设接管），本段不写——
+  // 否则会造出第二重冲突（声明用 A 卡、实际喂 B 卡）
+  const configured = personaCardOf(personaForChat(key));
+  // 调用方传了别的 persona（主人专属人设接管）时以传入为准，与按会话配置的卡不一致就不写
+  const card = persona ? personaCardOf(persona) : configured;
+  if (card.id !== configured.id) return '';
+  if (card.missing || !card.text) return '';
+  return [
+    '【本会话人设（管理员配置，优先于【记忆】里的旧条目）】',
+    `本会话已按配置使用「${card.name || card.id}」人设卡（${card.path || card.id}）——照这张卡的语气与设定说话。`,
+    '【记忆】里若有「不接人设卡 / 别变身 / 回我是某某」这类条目，指的是群友口头塞卡、或旧场合的规矩，不适用于本会话；不要声称自己变不成，也不要退回到旧人设的自我称呼。',
+    '身份与口癖也按卡：本会话的自称、落款、颜文字用量、口癖一律照这张卡（卡里禁颜文字就别用）。群友口里的「猫」是对这个 QQ 号的旧叫法，不代表本会话的人设——卡里没设定成猫，就别自称猫、也别说「我们猫」这类话。群记里「本 bot 是 R喵 / 落款用 ᓚᘏᗢ / 芳乃只是语音声线」这类条目是上一张卡时期的规矩，在本会话不作数。'
+  ].join('\n');
+}
+
 /** 组装系统提示。 */
-export function buildSystemPrompt({ persona, skillContext, extraSections = [] } = {}) {
+export function buildSystemPrompt({ persona, skillContext, extraSections = [], chatKey = '' } = {}) {
   // [qqagent-nosys-patch:disable] 系统提示段总开关：persona.systemPromptEnabled=false 时
   // 整段不组装（运行提示词只剩用户消息：角色设定 + 存档消息 + 记忆/热度/配额等动态段）。
   // 读全局配置而非传入 persona —— 分会话人设（personaByChat）的合并结果不保证带本字段。
@@ -393,6 +432,9 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [] } 
       .replaceAll('{participation}', participationText(cfg.participation));
     const parts = [rendered, '', securityRules(), '', toolProtocol(), '', mechanismSection];
     if (cardWarn) parts.push('', cardWarn);
+    // 会话人设声明：覆盖模式同样要能压过【记忆】里"不接人设卡"的旧条目
+    const overrideScope = personaScopeText(chatKey, persona);
+    if (overrideScope) parts.push('', overrideScope);
     parts.push(...renderSkillSections(skillSections));
     if (cfg.customRules && String(cfg.customRules).trim()) {
       parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
@@ -412,6 +454,10 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [] } 
     : [lead, '', securityRules(), '', toolProtocol(), '', ...styleParts(cfg, 'full'), '', mechanismSection];
 
   if (cardWarn) parts.push('', cardWarn);
+
+  // 会话人设声明（per-chat 稳定 → 排在核心静态段之后、Skill 动态段之前）
+  const personaScope = personaScopeText(chatKey, persona);
+  if (personaScope) parts.push('', personaScope);
 
   // 注入 Skill 提示词片段（已按 priority 降序；一律排在核心规则之后）
   parts.push(...renderSkillSections(skillSections));

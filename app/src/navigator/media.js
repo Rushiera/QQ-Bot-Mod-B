@@ -93,32 +93,51 @@ function hasChinese(text) {
  * @returns {boolean} 是否含假名
  */
 function hasKana(text) {
-  return /[\u3040-\u30ff]/.test(String(text ?? ''));
+  // 只认真正的假名字母：\u3041-\u309F 平假名、\u30A1-\u30FA 片假名。
+  // 🔴 不能整段 \u3040-\u30FF —— 末尾 \u30FC 是长音符「ー」、\u30FB 是「・」，中文里也会出现
+  // （芳乃语体每句以「ー」收尾）→ 整段判会把「吃是吃得ー。」当成已是日语，跳过翻译直接把中文
+  // 送进 IrodoriTTS（2026-11-07 实测：台词是中文原文，被日语声线硬念）。
+  return /[\u3041-\u309f\u30a1-\u30fa]/.test(String(text ?? ''));
 }
 
 /**
- * 日语人称口径归一（仅语音台词用）。
+ * 日语人称口径归一（仅语音台词用）——**按当前人设卡分派**。
  *
- * Rushiera 2026-10-26 定：日语译文里第一人称一律「わたし」（禁 俺 / 僕 等男性自称），
- * 第二人称优先「きみ」（禁 お前 / 貴様 / あんた 等不礼貌说法；需要敬语时用 あなた）。
- * 提示词已写明，这里做兜底——模型偶发不听话时仍念不出男性腔、也念不出骂人的称呼。
+ * Rushiera 2026-10-26 定下通用口径（わたし / きみ）；2026-11-07 起改按卡取：
+ * 芳乃卡要「わたくし / そなた」，R喵 卡要「わたし / きみ」。口径来源 = `persona-cards.js`
+ * 的 `jpPronounsOf(profileId)`，由调用方注入，本模块不认识人设库。
+ *
+ * 提示词层已按同一口径写，这里做兜底——模型偶发不听话时也不串味。
  *
  * @param {string} text 日语译文
+ * @param {{first?: string, second?: string}} [pronouns] 人称口径（空 = わたし / きみ）
  * @returns {string} 归一后的文本
  */
-export function normalizeJapanesePronouns(text) {
+export function normalizeJapanesePronouns(text, pronouns) {
+  const first = String(pronouns?.first || '').trim() || 'わたし';
+  const second = String(pronouns?.second || '').trim() || 'きみ';
   let out = String(text ?? '');
-  // 第一人称：男性 / 老人 / 女性口语自称 → わたし（长词优先，避免「おれたち」被切碎）
-  out = out.replace(/俺たち|俺達|おれたち|おれ達/g, 'わたしたち');
-  out = out.replace(/僕たち|僕達|ぼくたち|ぼく達|僕ら|ぼくら/g, 'わたしたち');
-  // 「おれ」要避开同音的 お礼（おれい）/ おれんじ——只挡独立的自称
-  out = out.replace(/俺|おれ(?!い|ん)|僕|ぼく|わし|あたし|わたくし/g, 'わたし');
-  // 第二人称：不礼貌 / 生硬说法 → きみ（汉字「君」不动——它读 きみ / くん 两读，替换会毁掉人名后缀）
-  out = out.replace(/お前たち|お前達|おまえたち|おまえ達|あんたたち/g, 'きみたち');
-  out = out.replace(/お前|おまえ|貴様|きさま|てめえ|てめぇ|あんた/g, 'きみ');
-  // 汉字「私」→ 平假名：IrodoriTTS 可能把「私」读成 わたくし，统一书写形态即锁定读音。
+  // 第一人称：先收复数（长词优先，避免「おれたち」被切碎），再收单数
+  if (first === 'わたくし') {
+    out = out.replace(/俺たち|俺達|おれたち|おれ達|僕たち|僕達|ぼくたち|ぼく達|僕ら|ぼくら|わたしたち|私達/g, 'わたくしたち');
+    out = out.replace(/俺|おれ(?!い|ん)|僕|ぼく|わし|あたし|わたし/g, 'わたくし');
+  } else {
+    out = out.replace(/俺たち|俺達|おれたち|おれ達/g, 'わたしたち');
+    out = out.replace(/僕たち|僕達|ぼくたち|ぼく達|僕ら|ぼくら/g, 'わたしたち');
+    // 「おれ」要避开同音的 お礼（おれい）/ おれんじ——只挡独立的自称
+    out = out.replace(/俺|おれ(?!い|ん)|僕|ぼく|わし|あたし|わたくし/g, 'わたし');
+  }
+  // 汉字「私」→ 目标人称平假名：IrodoriTTS 可能把「私」读成 わたくし，统一书写形态即锁定读音。
   // 排除表只挡会改义的复合词（私服 / 私立 / 私的 …），不是人称用法。
-  out = out.replace(/私(?!服|立|的|有|用|物|鉄|生活|邸|財|案|見|情|製)/g, 'わたし');
+  out = out.replace(/私(?!服|立|的|有|用|物|鉄|生活|邸|財|案|見|情|製)/g, first);
+  // 第二人称：按卡口径收（汉字「君」不动——它读 きみ / くん 两读，替换会毁掉人名后缀）
+  if (second === 'そなた') {
+    out = out.replace(/お前たち|お前達|おまえたち|おまえ達|あんたたち|きみたち/g, 'そなたたち');
+    out = out.replace(/お前|おまえ|貴様|きさま|てめえ|てめぇ|あんた|きみ|あなた/g, 'そなた');
+  } else {
+    out = out.replace(/お前たち|お前達|おまえたち|おまえ達|あんたたち/g, 'きみたち');
+    out = out.replace(/お前|おまえ|貴様|きさま|てめえ|てめぇ|あんた/g, 'きみ');
+  }
   return out;
 }
 
@@ -171,7 +190,8 @@ export function createMediaService({
   sendText,
   sendRecord,
   record,
-  translate
+  translate,
+  jpPronounsOf
 }) {
   const endpoint = String(conf.endpoint || '').replace(/\/+$/, '');
   const mossConf = conf.moss ?? {};
@@ -385,19 +405,25 @@ export function createMediaService({
    * 把中文翻成日语；已是日语（含假名）就原样返回。
    *
    * 三条出口都过 `normalizeJapanesePronouns`：台词是给 IrodoriTTS 念的，
-   * 人称口径（わたし / きみ）与源语言无关——中文译来的、本来就是日语的都要归一。
+   * 人称口径与源语言无关——中文译来的、本来就是日语的都要归一。
    *
    * @param {string} text 文本
+   * @param {{first?: string, second?: string}} [pronouns] 当前人设卡的日语人称口径
    * @returns {Promise<string>} 日语文本
    */
-  async function translateJapanese(text) {
+  async function translateJapanese(text, pronouns) {
     const source = String(text ?? '').trim();
     if (!source) throw new Error('文本是空的');
-    if (hasKana(source)) return normalizeJapanesePronouns(source);
-    if (!hasChinese(source)) return normalizeJapanesePronouns(source);
-    const out = await translate(source, 'ja');
+    // 🔴 混排句也要整句翻：只看「有没有假名」会漏掉「おや——，你又递来一张符纸了ー。」这类半日半中
+    // ——假名在、中文也在，跳过翻译就变成日语声线硬念中文（2026-11-07 实测）。
+    // 判据：有假名且没有中文高频字 = 纯日语，只做人称归一；其余一律整句翻。
+    // 不能直接用 hasChinese 判——它按 CJK 表意文字算，日语汉字（依田家 / 悩み）也会命中。
+    const ZH_HINT = /[的了吗呢吧啊你我他她它们是很就都这个那说么怎没还给把被让，！？]/;
+    if (hasKana(source) && !ZH_HINT.test(source)) return normalizeJapanesePronouns(source, pronouns);
+    if (!hasChinese(source) && !ZH_HINT.test(source)) return normalizeJapanesePronouns(source, pronouns);
+    const out = await translate(source, 'ja', { pronouns });
     if (!out) throw new Error('中文转日语失败（翻译端点未配置或超时）');
-    return normalizeJapanesePronouns(cleanText(out));
+    return normalizeJapanesePronouns(cleanText(out), pronouns);
   }
 
   /**
@@ -559,7 +585,7 @@ export function createMediaService({
    * @param {boolean} [options.queue] 排队口径（群语音伴随）——忙时不回绝，入队串行念完
    * @returns {Promise<object>} { ok, text?, message?, error?, queued? }
    */
-  async function ttsSpeak({ chat, text, caption = '', auto = false, runMode = '', queue = false }) {
+  async function ttsSpeak({ chat, text, caption = '', auto = false, runMode = '', queue = false, pronouns = null }) {
     if (!String(text ?? '').trim()) return { ok: false, error: '文本是空的——语音要一句台词' };
     // 档位默认（Rushiera 2026-10-25）：**手工念**（群里点名 / 界面按钮）用 Large int8——音质优先；
     // **群语音伴随**（每句发言都念一遍）用 small——省时省显存。显式 runMode 优先于本默认。
@@ -567,7 +593,7 @@ export function createMediaService({
     // 排队口径（群语音伴随）：不参与「忙就拒」——几句话连着发时必须都能念到，
     // 由单条 drain 循环按序合成；返回时只代表「已入队」。
     if (queue) {
-      ttsQueue.push({ chat, text, caption, auto, runMode: mode });
+      ttsQueue.push({ chat, text, caption, auto, runMode: mode, pronouns });
       // 积压上限：留最近 12 句（旧的丢，出声）——语音是伴随产物，宁可漏念也不越念越旧
       while (ttsQueue.length > TTS_QUEUE_MAX) {
         const dropped = ttsQueue.shift();
@@ -579,7 +605,7 @@ export function createMediaService({
       return { ok: true, queued: ahead, message: `已入队（第 ${ahead} 句）` };
     }
     if (ttsBusy) return { ok: false, error: '上一句还在跑——先等它出来，或等它自然结束' };
-    return runTtsJob({ chat, text, caption, auto, runMode: mode, awaitDone: false });
+    return runTtsJob({ chat, text, caption, auto, runMode: mode, awaitDone: false, pronouns });
   }
 
   /**
@@ -594,22 +620,29 @@ export function createMediaService({
    * @param {boolean} [options.awaitDone] 等收口（排队口径用——念完才轮到下一句）
    * @returns {Promise<object>} { ok, text?, message?, error? }
    */
-  async function runTtsJob({ chat, text, caption = '', auto = false, runMode = '', awaitDone = false }) {
+  async function runTtsJob({ chat, text, caption = '', auto = false, runMode = '', awaitDone = false, pronouns = null }) {
     ttsBusy = true;
     let accepted = false;
     try {
       const probe = await online();
       if (!probe.online) return { ok: false, error: `ComfyDock 离线（${probe.detail}）` };
+      // 日语人称口径：优先用调用方带来的（业务面按群解析好，随请求体一起到——单体不必自己读配置）；
+      // 没有则按群号自解析（注入方可能返回 Promise，业务面 config 只能在调用时动态 import）。
+      const jpPronouns = (pronouns && typeof pronouns === 'object')
+        ? pronouns
+        : (typeof jpPronounsOf === 'function' ? await jpPronounsOf(chat) : undefined);
+      // 口径来源留痕：区分「请求体带来的」与「单体自解析」，排查人称没变时先看这条
+      record('tts', `人称口径 ${jpPronouns ? `${jpPronouns.first} / ${jpPronouns.second}` : '缺省'}（来源：${pronouns ? '请求体' : '自解析'}）`);
       let japanese;
       try {
-        japanese = await translateJapanese(text);
+        japanese = await translateJapanese(text, jpPronouns);
       } catch (error) {
         return { ok: false, error: String(error?.message ?? error) };
       }
       let style = String(caption ?? '').trim();
       if (style && hasChinese(style) && !hasKana(style)) {
         try {
-          style = await translateJapanese(style);
+          style = await translateJapanese(style, jpPronouns);
         } catch (error) {
           return { ok: false, error: `风格描述翻译失败：${error?.message ?? error}` };
         }

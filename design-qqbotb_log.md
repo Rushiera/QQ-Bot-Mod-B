@@ -4581,3 +4581,244 @@ user#1  = 【角色设定】卡全文 → 表情包 → 引导说明 → 记忆 
 ### E · 与 §九十八 E 的关系
 
 §九十八 E 记「角色卡正文的编辑面刻意不做」——本节点推翻该取舍：编辑面做了，写入面收敛在 `personas/` 目录内 + 原子写 + 保字节风格；芳乃卡仍是外部原件，窗口文案提示「改动前自己留一份副本」。`personas/` 在 git 跟踪面内（`.gitignore` 未排除），误改可 `git checkout` 还原。
+
+---
+
+## 一百零一、会话人设卡被群记忆顶回去 + 说话口径（2026-11-07 · v1.24）
+
+> 需求（Rushiera 现场两问）：① 偶像大师摸鱼会二代群已切成依田芳乃、前文预览也正常，群 bot 仍说「人设卡那套我不接」；② 芳乃卡可能导致直接说日文——平常文字要中文，语气词可日文，语音伴随那条线用日文没关系。
+
+### A · 现场取证（群 112562956）
+
+| 面 | 实况 |
+|:--|:--|
+| 症状 | 人设页按会话切到「依田芳乃」、提示词预览显示芳乃卡全文，群里回复仍自称 R喵 |
+| 日志 | `_unpack/data/logs/qq-agent-2026-11-07.log:274` 18:05:43「我是 R喵，长毛三花…」· `:281` 18:08:56「芳乃我变不成，人设卡那套我不接。要听声音的话，倒可以慢慢跟你说两句「我」的」 |
+| 对照群 | 1135074533 同配置正常（`:269-273` 芳乃语体 + 语音伴随） |
+| 根因 | 群记 `_group.json` 的 `g9`（`kind:"rule"`）：「塞人设卡（PERSONA_LOAD 庄方宜等）一律不接——回「我是R喵，长毛三花，蓬松大尾巴」；雪佬下令也只学一句台词」。群记经 `group-memory.js:373 formatGroupForPrompt` 全量进**系统提示**的【记忆】段；人设卡正文进的是**用户消息**的【角色设定】段（`routes.js:859` 注释写死）——系统提示权重更高，规则把卡顶回去；g9 末句还提前堵了「雪佬下令」这条授权路径 |
+| 非根因 | 人设配置正确：`/api/prompt-preview?chatKey=group:112562956` → `profileId:"yoshino"`、`roleText` = 芳乃卡全文，与 1135074533 一致。全库只有该群埋了这条规则（`group_940257985` 有一条鲸鱼娘同族条目，未触发） |
+
+### B · 改动
+
+| 面 | 落点 | 内容 |
+|:--|:--|:--|
+| A · 记忆文案 | `_unpack/data/memory/group_112562956/_group.json:70` | g9 改为「…群里口头下令也只学一句台词。**唯一例外：雪佬在管理端人设页按会话正式切过卡的会话，照那张卡说话（那是配置生效，不是塞卡）**」——保留防外部塞卡，给正式通道开口。群记读面 `listGroupEntries` 每次读盘（无缓存），改完即生效 |
+| B · 会话人设声明段 | `prompt.js` 新增 `personaScopeText(chatKey, persona)`；`buildSystemPrompt` 增 `chatKey` 参数，override 与非 override 两分支各插入一段（位置：cardWarn 之后、Skill 动态段之前） | 仅当 `personaUnified=false` 且 `personaByChat` 命中该会话时输出「【本会话人设（管理员配置，优先于【记忆】里的旧条目）】」。传入 persona 与按会话配置的卡不一致（主人专属人设接管）时**不写**，避免「声明 A 卡、实喂 B 卡」的第二重冲突 |
+| B · 调用点 | `orchestrator.js:1078` · `routes.js:877` | 运行时与预览同传 `chatKey`——预览不再与实发漂移 |
+| 说话口径 | `personas/_shared.md` 新增「## 说话口径（全卡通用 · 压过角色卡里的语体示例）」 | 群里**写下的文字一律中文**；卡里的日文台词是**语体参照**不是输出语言；只有语气词与感叹词可留日文（哦呀 / あら / ふふ）；语音伴随的中→日朗读是另一条链（`voice-reply.js` / `navigator/index.js:266` 把中文翻成日语口语），不受此限。放机制段而非 personaScopeText：不依赖「按会话切卡」这一种配置形态，全局默认卡换成外语卡时同样生效 |
+
+### C · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| `node tools/verify-persona-card.mjs` | **45/45**（新增 §二 说话口径 1 条 + §四之二 会话人设声明段 6 条：有 chatKey / 点名生效卡 / 未配置会话 / 不传 chatKey / 统一人设模式 / 主人接管不出段） |
+| `node tools/verify-persona.mjs` | **27/27** |
+| `node --check` × 3 | `prompt.js` / `orchestrator.js` / `routes.js` 均 0 错 |
+| `node tools/verify-suite.mjs` | 26/29——3 条失败均为**存量，与本轮改动无交集**：`verify-qqagent-talkstyle`（4 条 lean 断言失败，根因 = 自测把真实 `_unpack/data/config.json` 复制进隔离目录，其中 `persona.systemPromptOverride` 非空 → `buildSystemPrompt` 走 override 分支，lean/full 两种模式被整体替换成同一份 8291 字符）· `verify-qqagent-chatvoice`（同因，lean 次序）· `verify-navigator`（62/63，「会话截图·源码段在位」一条，另一域） |
+
+### D · 未闭合（生效待重启）
+
+B 与说话口径都在 `app/src/business` + `personas/`——**业务面进程未重启，运行态仍是旧逻辑**（A 的记忆文案例外，改完即生效）。重启 `启动QQBotB.vbs` 后验三条：① 群 112562956 发一句 → 回复是芳乃语体（慢句 / 三段式 / 语尾延长）② 不再出现「我是 R喵」「我变不成」③ 文字是中文，日文只落在语气词上（语音伴随照旧日语朗读）。
+
+### E · 遗留
+
+记忆重整轮（若日后重跑 §九十七 那种整理）会按群内历史重新归纳条目——g9 的「唯一例外」可能被写回旧口径。兜底靠 B 段的系统提示声明（优先级在【记忆】之上），但重整后仍需人工核一遍 `kind:"rule"` 条目里有没有「不变身」类禁令。
+
+---
+
+## 一百零二、日语人称与说话口径按人设卡分派（2026-11-07 · v1.24）
+
+> 需求（Rushiera 连续三次校正）：① 群里还在说日文 → 文字要中文、语气词可日文；② 语气词要写**假名原形**（おや，不是「哦呀」）；③ 芳乃喊「你」的日语译文要用 **そなた**，实测仍是 きみ；④ 群 112562956 里它还把自己当猫。
+
+### A · 取证
+
+| 面 | 实况 |
+|:--|:--|
+| 说话口径 | 卡里的日文台词被当成输出语言——日志 `:291`（18:21:19）整句日文「昔から依田の家は…」 |
+| 日语人称 | `navigator/index.js:266` 翻译提示词写死「第一人称一律わたし、**禁 わたくし**」「第二人称**优先きみ**」；`media.js:115/118` 归一层 `わたくし→わたし`、`お前/貴様/あんた→きみ`。两处都是 Rushiera 2026-10-26 定的通用口径——只有一张卡时成立，芳乃卡（わたくし / そなた）正好被压掉 |
+| 自称猫 | 群记 `g1`「雪佬是本 bot（R喵/Shieraru）的饲养者」· `g2`「两只 bot：雪佬的 R喵」· `g8` 落款颜文字 · `g34`「猫语音声线『依田芳乃』」——四条合起来把 bot 定义成猫、把芳乃定义成声线 |
+| 语气词 | `_shared.md` 首版举例写「哦呀」（中文音译），等于把模型往汉化引 |
+
+### B · 改动
+
+| 面 | 落点 | 内容 |
+|:--|:--|:--|
+| 人称口径数据 | `persona-cards.js` DEFAULT_PROFILES 加 `jp:{first,second}`；新增 `jpPronounsOf(profileId, configured)` + `DEFAULT_JP_PRONOUNS` | rmiao → わたし / きみ；yoshino → わたくし / そなた；未知 id 回落缺省 |
+| 翻译提示词 | `navigator/index.js` `translateForMedia(text, target, options)` | 按 `options.pronouns` 拼人称口径句——与归一层同口径，两边不看齐会互相打架 |
+| 归一层 | `navigator/media.js` `normalizeJapanesePronouns(text, pronouns)` | 按口径分派：芳乃分支 俺/僕/わたし→わたくし、お前/貴様/あんた/きみ/あなた→そなた（汉字「君」仍不动，防毁人名后缀）；默认分支逻辑不变 |
+| 调用链 | `media.js` `translateJapanese(text, pronouns)` + `runTtsJob` 取 `jpPronounsOf(chat)`；`navigator/index.js` 注入 `jpPronounsForChat` | 群号 → `personaForChat('group:<id>').profileId` → 口径；解析失败回落缺省（读音口味不对不该让整条语音失败） |
+| 语气词 | `personas/_shared.md` 说话口径段 | 「写假名原形：おや / あら / ふふ / あのね——不要改成中文音译（写「おや」，不写「哦呀」）」 |
+| 自称猫 | `prompt.js` `personaScopeText` 第四句 | 「群友口里的『猫』是对这个 QQ 号的旧叫法，不代表本会话的人设——卡里没设定成猫，就别自称猫、也别说『我们猫』」；并点名 g1 / g8 / g34 那条旧规矩在本会话不作数 |
+
+### C · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| `node --check` × 4 | `prompt.js` / `media.js` / `navigator/index.js` / `persona-cards.js` 均 0 错 |
+| `verify-import-integrity` | ALL PASS（99 文件 / 432 符号） |
+| `verify-persona-card` | **48/48**（新增 §六之二 日语人称分派 3 条） |
+| `verify-qqbotb-voicereply` | **30/30** |
+| `verify-ui-contract` | **PASS 54/54** |
+| 口径实测（临时脚本，已删） | yoshino=`{わたくし,そなた}` · rmiao=`{わたし,きみ}` · 归一：`俺はお前のことを…あなたも` → 芳乃版全变 `わたくし/そなた`，默认版仍 `わたし/きみ` |
+| `verify-qqagent-chatvoice` | 1 条失败（`3b lean 次序`）——存量，根因同 §一百零一 C（自测复制真实 config，`systemPromptOverride` 非空 → 走 override 分支） |
+
+### D · 未闭合
+
+代码面全部待业务面重启（`启动QQBotB.vbs`）。重启后验四条：① 语音伴随的日语第二人称是 **そなた**、第一人称 **わたくし** ② 语气词出假名原形（おや），不走中文音译 ③ 群 112562956 不再自称猫 ④ 落款不再是 ᓚᘏᗢ。
+
+---
+
+## 一百零三、单体启动回归：业务面 config 被静态 import 致崩（2026-11-07 · v1.24）
+
+> 现象（Rushiera 截图）：双击启动单体弹系统错误框「A JavaScript error occurred in the main process — Uncaught Exception: Error: 业务面数据根未注入：必须设置 QQ_AGENT_DATA_DIR（见 app/src/business/config.js 数据根注释）」，栈顶 `business/config.js:35:9`，经 `loadApplicationPackage`。
+
+### A · 根因
+
+§一百零二 为取日语人称口径，在 `navigator/index.js` 顶部写了 `import { personaForChat } from '../business/config.js'`。而 `business/config.js` 在**模块求值阶段**就断言 `QQ_AGENT_DATA_DIR` 必须存在（否则 throw）。单体启动链（`app/main.js` → navigator）在注入该环境变量之前就把它拉进求值 → 进程在显示窗口前就死。此前 navigator 只 import `../config.js`（app 级），所以从没撞上。
+
+### B · 修复
+
+| 面 | 改动 |
+|:--|:--|
+| `navigator/index.js` | 删掉静态 import；归档注释写明「business/config.js 只能动态 import」并把实测日期留在原地 |
+| `navigator/index.js` `jpPronounsForChat` | 改 `async`，内部 `await import('../business/config.js')` —— 只有真跑语音时才取人设，那时业务面已初始化 |
+| `navigator/media.js` `runTtsJob` | `await jpPronounsOf(chat)`（注入方可能返回 Promise，统一 await，兼容同步实现） |
+
+### C · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| 启动冒烟（临时脚本，已删） | 不设 `QQ_AGENT_DATA_DIR` 直接 `import navigator/index.js` → **IMPORT OK · exports = createNavigator**（不再抛数据根断言） |
+| `node --check` × 2 | `navigator/index.js` / `media.js` 0 错 |
+| `verify-import-integrity` | ALL PASS（431 符号） |
+| `verify-qqbotb-voicereply` | **30/30** |
+
+### D · 判例
+
+**跨模块复用不等于可以静态 import**：一个模块在求值期做环境断言（数据根 / 密钥 / 端口），静态 import 就把它变成「加载即崩」。判断依据是「该模块顶部有没有副作用断言」，不是「它是不是同仓模块」。修法是延迟到调用点动态 import，不是把断言去掉（断言本身是对的——它防的就是没有数据根时静默跑错目录）。
+
+---
+
+## 一百零四、hasKana 把「ー」当假名 → 中文原文直送 TTS（2026-11-07 · v1.24）
+
+### A · 现象与取证
+
+| 面 | 实况 |
+|:--|:--|
+| 症状 | Rushiera：最近一条 IrodoriTTS 台词有点奇怪 |
+| 实锤 | `GET http://127.0.0.1:8971/api/tts` → `config.text` = 「吃是吃得，只是吃得慢ー。你一勺一勺喂过来，我便一口一口接ー。」——**中文原文**进了日语声线 |
+| 根因 | `media.js hasKana()` 用 `/[\u3040-\u30ff]/` 判「已是日语就跳过翻译」。该区间末尾 `\u30FC` 正是长音符「ー」，而芳乃语体每句以「ー」收尾 → 中文句被判成日语 → `translateJapanese` 第一道闸直接返回原文，翻译与归一全被跳过（译文从没生成过，人称口径形同虚设） |
+
+### B · 改动
+
+`navigator/media.js hasKana()` 收窄到真字母：`/[\u3041-\u309f\u30a1-\u30fa]/`（排除 `\u30FB` 中点、「ー」长音、`\u3099-\u309F` 浊点组合符）。影响面两处：`translateJapanese` 的首判（已是日语不翻）与 `runTtsJob` 的 caption 判定——两处都因此恢复翻译。
+
+### C · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| 判据对照（临时脚本，已删） | 「吃是吃得…ー。」旧=true / 新=false · 「哦呀——，你在唤我么ー。」旧=true / 新=false · 「猫也是我・芳乃也是我ー」旧=true / 新=false · 「わたくしはそなたのことを…」新旧均 true · 「カタカナのテスト」新旧均 true |
+| `node --check media.js` | 0 错 |
+| `verify-qqbotb-voicereply` | **30/30** |
+
+### D · 未闭合
+
+语音链跑在单体进程（`app/src/app.js` → navigator，3280），需重启 `启动QQBotB.vbs`。重启后验：让 bot 说一句 → `GET http://127.0.0.1:8971/api/tts` 的 `config.text` 应为**假名**（含 わたくし / そなた），不再是中文原文。
+
+### E · 附带发现（未处置）
+
+19:06:35 日志出现 `_unpack\resources\app\skills`——原版 qq-agent（`_unpack/resources/app`，结构与 `app/src` 不同、无 navigator 目录）起过一次并占用 3210；19:07:46 起的是本仓 `app/src`。两个代码根不要同时起——同一端口上跑的是哪套取决于谁先占，排查时会误以为是"改了没生效"。
+
+---
+
+## 一百零五、语音链三修：人称透传 / 混排整句翻 / 语气词出站归一（2026-11-07 · v1.24）
+
+### A · 取证（19:20 重启后）
+
+| 面 | 实况 |
+|:--|:--|
+| 群消息 | `19:20:38`「哦呀——，你又递来一张符纸了ー。」——「哦呀」仍在（提示词层口径没按住） |
+| TTS 台词 | `GET http://127.0.0.1:8971/api/tts` → `text` = 「わたしは依田家の芳乃、人の悩みを聞いたり…」——**翻译通了**（§一百零四 的 hasKana 修复生效），但人称是 わたし（默认口径），不是 わたくし |
+
+### B · 三个根因
+
+| # | 根因 |
+|:--:|:--|
+| 1 | **人称没透传**：`runTtsJob` 在单体进程里 `await import('../business/config.js')` 解析该群卡——单体侧解析失败被 catch 吞掉 → 回落默认口径 わたし / きみ。改由**业务面算好随请求体带走** |
+| 2 | **混排整句被跳过**：`translateJapanese` 只看「有没有假名」——「おや——，你又递来一张符纸了ー。」假名在、中文也在，被判"已是日语"跳过整句翻译，日语声线照念中文段 |
+| 3 | **语气词提示词按不住**：`_shared.md` 已写「写おや不写哦呀」，两轮仍然复发（low 档对长卡的措辞不敏感）→ 出站口做结构补偿 |
+
+### C · 改动
+
+| 面 | 落点 | 内容 |
+|:--|:--|:--|
+| 人称透传 | `voice-reply.js` 新增 `jpPronounsForChat(chat)`，转发体加 `pronouns` | 业务面按群算 `jpPronounsOf(personaForChat('group:<id>').profileId)`；解析失败回落缺省 |
+| 人称透传 | `navigator/index.js` `POST /api/nav/tts` | 透传 `body.pronouns` → `ttsSpeak` |
+| 人称透传 | `media.js` `ttsSpeak` / `runTtsJob` | 新增 `pronouns` 参数，队列项一并带；`runTtsJob` 优先级 = 调用方传入 > 按群自解析 |
+| 混排整句翻 | `media.js` `translateJapanese` | 判据改为：有假名 **且** 无中文高频字（的了吗呢吧啊你我他她它们是很就都这个那说么怎没还给把被让 + 全角标点）= 纯日语，只归一；其余一律整句翻。不能直接用 `hasChinese`——它按 CJK 判，日语汉字也命中 |
+| 语气词归一 | `sender.js` 新增 `normalizeJpInterjections(text, chatKey)`，接在 `mdToPlain` 之后 | 只对日系卡（`jpPronounsOf(...).second !== 'きみ'`）生效：哦呀 / 噢呀 → おや、啊啦 / 阿啦 → あら、呼呼 → ふふ。R喵 那类中文卡一个字都不动 |
+
+### D · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| `node --check` × 4 | `sender.js` / `voice-reply.js` / `media.js` / `navigator/index.js` 均 0 错 |
+| `verify-import-integrity` | ALL PASS（99 文件 / 435 符号） |
+| `verify-qqbotb-voicereply` | **30/30** |
+| 业务面口径取值（已实测） | `personaForChat('group:112562956').profileId` = yoshino → `jpPronounsOf` = `{わたくし, そなた}` |
+
+### E · 未闭合
+
+重启 `启动QQBotB.vbs` 后验三条：① 群消息里出现的是「おや」不是「哦呀」② `GET 8971/api/tts` 的 `text` 里第一人称是 **わたくし**、第二人称 **そなた** ③ 混排句（半日半中）的语音是**整句日语**，不再夹中文。
+
+---
+
+## 一百零六、人称口径断在「包装层」——路由有传、media 没收到（2026-11-07 · v1.24）
+
+### A · 取证（留痕见效）
+
+| 位置 | 读数 |
+|:--|:--|
+| 业务面 `_unpack/data/logs`（19:34:16 / 19:36:19） | `[voice] 人称口径 わたくし/そなた（群 112562956）`——业务面算对了、也带上了 |
+| 单体 `app/data/logs`（同时刻） | `[navigator] [tts] 人称口径 わたし / きみ（来源：自解析）`——**请求体没到，走了兜底** |
+| TTS 实产 | `おや——、きみが言いたいのは…`（仍 きみ） |
+
+### B · 根因
+
+`navigator/index.js` 里有**两层 ttsSpeak**：路由层 `POST /api/nav/tts` → 包装层 `ttsSpeak()`（2836，做 VIP 闸 `mediaGate` + 状态记账）→ `media.ttsSpeak()`。
+
+上一轮我只改了路由映射与 media 内部，**包装层调用 media 时没把 pronouns 传下去**：
+
+```js
+// 断点原文（2839）
+const result = await media.ttsSpeak({ chat: gate.chat, text, caption, auto, runMode, queue });
+```
+
+pronouns 在中间层蒸发 → media 侧 `pronouns` 为 null → 走「按群自解析」→ 而**单体主进程没有 `QQ_AGENT_DATA_DIR`**（业务面在 worker 子进程，env 由父进程注入给子进程），动态 import `business/config.js` 求值即抛 → catch 吞 → 回落缺省 わたし / きみ。两个缺陷叠在一处，现场看起来像「怎么改都没用」。
+
+### C · 修复（三处）
+
+| 面 | 改动 |
+|:--|:--|
+| `navigator/index.js` 包装层 | `ttsSpeak({ ..., pronouns = null })` + `media.ttsSpeak({ ..., pronouns })`——断点补上，注释写明「少了这一层口径永远是 null」 |
+| `nav-tools.js` `tts_speak`（群里「念一下」） | 该工具同样是语音，原来也不带口径：按本群卡取 `jpPronounsOf(personaForChat('group:<id>').profileId)` 随请求带走，取不到回落 `DEFAULT_JP_PRONOUNS` |
+| `app/src/app.js` | `createApp()` 开头补 `process.env.QQ_AGENT_DATA_DIR = PROJECT_DIR/_unpack/data`（仅当未设）——主进程的媒体能力要**只读**业务面配置才能自解析，主进程本身不跑业务面 |
+
+三处是「主路 + 旁路 + 兜底」：主路（伴随语音）带口径、旁路（念一下）带口径、兜底（谁都没带）能自解析成功。
+
+### D · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| `node --check` × 2 | `navigator/index.js` / `nav-tools.js` / `app.js` 均 0 错 |
+| `verify-import-integrity` | ALL PASS（99 文件 / 438 符号） |
+| `verify-qqagent-navtools` | **19/19** |
+| `verify-qqbotb-voicereply` | **30/30**（前一轮） |
+
+### E · 未闭合
+
+需重启单体（`启动QQBotB.vbs`）。重启后看两行即可判：单体日志 `[tts] 人称口径 わたくし / そなた（来源：请求体）`，TTS `text` 里第一人称 `わたくし`、第二人称 `そなた`。
+
+### F · 判例
+
+**「改了没生效」先查调用链上的每一层，不是查那一层**。这次 media 内部、路由映射、业务面计算三处都正确，断在它们之间的一个包装层——它只是因为「名字也叫 ttsSpeak」而被当成同一个函数。判据：改完的路径要在**日志里看到值穿过每一跳**，看到源头对、终点错，就把中间层逐跳点亮（这次靠两条留痕一次定位）。

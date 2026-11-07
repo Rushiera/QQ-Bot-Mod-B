@@ -47,9 +47,37 @@ export const DEFAULT_PROFILE_ID = 'rmiao';
  * @type {Array<{id: string, name: string, path: string, note: string}>}
  */
 export const DEFAULT_PROFILES = [
-  { id: 'rmiao', name: 'R喵', path: 'personas/rmiao.md', note: '默认人设 · 短句群友腔' },
-  { id: 'yoshino', name: '依田芳乃', path: 'personas/yoshino.md', note: '角色卡 · 原件整体导入（内容勿改）' }
+  {
+    id: 'rmiao', name: 'R喵', path: 'personas/rmiao.md', note: '默认人设 · 短句群友腔',
+    // 日语译文人称口径（Rushiera 2026-10-26 定，2026-11-07 起按卡分派）——
+    // 语音朗读时的人称，与卡的中文语体分开：换了卡，念出来的日文也要跟着换。
+    jp: { first: 'わたし', second: 'きみ' }
+  },
+  {
+    id: 'yoshino', name: '依田芳乃', path: 'personas/yoshino.md', note: '角色卡 · 原件整体导入（内容勿改）',
+    jp: { first: 'わたくし', second: 'そなた' }
+  }
 ];
+
+/** 缺省日语人称口径（未知 / 空 profileId 时用）——等价于 R喵 那套通用口径。 */
+export const DEFAULT_JP_PRONOUNS = { first: 'わたし', second: 'きみ' };
+
+/**
+ * 取某个 profileId 的日语译文人称口径。
+ *
+ * @param {string} [profileId] 人设 id（空 / 未知 → 缺省口径）
+ * @param {Array} [configured] `config.personaProfiles`（可覆盖内置条的 jp）
+ * @returns {{first: string, second: string}} 人称口径
+ */
+export function jpPronounsOf(profileId, configured) {
+  const id = String(profileId || '').trim() || DEFAULT_PROFILE_ID;
+  const all = listProfiles(configured);
+  const hit = all.find((p) => p.id === id);
+  const jp = hit && hit.jp && typeof hit.jp === 'object' ? hit.jp : null;
+  const first = String(jp?.first || '').trim() || DEFAULT_JP_PRONOUNS.first;
+  const second = String(jp?.second || '').trim() || DEFAULT_JP_PRONOUNS.second;
+  return { first, second };
+}
 
 /**
  * 相对路径 → 绝对路径（绝对路径原样返回）。

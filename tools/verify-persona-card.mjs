@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  listProfiles, readCard, sharedText, profileIdOf, writeCard,
+  listProfiles, readCard, sharedText, profileIdOf, writeCard, jpPronounsOf,
   CARD_MAX_CHARS, DEFAULT_PROFILE_ID, DEFAULT_PROFILES, PROJECT_ROOT
 } from '../app/src/business/persona-cards.js';
 
@@ -69,6 +69,8 @@ const shared = sharedText();
 check('机制段非空', shared.length > 1000, String(shared.length));
 check('机制段含四条底线 / 路由 / 领航员', shared.includes('四条底线（不可协商）') && shared.includes('路由索引') && shared.includes('领航员速查'));
 check('机制段不含具体人格（不写"你是R喵"）', !shared.includes('你是R喵') && !shared.includes('依田'));
+check('机制段含说话口径（文字中文 / 语气词可日文 / 语音另算）',
+  shared.includes('一律用中文') && shared.includes('语气词') && shared.includes('语音伴随'));
 
 console.log('\n三、profileId 解析');
 check('空 persona → 默认 id', profileIdOf({}) === DEFAULT_PROFILE_ID);
@@ -107,6 +109,30 @@ check('换卡不动系统提示（缓存前缀稳定）', sysRmiao === sysYoshin
   `rmiao=${sysRmiao.length} / yoshino=${sysYoshino.length}`);
 check('两次组装字节一致（同配置幂等）', buildSystemPrompt({ skillContext: {} }) === sysYoshino);
 
+console.log('\n四之二、会话人设声明段（按会话切卡压过【记忆】旧条目）');
+// 判例 2026-11-07 群 112562956：预览已是依田芳乃卡，群记里「塞人设卡一律不接」仍把回复
+// 顶回「我是 R喵」——系统提示原先没有"本会话已按配置切卡"的显式声明。
+const cfgScoped = configOf('rmiao');
+cfgScoped.personaUnified = false;
+cfgScoped.personaByChat = { 'group:112562956': { profileId: 'yoshino' } };
+setRuntimeConfig(cfgScoped);
+const sysScoped = buildSystemPrompt({ skillContext: {}, chatKey: 'group:112562956' });
+check('有按会话卡时系统提示含声明段', sysScoped.includes('【本会话人设'));
+check('声明段点名生效卡与优先关系', sysScoped.includes('依田芳乃') && sysScoped.includes('优先于【记忆】里的旧条目'));
+check('未配置的会话不出现该段', !buildSystemPrompt({ skillContext: {}, chatKey: 'group:999999' }).includes('【本会话人设'));
+check('不传 chatKey（全局人设）不出现该段', !buildSystemPrompt({ skillContext: {} }).includes('【本会话人设'));
+const cfgUnified = structuredClone(cfgScoped);
+cfgUnified.personaUnified = true;
+setRuntimeConfig(cfgUnified);
+check('统一人设模式下不出现该段', !buildSystemPrompt({ skillContext: {}, chatKey: 'group:112562956' }).includes('【本会话人设'));
+setRuntimeConfig(cfgScoped);
+const sysOwner = buildSystemPrompt({
+  skillContext: {},
+  chatKey: 'group:112562956',
+  persona: { ...cfgScoped.persona, profileId: 'rmiao', roleText: '' }
+});
+check('主人人设接管时不出声明段（避免声明 A 卡实喂 B 卡）', !sysOwner.includes('【本会话人设'));
+
 console.log('\n五、卡缺失可见（不静默降级）');
 setRuntimeConfig(configOf('missing-card'));
 const sysMissing = buildSystemPrompt({ skillContext: {} });
@@ -119,6 +145,13 @@ const overridden = listProfiles([{ id: 'rmiao', name: 'R喵（改过名）' }, {
 check('同 id 覆盖显示名', overridden.find((p) => p.id === 'rmiao').name === 'R喵（改过名）');
 check('新 id 追加进库', Boolean(overridden.find((p) => p.id === 'temp')));
 check('追加项按路径读字数', overridden.find((p) => p.id === 'temp').chars > 5000);
+
+console.log('\n六之二、日语人称口径按卡分派（2026-11-07）');
+check('芳乃 → わたくし / そなた', jpPronounsOf('yoshino').first === 'わたくし' && jpPronounsOf('yoshino').second === 'そなた',
+  JSON.stringify(jpPronounsOf('yoshino')));
+check('默认卡 → わたし / きみ', jpPronounsOf('rmiao').first === 'わたし' && jpPronounsOf('rmiao').second === 'きみ',
+  JSON.stringify(jpPronounsOf('rmiao')));
+check('未知 id 回落缺省口径', jpPronounsOf('nope').first === 'わたし' && jpPronounsOf('nope').second === 'きみ');
 
 console.log('\n七、卡正文写回（人设页「看 / 改正文」保存路径）');
 

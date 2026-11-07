@@ -11,8 +11,23 @@
 //   1 只对**群**生效（私聊没有群号），开关按群，清单空 = 全关（默认全关）；
 //   2 失败出声（logger.warn）但不阻断发言——语音是伴随产物，不是发言的前置；
 //   3 走 auto 模式：那条文字我们自己刚发过，单体不再补发文字配文（否则重复刷屏）。
-import { getConfig } from './config.js';
+import { getConfig, personaForChat } from './config.js';
+import { jpPronounsOf } from './persona-cards.js';
 import { logger } from './logger.js';
+
+/**
+ * 该群当前生效人设卡的日语人称口径（随转发体一起交给单体——单体不必自己读业务面配置）。
+ *
+ * @param {string} chat 群号
+ * @returns {{first: string, second: string}} 人称口径
+ */
+function jpPronounsForChat(chat) {
+  try {
+    return jpPronounsOf(personaForChat(`group:${String(chat ?? '').trim()}`).profileId);
+  } catch {
+    return jpPronounsOf('');
+  }
+}
 
 /** 自研单体（Electron 应用）的本地 API 端点——语音合成入口在它那侧。 */
 const ENDPOINT = 'http://127.0.0.1:3280';
@@ -143,6 +158,9 @@ export async function voiceReply(chatKey, text) {
   const clipped = clipForSpeech(body, rule.maxChars).text;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  // 口径留痕（业务面侧）：排查「人称没变」时先看这行——它证明算没算对、带没带上
+  const pronouns = jpPronounsForChat(chat);
+  logger.info('voice', `人称口径 ${pronouns.first}/${pronouns.second}（群 ${chat}）`);
   try {
     const response = await fetch(`${ENDPOINT}/api/nav/tts`, {
       method: 'POST',
@@ -154,7 +172,9 @@ export async function voiceReply(chatKey, text) {
         chat,
         text: clipped,
         caption: rule.caption,
-        runMode: rule.runMode
+        runMode: rule.runMode,
+        // 日语人称口径在业务面算好随请求带走——单体侧只跑媒体能力，不必读业务面配置
+        pronouns
       }),
       signal: controller.signal
     });

@@ -4,7 +4,8 @@
 // - Markdown → 纯文本、QQ 硬长度切分、CQ 转义
 // - 发出的每一条记进 ChatStore（self=true，供下一次运行当"自己的发言"）
 import fs from 'node:fs';
-import { getConfig, DEFAULT_CONFIG } from './config.js';
+import { getConfig, DEFAULT_CONFIG, personaForChat } from './config.js';
+import { jpPronounsOf } from './persona-cards.js';
 import { sleep, randInt, createSendChain, formatClockTime } from './util.js';
 import { mdToPlain, splitForQQ } from './md-to-plain.js';
 // 浏览节拍续期（发言即视为还在参与）——[qqagent-browse-patch:sender-import]
@@ -16,6 +17,33 @@ import { record as recordEngage } from './engage-metrics.js';
 import { paramsFor } from './engage-level.js';
 // 群语音伴随（本号每句发言再用 TTS 念一遍）——[qqbotb-voicereply:sender-import]
 import { voiceReply } from './voice-reply.js';
+
+/**
+ * 语气词归一（**只对日系人设卡生效**）——中文音译写成假名原形。
+ *
+ * 判例 2026-11-07：芳乃卡语气词本该是「おや」，模型连着两轮写成「哦呀」；提示词层
+ * 写了「不要音译」仍然复发（low 档对长卡的措辞不敏感）。出站口兜一层：R喵 那类中文卡
+ * 一个字都不动，只有口径不是「きみ」的日系卡才替换。
+ *
+ * @param {string} text 待发送文本
+ * @param {string} chatKey 会话键（决定该群当前生效的卡）
+ * @returns {string} 归一后的文本
+ */
+function normalizeJpInterjections(text, chatKey) {
+  const s = String(text ?? '');
+  if (!s) return s;
+  let jp = null;
+  try {
+    jp = jpPronounsOf(personaForChat(chatKey).profileId);
+  } catch {
+    jp = null;
+  }
+  if (!jp || jp.second === 'きみ') return s;
+  return s
+    .replace(/哦呀|噢呀/g, 'おや')
+    .replace(/啊啦|阿啦/g, 'あら')
+    .replace(/呼呼/g, 'ふふ');
+}
 
 /** 记一条拦截事件（采集是旁路，失败不影响发送判定）。 */
 function noteBlocked(chatKey, gate, message) {
@@ -484,7 +512,7 @@ export class SendQueue {
     const hardSplitAt = Number(getConfig().send?.hardSplitAt) || 0;
     const parts = [];
     for (const m of texts) {
-      const plain = mdToPlain(String(m ?? ''));
+      const plain = normalizeJpInterjections(mdToPlain(String(m ?? '')), chatKey);
       if (!plain) continue;
       // 最后防线：任何上游畸形路径漏下来的 "[object Object]" 到这儿直接拦掉，
       // 用户永远不该在 QQ 里看到这串字符。全被拦 → 下方抛"消息内容为空"回给模型。

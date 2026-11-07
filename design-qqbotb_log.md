@@ -4499,7 +4499,7 @@ user#1  = 【角色设定】卡全文 → 表情包 → 引导说明 → 记忆 
 
 - 芳乃卡整份注入 = **24,832 字符 ≈ 1.4 万 token / 轮**（中文约 1.7 字/token）。这是「整卡不裁剪」的直接代价；卡自带 §十六 精简版（约 4K 字）可作备选口径，是否切换待 Rushiera 定。
 - 旧 `_unpack/data/config.json` 的 `persona.roleText`（R喵旧全文，约 5.9K）不再生效（卡优先），仍留在配置里作回落兜底——是否清空待重启后由接口处置。
-- 遗留：人设库目前只有两张内置卡；追加卡要改 `personaProfiles`（可直接写配置文件 / 后续给界面加导入按钮）。角色卡正文的编辑面刻意不做（芳乃卡是外部原件，改动只走文件）。
+- 遗留：人设库目前只有两张内置卡；追加卡要改 `personaProfiles`（可直接写配置文件 / 后续给界面加导入按钮）。角色卡正文的编辑面此处记为「刻意不做」——**2026-11-07 后续已推翻**（编辑面已做，见 §一百）。
 
 ---
 
@@ -4538,3 +4538,46 @@ user#1  = 【角色设定】卡全文 → 表情包 → 引导说明 → 记忆 
 ### E · 遗留（独立缺陷，未处置）
 
 「正文 ≠ 发送」的错位独立存在：模型把正文当成已回复后 `finish`，用户侧静默。可选处置（未拍板）= @ 轮结束且本轮无任何 `send_*` 时落一条具名日志（`@ 轮未发送`），把静默变成可数的数。
+
+---
+
+## 一百、人设卡与系统提示词的编辑面（2026-11-07 · v1.23）
+
+> 需求（Rushiera 当场两次校正）：先「提示词预览这一级的人设、看正文里的内容要能手动编辑」→ 第一版把「看正文」做成可编辑后校正为「要改的是**系统提示词**，不是角色卡」。两个落点都保留，各管一段：角色卡 = 人格层（`personas/<id>.md`），系统提示词 = 标准提示词的风格段（`persona.systemPromptOverride`）。
+
+### A · 人设卡正文可编辑（`personas/<id>.md`）
+
+| 面 | 落点 | 内容 |
+|:--|:--|:--|
+| 后端 | `app/src/business/persona-cards.js` 新增 `writeCard()` | 写入面只有一条：`personas/` 内的卡。拒绝面五条具名出声（`CARD_UNKNOWN` / `CARD_PATH_EMPTY` / `CARD_OUT_OF_DIR` / `CARD_EMPTY` / `CARD_TOO_LONG` 20 万字上限）；原子写（tmp + rename）；**保住原文件 BOM 与换行风格**——textarea 会把值里的 CRLF 规范成 LF，不处理会把整张卡换行改掉 |
+| 路由 | `POST /api/persona-card` | 定位类错误（未知 id / 空路径 / 越出目录）404，内容类（空 / 超长 / 写盘失败）400，均带 `code` |
+| 前端 | `settings-sections.js` 抽 `openEditWindow()`（人设卡 / 系统提示词共用） | textarea + 顶栏（字数 / 已修改未保存 / 文件路径 / 保存 / Ctrl+S）；人设库行按钮「看 / 改正文」 |
+
+### B · 系统提示词可编辑（`persona.systemPromptOverride`）
+
+| 面 | 落点 | 内容 |
+|:--|:--|:--|
+| 后端 | `prompt.js` 抽 `leadText()` / `styleParts()` + 新增导出 `standardPromptText()` | 「载入当前」取与运行时**同一份**可替换段；**不含**安全规则 / 工具协议 / 机制段（这三段恒追加，抄进来会重复注入）；`buildSystemPrompt` 改为复用同一组 helper（拼装次序与字节布局未变） |
+| 路由 | `prompt-preview` 的 persona 摘要增 `standardPrompt` · 新增 `POST /api/persona/system-prompt` | 写 `systemPromptOverride`（上限 2 万字；空串 = 恢复内置） |
+| 前端 | 提示词预览卡按钮「改系统提示词」→ 编辑窗 | 「载入当前标准提示词」一键把现在跑的那段抄进编辑框当基底改 · 「清空（恢复内置）」· 保存后置无效人设库与预览缓存并重绘 |
+
+语义与运行时 override 分支一致：非空 = **整体替换**标准提示词里的人格 / 风格类准则；安全规则、工具协议、共用机制段恒追加，覆盖不到。
+
+### C · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| `node tools/verify-persona-card.mjs` | **38/38**（新增 §七 写回 10 条：BOM 保持 / CRLF 保持 / 落盘一致 / 不留 tmp / 五条拒绝面；自测只写 `personas/_selftest-card.md` 并即删，真卡只读） |
+| `node tools/verify-ui-contract.mjs` | **PASS 54/54** |
+| `node tools/verify-persona.mjs` | **27/27** |
+| `node tools/check-syntax.mjs` | **SYNTAX 74/74 OK** |
+| `node --check` × 3 | `settings-sections.js` / `persona-cards.js` / 路由改动 0 错 |
+| 真链路（浏览器开 `127.0.0.1:3280`） | 人设节渲染出「看 / 改正文」×2 与「改系统提示词」；点开编辑窗读到 `personas/rmiao.md` 2577 字 + 顶栏路径；点保存回「保存失败：未知 API：POST /api/persona-card」——前端已通到端点、**运行中的业务面仍是旧代码** |
+
+### D · 未闭合（生效待重启）
+
+业务面重启（`启动QQBotB.vbs`）后写面才通：人设卡保存 → `POST /api/persona-card`；系统提示词保存 → `POST /api/persona/system-prompt`。界面侧无需重启单体（`app/src/web/server.js` 静态文件 `Cache-Control: no-cache`，刷新即取新 `app/ui`）。
+
+### E · 与 §九十八 E 的关系
+
+§九十八 E 记「角色卡正文的编辑面刻意不做」——本节点推翻该取舍：编辑面做了，写入面收敛在 `personas/` 目录内 + 原子写 + 保字节风格；芳乃卡仍是外部原件，窗口文案提示「改动前自己留一份副本」。`personas/` 在 git 跟踪面内（`.gitignore` 未排除），误改可 `git checkout` 还原。

@@ -1,6 +1,6 @@
 ﻿# QQBot mod B — 项目档案
 
-> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v1.22 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
+> 类型：QQ 消息桥接（模式 B）——专用 QQ 号 + OneBot 11 协议端 / 版本：v1.23 / 主人格：Coder / 加载 Job：CSharp（必须）· Git（按需——收工推送）/ 项目依赖：无 / 路径：`workspace:QQBotB/`（WorkSpace 受控根，独立于 CCBP）
 > Git：GitHub `Rushiera/QQ-Bot-Mod-B`（单远程 · 收工推送）
 > 仓库入口：`workspace:QQBotB/`（源码根 · 远程 `Rushiera/QQ-Bot-Mod-B`）
 > 创建：2026-09-26
@@ -111,12 +111,12 @@ QQBotB/
 
 ## [继续会话指令]
 
-上工 `QQBotB`，按 `todo.md` §〇-F 待办优先序执行：第 2 项重启业务面（B31 + v1.19–v1.22 四轮代码的唯一生效前置）→ 第 6 项人设卡验收 → 第 7 项 @ 轮档位段验收。
+上工 `QQBotB`，按 `todo.md` §〇-F 待办优先序执行：第 2 项重启业务面（B31 + v1.18–v1.23 六轮代码的唯一生效前置）→ 第 6 项人设卡 + 编辑面验收（六条）→ 第 7 项 @ 轮档位段验收。
 
-**已拍板：** ① 点名轮（@ / 拍一拍）不注入【发言档位】——`levelLine` 首行短路，冰封档同样（v1.22 · Rushiera 2026-11-07）；② 业务面重启 = 人的动作，Rushiera 执行，猫不擅自重启。
+**已拍板：** ① 点名轮（@ / 拍一拍）不注入【发言档位】——`levelLine` 首行短路，冰封档同样（v1.22 · Rushiera 2026-11-07）；② 业务面重启 = 人的动作，Rushiera 执行，猫不擅自重启；③ 人设卡正文允许界面编辑（v1.23 · Rushiera 2026-11-07），写入面收敛在 `personas/` 目录内；④「改系统提示词」写 `persona.systemPromptOverride`——安全规则 / 工具协议 / 共用机制段恒追加，覆盖不到。
 
-**硬约束：** 不动发言配额（5 条/120 秒）· 不动节拍表（240/120/60）· 不动 `levelHint()` 签名（不参数化）· `patch-qqagent-level.mjs` 已退役（R2 吸收），不做补丁脚本同步。
+**硬约束：** 不动发言配额（5 条/120 秒）· 不动节拍表（240/120/60）· 不动 `levelHint()` 签名（不参数化）· `patch-qqagent-level.mjs` 已退役（R2 吸收），不做补丁脚本同步 · 卡写入不走配置面（`personaProfiles` 只管 id 与路径）。
 
-**改后判据：** `node tools/check-syntax.mjs` → 74/74 · `node tools/verify-qqagent-level.mjs` → 80/80 · 重启后 @ 轮的会话 JSON user 段末尾无【发言档位】段、回复经 `send_message` 发出。
+**改后判据：** `check-syntax` 74/74 · `verify-persona-card` 38/38 · `verify-ui-contract` 54/54 · `verify-persona` 27/27 · `verify-qqagent-level` 80/80 · 重启后：编辑窗保存真落盘（`git diff personas/` 可验）、预览随之变、@ 轮 user 段末尾无【发言档位】且回复经 `send_message` 发出。
 
-**排除面：** 「@ 轮无 `send_*` 调用落具名日志」未拍板（候选处置 → `design-qqbotb_log.md` §九十九 E），不自行实现。
+**排除面：** 系统提示词覆盖不做逐段可视化 diff（要改就整段，出问题用「清空（恢复内置）」回退）· 机制段 `personas/_shared.md` 无界面编辑入口（要改走文件）·「@ 轮无 `send_*` 调用落具名日志」未拍板（候选处置 → `design-qqbotb_log.md` §九十九 E），不自行实现。

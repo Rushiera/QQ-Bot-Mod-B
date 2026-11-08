@@ -219,6 +219,11 @@ check('芳乃 → わたくし / そなた', jpPronounsOf('yoshino').first === '
 check('默认卡 → わたし / きみ', jpPronounsOf('rmiao').first === 'わたし' && jpPronounsOf('rmiao').second === 'きみ',
   JSON.stringify(jpPronounsOf('rmiao')));
 check('未知 id 回落缺省口径', jpPronounsOf('nope').first === 'わたし' && jpPronounsOf('nope').second === 'きみ');
+// 语尾口径只作用于日语译文（TTS 朗读）——中文正文走业务面输出口径（log §一百一十六）
+check('芳乃 带日语语尾口径（TTS 层）', (jpPronounsOf('yoshino').tails || []).includes('〜でしてー'),
+  JSON.stringify(jpPronounsOf('yoshino').tails));
+check('芳乃 带语气词清单（TTS 层）', (jpPronounsOf('yoshino').interjections || []).includes('おや'));
+check('默认卡不带语尾口径（不串味）', (jpPronounsOf('rmiao').tails || []).length === 0);
 
 console.log('\n七、卡正文写回（人设页「看 / 改正文」保存路径）');
 

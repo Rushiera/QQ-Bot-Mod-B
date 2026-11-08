@@ -271,8 +271,15 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     // 与 normalizeJapanesePronouns 的兜底同口径，两边一起看才不串味。
     const jpFirst = String(options?.pronouns?.first || '').trim() || 'わたし';
     const jpSecond = String(options?.pronouns?.second || '').trim() || 'きみ';
+    const jpTails = Array.isArray(options?.pronouns?.tails) ? options.pronouns.tails.filter(Boolean) : [];
+    const jpInter = Array.isArray(options?.pronouns?.interjections) ? options.pronouns.interjections.filter(Boolean) : [];
+    // 语尾口径（适配器层）：**只改念出来的日语，不改群里的中文**——中文正文她写「……呢——」，
+    // 这一层把同一句译成「……のでしてー」。判据 → design-qqbotb_log.md §一百一十六。
+    const jpTailLine = jpTails.length
+      ? `\n语尾口径（同上 · 只对本译文有效）：句末用这个角色的招牌收尾——${jpTails.join(' / ')}；中文的「……呢——」「……是也——」在这里译成「……のでしてー」，句末保留拖长的「ー」。${jpInter.length ? `语气词只用 ${jpInter.join(' / ')} 这几个，点到即止，不要每句都用。` : ''}`
+      : '';
     const prompt = target === 'ja'
-      ? `把下面的文本翻译成自然、口语化的日语。只输出日语译文，不要解释、不要加引号、不要保留中文。这是给日语语音合成用的台词，保留语气词和停顿。\n人称口径（按当前人设卡 · 仅本日语译文有效）：第一人称一律用「${jpFirst}」，第二人称一律用「${jpSecond}」；人称用平假名写，不要写成汉字（不写「私」「君」）。`
+      ? `把下面的文本翻译成自然、口语化的日语。只输出日语译文，不要解释、不要加引号、不要保留中文。这是给日语语音合成用的台词，保留语气词和停顿。\n人称口径（按当前人设卡 · 仅本日语译文有效）：第一人称一律用「${jpFirst}」，第二人称一律用「${jpSecond}」；人称用平假名写，不要写成汉字（不写「私」「君」）。${jpTailLine}`
       : (jsonMode
         ? '把下面 JSON 里所有中文文本翻译成英文。只输出翻译后的 JSON，保持键名、结构和 bbox 不变，不要解释、不要加代码围栏。'
         : '把下面的中文翻译成语法正确、自然的英文。只输出英文译文，不要解释、不要加引号、不要保留中文。这是给图像生成模型用的提示词，保留逗号分隔的 tag 风格，不要扩写。');

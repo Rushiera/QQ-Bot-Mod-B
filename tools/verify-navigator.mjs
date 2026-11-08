@@ -342,6 +342,9 @@ check('代读·源码段在位（固定代读猫 + 开工先清它的前文 + �
   && salvageSrc.includes('function keyIndex') && salvageSrc.includes('交接报告已取到')
   && salvageSrc.includes('rescueCatKey') && salvageSrc.includes('清上一次抢救内容'),
   '');
+check('语尾口径·源码段在位（TTS 适配层 · 只影响日语译文，不改群里中文）',
+  salvageSrc.includes('语尾口径') && salvageSrc.includes('jpTails') && salvageSrc.includes('のでしてー'),
+  '');
 // 固定代读猫分支（Rushiera 2026-10-30）——配置写的是**显示名**（nav_rescue），必须解析到会话 id，
 // 否则「固定代读猫未就绪」会让所有前文整理直接失败（2026-10-30 修）。
 const navFixed = createNavigator({

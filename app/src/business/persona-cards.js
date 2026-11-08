@@ -77,19 +77,29 @@ export const DEFAULT_PROFILES = [
     // 语体长度口径：卡里 §2.4 定了「一段台词 3–7 行」——§8 按卡走，
     // 不被通用「多数 ≤30 字」压成一行（2026-11-08）。
     utterance: 'card',
-    jp: { first: 'わたくし', second: 'そなた' }
+    // 语尾与语气词：**只作用于日语译文（TTS 朗读）**——中文正文仍走业务面输出口径
+    // （语气词写音译「哦呀——」、语尾写「呢——」）。中文是她的语体、日文是她的声音，
+    // 两层分开：群里读得顺，念出来的日语仍带她本来的语尾（2026-11-08 · log §一百一十六）。
+    jp: {
+      first: 'わたくし',
+      second: 'そなた',
+      tails: ['〜でしてー', '〜なのでしてー', '〜ませぬ', '〜ましょうー'],
+      interjections: ['おや', 'あら', 'ふふ', 'ふむ']
+    }
   }
 ];
 
 /** 缺省日语人称口径（未知 / 空 profileId 时用）——等价于 R喵 那套通用口径。 */
-export const DEFAULT_JP_PRONOUNS = { first: 'わたし', second: 'きみ' };
+export const DEFAULT_JP_PRONOUNS = { first: 'わたし', second: 'きみ', tails: [], interjections: [] };
 
 /**
- * 取某个 profileId 的日语译文人称口径。
+ * 取某个 profileId 的日语译文口径（人称 + 语尾 + 语气词）。
+ *
+ * 三项都只在**日语译文（TTS 朗读）**这一层生效，不影响群里写下的中文。
  *
  * @param {string} [profileId] 人设 id（空 / 未知 → 缺省口径）
  * @param {Array} [configured] `config.personaProfiles`（可覆盖内置条的 jp）
- * @returns {{first: string, second: string}} 人称口径
+ * @returns {{first: string, second: string, tails: string[], interjections: string[]}} 日语口径
  */
 export function jpPronounsOf(profileId, configured) {
   const id = String(profileId || '').trim() || DEFAULT_PROFILE_ID;
@@ -98,7 +108,8 @@ export function jpPronounsOf(profileId, configured) {
   const jp = hit && hit.jp && typeof hit.jp === 'object' ? hit.jp : null;
   const first = String(jp?.first || '').trim() || DEFAULT_JP_PRONOUNS.first;
   const second = String(jp?.second || '').trim() || DEFAULT_JP_PRONOUNS.second;
-  return { first, second };
+  const list = (value) => (Array.isArray(value) ? value.map((v) => String(v).trim()).filter(Boolean) : []);
+  return { first, second, tails: list(jp?.tails), interjections: list(jp?.interjections) };
 }
 
 /**

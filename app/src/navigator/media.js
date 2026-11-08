@@ -681,7 +681,7 @@ export function createMediaService({
         ? pronouns
         : (typeof jpPronounsOf === 'function' ? await jpPronounsOf(chat) : undefined);
       // 口径来源留痕：区分「请求体带来的」与「单体自解析」，排查人称没变时先看这条
-      record('tts', `人称口径 ${jpPronouns ? `${jpPronouns.first} / ${jpPronouns.second}` : '缺省'}（来源：${pronouns ? '请求体' : '自解析'}）`);
+      record('tts', `人称口径 ${jpPronouns ? `${jpPronouns.first} / ${jpPronouns.second}` : '缺省'} · 语尾 ${(jpPronouns?.tails || []).join('/') || '无'}（来源：${pronouns ? '请求体' : '自解析'}）`);
       let japanese;
       try {
         japanese = await translateJapanese(text, jpPronouns);

@@ -160,7 +160,7 @@ export async function voiceReply(chatKey, text) {
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   // 口径留痕（业务面侧）：排查「人称没变」时先看这行——它证明算没算对、带没带上
   const pronouns = jpPronounsForChat(chat);
-  logger.info('voice', `人称口径 ${pronouns.first}/${pronouns.second}（群 ${chat}）`);
+  logger.info('voice', `人称口径 ${pronouns.first}/${pronouns.second} · 语尾 ${(pronouns.tails || []).join('/') || '无'}（群 ${chat}）`);
   try {
     const response = await fetch(`${ENDPOINT}/api/nav/tts`, {
       method: 'POST',

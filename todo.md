@@ -20,6 +20,7 @@
 | 已达成 | 判据 1–3 缺陷修复（`normalizeImpressions()` 两处同口径 · 6 正例全绿 + 8 负例全 throw · 全库 `[object Object]` 0）· 判据 4–6 页面级（13 页签 `__errs` 13/13 全零 · 取数四页真数据 · 七写入口实点全 200 且逐字还原）· 判据 7–9（**契约当时 58/58，口径已随界面改版更新为 54/54**——见 log §九十三 F · import 98/417/0 · 语法 0 错） |
 | 🔴 仍需一次人的动作 | **重启业务面**（`启动QQBotB.vbs`）后做群内真触发——两条：① 群里 @ bot 让它写成员印象 → 看落盘无 `[object Object]`；② 「删除本会话记忆」按钮换零记忆空会话点一次（本轮 17:37 重启已发生，界面侧已验；这两条属群内真触发，需模型端点恢复）；③ **v1.28 生效核对**：`GET http://127.0.0.1:18100/api/sources` 里 QQBotB 那路的 tag 由 `node` 变 `qqbotb/1.27`，且 `GET /api/wire` 的出站头族里**仍无** `x-client-id`（回环才自报，出网不带） |
 | 🔴 前置变化（2026-11-01 · **2026-11-04 已恢复端点**） | **API 信息曾清除、用量曾置空**（log §九十一）。2026-11-04 已回填：`api.baseUrl=http://127.0.0.1:18100/v1` · `api.model=low` · `api.apiKey`=宿主 LLM 池 `wbm` 条目钥匙（`data:secrets/llm-api.cfg` 同源，Rushiera 指令读取）——业务面 `/api/test/api` 实测 `ok=True model=low reply=pong`。余下：重启业务面（B31 代码 + v1.19 四条新路由生效前置）→ 群内真触发两条 |
+| 本轮追加（2026-11-08） | **思考档位四档待重启生效**——`thinking.js` 收口 `not/low/high/max`、本地端点判 `local-relay` 改发 `reasoning_effort`（v1.39）；壳侧缺档 = `not` 需壳 0.45.0 同批部署。判据：重启业务面后入站台账新样本带 `reasoning_effort`；选 not 或留空 → 出站 `thinking:{type:disabled}`，选 low/high/max → `{type:enabled}` + 原档位 |
 | 卡路径 | `workspace:QQBotB/tasks/R9.md`（已执行完毕，留档） |
 
 

@@ -51,7 +51,12 @@ export const DEFAULT_PROFILE_ID = 'rmiao';
  *               安全规则 / 工具协议 / 机制段属机制面，仍恒追加（卡删不掉它们）。
  * - `'<路径>'`  该文件（相对项目根，如 `personas/foo.prompt.md`）替代 lead + 风格段；其余照旧。
  *
- * @type {Array<{id: string, name: string, path: string, note: string, systemPrompt?: string, jp?: {first: string, second: string}}>}
+ * `utterance` 两态（2026-11-08 · 语体长度口径）：
+ * - `'short'`（默认）工具协议的 §8 走短档：普通对话 1–2 条、单条多数 ≤30 字。
+ * - `'card'`   §8 改成「长度按卡」——卡规定了行数就写够行数（依田芳乃卡：一段 3–7 行）。
+ *              给「语体本身就是慢句长句」的卡用，免得通用短句纪律把它压成一行。
+ *
+ * @type {Array<{id: string, name: string, path: string, note: string, systemPrompt?: string, utterance?: 'short'|'card', jp?: {first: string, second: string}}>}
  */
 export const DEFAULT_PROFILES = [
   {
@@ -59,6 +64,8 @@ export const DEFAULT_PROFILES = [
     // R喵 的说话纪律整段写进卡里（旧系统提示词的原文），标准提示词对这张卡不生效——
     // 换卡不受影响：本卡怎么说话由本卡说了算，见 design-qqbotb_log.md §一百零八。
     systemPrompt: 'self',
+    // 语体长度口径：R喵 是短句群友腔（卡里自带），工具协议 §8 走短档。
+    utterance: 'short',
     // 日语译文人称口径（Rushiera 2026-10-26 定，2026-11-07 起按卡分派）——
     // 语音朗读时的人称，与卡的中文语体分开：换了卡，念出来的日文也要跟着换。
     jp: { first: 'わたし', second: 'きみ' }
@@ -67,6 +74,9 @@ export const DEFAULT_PROFILES = [
     id: 'yoshino', name: '依田芳乃', path: 'personas/yoshino.md', note: '角色卡 · 原件整体导入（内容勿改）',
     // 外部角色卡走标准提示词（人格在卡、纪律在提示词）。
     systemPrompt: 'inherit',
+    // 语体长度口径：卡里 §2.4 定了「一段台词 3–7 行」——§8 按卡走，
+    // 不被通用「多数 ≤30 字」压成一行（2026-11-08）。
+    utterance: 'card',
     jp: { first: 'わたくし', second: 'そなた' }
   }
 ];
@@ -141,7 +151,9 @@ export function listProfiles(configured) {
         path: String(raw?.path ?? base.path).trim() || base.path,
         note: String(raw?.note ?? base.note ?? '').trim(),
         // 系统提示词来源三态（'inherit' / 'self' / 相对路径）——配置可覆盖内置条目
-        systemPrompt: String(raw?.systemPrompt ?? base.systemPrompt ?? 'inherit').trim() || 'inherit'
+        systemPrompt: String(raw?.systemPrompt ?? base.systemPrompt ?? 'inherit').trim() || 'inherit',
+        // 语体长度口径两态（'short' / 'card'）——配置可覆盖；非法值回落 short
+        utterance: (String(raw?.utterance ?? base.utterance ?? 'short').trim() === 'card') ? 'card' : 'short'
       });
     }
   }
@@ -156,19 +168,20 @@ export function listProfiles(configured) {
  *
  * @param {string} id 人设 id
  * @param {Array} [configured] `config.personaProfiles`
- * @returns {{id: string, name: string, path: string, text: string, systemPrompt: string}} 卡（缺失时 text 为空串）
+ * @returns {{id: string, name: string, path: string, text: string, systemPrompt: string, utterance: string}} 卡（缺失时 text 为空串）
  */
 export function readCard(id, configured) {
   const list = listProfiles(configured);
   const wanted = String(id || '').trim() || DEFAULT_PROFILE_ID;
   const hit = list.find((p) => p.id === wanted);
-  if (!hit) return { id: wanted, name: wanted, path: '', text: '', systemPrompt: 'inherit' };
+  if (!hit) return { id: wanted, name: wanted, path: '', text: '', systemPrompt: 'inherit', utterance: 'short' };
   return {
     id: hit.id,
     name: hit.name,
     path: hit.path,
     text: readText(hit.path),
-    systemPrompt: String(hit.systemPrompt || 'inherit').trim() || 'inherit'
+    systemPrompt: String(hit.systemPrompt || 'inherit').trim() || 'inherit',
+    utterance: String(hit.utterance || 'short').trim() === 'card' ? 'card' : 'short'
   };
 }
 

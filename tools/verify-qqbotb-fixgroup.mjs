@@ -25,7 +25,7 @@ const cfgGen = read(path.join(HERE, 'apply-qqagent-config.mjs'));
 
 // ── ① 取图：协议端缓存优先 ────────────────────────────────────────────────
 check('工具·buildImagePayload 在 tools.js', tools.includes('async function buildImagePayload('));
-check('工具·get_message_images 走协议端缓存', tools.includes("ctx.onebot.call('get_image', { file: String(item.file) })"));
+check('工具·get_message_images 走协议端缓存', tools.includes("ctx.onebot.call('get_image', { file: String(item.file) }"));
 check('补丁标记·image-cache-first', tools.includes('[qqbotb-fixgroup-patch:image-cache-first]'));
 check('工具·get_recent_messages 不再叠加 pastStateCount', tools.includes('offset: offset + (ctx.session.pastStateCount || 0)') === false);
 

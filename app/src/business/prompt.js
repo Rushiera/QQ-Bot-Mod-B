@@ -43,7 +43,20 @@ function securityRules() {
   ].join('\n');
 }
 
-function toolProtocol() {
+/**
+ * 工具协议段（恒追加 · 任何 inherit 卡都吃这一段）。
+ *
+ * 分条与长度口径按卡的语体分流（2026-11-08 · Rushiera 定）——
+ * 卡条目声明 `utterance: 'card'` 时，§8 改成「长度按卡」；其余卡走原短档。
+ * 动机：依田芳乃这类慢句 / 三段式语体的卡被「多数 ≤30 字」压成一行，
+ * 卡里的「一段台词 3–7 行」永远兑现不了（判据 → `design-qqbotb_log.md` §一百一十二）。
+ * 卡没写长度要求 = 短档（默认口径不变）。
+ *
+ * @param {'short'|'card'} [utterance] 语体长度口径（缺省 short）
+ * @returns {string} 工具协议段
+ */
+function toolProtocol(utterance = 'short') {
+  const byCard = String(utterance || '').trim() === 'card';
   return [
     '【工作方式 —— 先读懂再动手】',
     '1. 你运行在一个事件驱动的桥接程序里：每次有新消息（或主动机会），系统会为你新开一次处理，把【已读信息】（最近的群聊记录）和【未读信息】（你还没看过的消息）放进上下文。你没有跨次运行的对话记忆，所有需要长期记住的东西写进记忆工具。',
@@ -53,7 +66,9 @@ function toolProtocol() {
     '5. 看完消息决定不回，就安静结束。不回不需要理由，也不需要任何"收尾"动作。',
     '6. 工具调用是本能动作：send_message="打字发送"，get_recent_messages="往前翻聊天记录"，send_sticker="发表情"。内心不要写"我调用 xx 获取数据"这种伪代码。',
     '7. 【空格不是分句符号】QQ 消息里的空格会原样发送，真人不会用空格分句。想说两句就传数组，例如 ["在的","咋了"]。唯一可保留空格的是英文单词/数字之间的必要间隔（如 DeepSeek V3）。发送前自检：数组里每个字符串内部不应有用空格分隔的中文短句。',
-    '8. 【分条发送】普通对话默认 1 条，最多 2 条；只有讲故事、回忆、补刀时才 2~4 条。单条尽量短，多数 ≤30 字，不要小作文。'
+    byCard
+      ? '8. 【分条发送】普通对话默认 1 条，最多 2 条；只有讲故事、回忆、讲道理时才 2~4 条。单条长度按【角色设定】那张卡规定的语体来——卡定了行数就写够行数，卡没规定长度时多数 ≤30 字，不要小作文。'
+      : '8. 【分条发送】普通对话默认 1 条，最多 2 条；只有讲故事、回忆、补刀时才 2~4 条。单条尽量短，多数 ≤30 字，不要小作文。'
   ].join('\n');
 }
 
@@ -285,7 +300,8 @@ function outputLanguageText() {
     '角色卡提供的是「这个人是谁、什么语体、什么用词」——那是风格参考；一条消息最后以什么语言落到群里，由本段决定。',
     '1. 群里写下的文字一律用中文。日系角色（如依田芳乃）的语体特征——慢句、三段式、语尾延长、敬语感、古语腔——用中文写出来，不要把手里的日文台词原句直接搬到群里当发言。',
     '2. 日文只出现在三类地方：① 语气词与感叹词（おや / あら / ふふ / あのね），写假名原形，不写中文音译（写「おや」不写「哦呀」）；② 角色名与专有名词，照原样；③ 明确在复述台词——解释一句日语、引用卡里的台词、演剧情片段时可以用日文，但要让人看出这是台词或原文（加引号或【】），不是你的日常发言。',
-    '3. 语音伴随是另一条链：文字转语音时会把中文翻成日语再朗读，那是朗读环节，不影响群里写下的文字是什么语言。'
+    '3. 人称代词不属于上面三类——中文句子里写「我」「你」，不夹 わたくし / そなた / あなた / きみ（写「说给你听」，不写「说给そなた听」）。语气词的边界也在收窄：只有 おや / あら / ふむ / ふふ 这类短音呼应算语气词，日文名词、代词、动词一律不按语气词夹进中文句子。',
+    '4. 语音伴随是另一条链：文字转语音时会把中文翻成日语再朗读，那是朗读环节，不影响群里写下的文字是什么语言。'
   ].join('\n');
 }
 
@@ -468,7 +484,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
   }
   if (cardPrompt !== 'inherit') {
     const customText = readText(cardPrompt).trim();
-    const parts = [securityRules(), '', toolProtocol()];
+    const parts = [securityRules(), '', toolProtocol(card.utterance)];
     if (customText) parts.push('', customText);
     // 专配文件读不到必须出声（失败可见）：静默退回等于把说话方式悄悄换掉
     if (!customText) {
@@ -497,7 +513,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
       // {roleText} 现在指"当前生效的角色卡正文"（换卡即换它）；卡缺失时回落旧 roleText 字段
       .replaceAll('{roleText}', card.text || String(cfg.roleText ?? ''))
       .replaceAll('{participation}', participationText(cfg.participation));
-    const parts = [rendered, '', securityRules(), '', toolProtocol(), '', mechanismSection];
+    const parts = [rendered, '', securityRules(), '', toolProtocol(card.utterance), '', mechanismSection];
     if (cardWarn) parts.push('', cardWarn);
     // 会话人设声明：覆盖模式同样要能压过【记忆】里"不接人设卡"的旧条目
     const overrideScope = personaScopeText(chatKey, persona);
@@ -520,7 +536,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
   // 模型看不到"有记忆工具"这件事）——[qqagent-memory-patch:no-throttle-lean-memory]
   const parts = promptMode === 'lean'
     ? [lead, '', ...styleParts(cfg, 'lean'), '', mechanismSection]
-    : [lead, '', securityRules(), '', toolProtocol(), '', ...styleParts(cfg, 'full'), '', mechanismSection];
+    : [lead, '', securityRules(), '', toolProtocol(card.utterance), '', ...styleParts(cfg, 'full'), '', mechanismSection];
 
   if (cardWarn) parts.push('', cardWarn);
 
@@ -547,7 +563,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
  * 可见面出声（系统提示的告警行 / 预览面），不静默降级。
  *
  * @param {object} persona 合并后的人设（`personaForChatOf` 的产物）
- * @returns {{id: string, name: string, path: string, text: string, missing: boolean}} 卡
+ * @returns {{id: string, name: string, path: string, text: string, missing: boolean, utterance: string}} 卡
  */
 export function personaCardOf(persona) {
   const id = profileIdOf(persona);
@@ -558,12 +574,14 @@ export function personaCardOf(persona) {
   if (legacy) {
     return {
       id, name: card.name || id, path: card.path || '', text: legacy, missing: false,
-      systemPrompt: String(card.systemPrompt || 'inherit')
+      systemPrompt: String(card.systemPrompt || 'inherit'),
+      utterance: String(card.utterance || 'short')
     };
   }
   return {
     id, name: card.name || id, path: card.path || '', text: '', missing: true,
-    systemPrompt: String(card.systemPrompt || 'inherit')
+    systemPrompt: String(card.systemPrompt || 'inherit'),
+    utterance: String(card.utterance || 'short')
   };
 }
 

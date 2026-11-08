@@ -502,7 +502,18 @@ function registerAllTools() {
         const sticker = await ctx.stickers.find(args.stickerId);
         if (!sticker) return err(`找不到表情 ${args.stickerId}`);
         if (!sticker.url) return err('该表情没有图片地址');
-        const r = await downloadImageAsDataUrl(sticker.url);
+        // 本地收藏是转存到 data/sticker-images/ 的 file:/// 路径（QQ 图床 rkey 会过期才转存）。
+        // 早先这里直接丢给 downloadImageAsDataUrl，而它第一步 validateImageUrl 就拒非 http(s)
+        // —— 结果是收藏表情全部"看不到图"。与 send_sticker 同口径：先过受控目录闸，再按字节构部件。
+        // [qqbotb-sticker-image-patch:local-file]
+        let r;
+        if (String(sticker.url).startsWith('file:///')) {
+          const localPath = localStickerPath(sticker.url);
+          if (!localPath) return err(`表情 ${sticker.id} 的本地图片已丢失（受控收藏目录里找不到它）`);
+          r = await buildImagePayload(fs.readFileSync(localPath), '');
+        } else {
+          r = await downloadImageAsDataUrl(sticker.url);
+        }
         const built = getImagePartsOrVideo(`表情 ${sticker.id}（备注：${sticker.desc || '无'}）：`, [r]);
         if (r.gifVideo) {
           built.content[0].text += `\n（这是 GIF 动图，已转成 ${r.gifVideo.frames} 帧、最长边 ${Math.max(r.gifVideo.width, r.gifVideo.height) || '≤480'}px 的视频输入，画面按视频发给模型）`;
@@ -784,7 +795,11 @@ function registerAllTools() {
           // 远程表情资源还可能直接 404（判例：2026-10-19 18:41「猫想你」gif）。 [qqbotb-fixgroup-patch:image-cache-first]
           if (item.file) {
             try {
-              const ret = await ctx.onebot.call('get_image', { file: String(item.file) });
+              // 5 秒窗口：get_image 认的是协议端本地缓存名，缓存没有时它要去下载，等 15 秒
+              // 只会让整轮对话白卡（判例 2026-11-08 12:36 群 361820329：「[对的对的]」超时
+              // 15s + 直链 404，两头空）。超过 5 秒基本可判缓存未命中，交给直链与 summary 兜底。
+              // [qqbotb-sticker-image-patch:get-image-timeout]
+              const ret = await ctx.onebot.call('get_image', { file: String(item.file) }, 5000);
               const localPath = ret?.file && fs.existsSync(String(ret.file)) ? String(ret.file) : '';
               if (localPath) payload = await buildImagePayload(fs.readFileSync(localPath), '');
             } catch (e) {
@@ -797,7 +812,18 @@ function registerAllTools() {
           }
           if (payload) results.push(payload);
         }
-        if (!results.length) return err(`图片获取失败：${failed.join('；')}`);
+        if (!results.length) {
+          // 取不到图时把表情名带上：summary 是群友实际发的那个表情（如「[对的对的]」），
+          // 名字本身就能让模型接话，不必反复重试同一条消息。
+          // [qqbotb-sticker-image-patch:failure-summary]
+          const names = items
+            .map((m) => String(m.summary ?? '').replace(/^\[|\]$/g, '').trim())
+            .filter((n) => n && n !== '图片');
+          const hint = names.length
+            ? `（这条里的表情：${names.join('、')} —— 图取不到就按名字理解，不要重复调用本工具）`
+            : '';
+          return err(`图片获取失败：${failed.join('；')}${hint}`);
+        }
         const note = failed.length ? `（另有 ${failed.length} 张获取失败）` : '';
         // GIF 动图可能被转成了视频部件（见 downloadImageAsDataUrl），文案里区分张数
         const videoCount = results.filter((r) => r?.gifVideo).length;

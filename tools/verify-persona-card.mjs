@@ -124,6 +124,23 @@ check('inherit 卡仍注入公共机制段（R喵 不注入，内容在卡里）
   sysYoshino.includes('四条底线（不可协商）') && !sysRmiao.includes('四条底线（不可协商）'));
 check('两次组装字节一致（同配置幂等）', buildSystemPrompt({ skillContext: {} }) === sysYoshino);
 
+console.log('\n四之一、语体长度口径（utterance · 2026-11-08）');
+// 背景：工具协议 §8 是恒追加段（任何 inherit 卡都吃），原来的「单条尽量短，多数 ≤30 字」
+// 把芳乃卡 §2.4「一段台词 3–7 行」压成一行。现按卡分流：card = 长度按卡；short = 原口径。
+// 判据 → design-qqbotb_log.md §一百一十二。
+check('芳乃卡标了 utterance=card', cardYoshino.utterance === 'card', String(cardYoshino.utterance));
+check('card 口径：§8 改成按卡定长',
+  sysYoshino.includes('单条长度按【角色设定】') && !sysYoshino.includes('单条尽量短，多数 ≤30 字'));
+const cfgShort = configOf('yoshino');
+cfgShort.personaProfiles = [{ id: 'yoshino', utterance: 'short' }];
+setRuntimeConfig(cfgShort);
+const sysShort = buildSystemPrompt({ skillContext: {} });
+check('short 口径：§8 回落「多数 ≤30 字」',
+  sysShort.includes('单条尽量短，多数 ≤30 字') && !sysShort.includes('单条长度按【角色设定】'));
+check('非法 utterance 值回落 short', readCard('yoshino', [{ id: 'yoshino', utterance: 'whatever' }]).utterance === 'short');
+check('R喵 卡标了 utterance=short（短句口径不变）', cardRmiao.utterance === 'short', String(cardRmiao.utterance));
+setRuntimeConfig(configOf('yoshino'));
+
 console.log('\n四之二、会话人设声明段（按会话切卡压过【记忆】旧条目）');
 // 判例 2026-11-07 群 112562956：预览已是依田芳乃卡，群记里「塞人设卡一律不接」仍把回复
 // 顶回「我是 R喵」——系统提示原先没有"本会话已按配置切卡"的显式声明。

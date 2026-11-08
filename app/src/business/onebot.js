@@ -444,7 +444,17 @@ export async function segmentsToText(segments, { resolveReply = null, resolveAtN
         break;
       }
       case 'face': out.push(`[表情${d.id ?? ''}]`); break;
-      case 'image': out.push('[图片]'); break;
+      case 'image': {
+        // 表情包在 OneBot 里仍是 image 段，`data.summary` 带表情名（「[对的对的]」「[动画表情]」）。
+        // 直链 rkey 会过期、商城表情资源还会 404 —— 取不到图时 summary 是唯一还能用的语义，
+        // 原来只打 [图片]，模型连"那是什么表情"都不知道，只能说看不到。
+        // [qqbotb-sticker-image-patch:seg-summary]
+        const summary = String(d.summary ?? '').trim();
+        const name = summary.replace(/^\[|\]$/g, '').trim();
+        if (name && name !== '图片' && name !== '动画表情') out.push(`[表情包:${name}]`);
+        else out.push(name === '动画表情' ? '[表情包]' : '[图片]');
+        break;
+      }
       case 'record': {
         // 语音转文字走 `media.transcribe` 能力（speech-to-text 插件提供）。
         // 只在主消息路径转写（onebot 由调用方传入）：转发链里逐条跑 whisper

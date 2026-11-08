@@ -5085,3 +5085,130 @@ R喵 说话方式的变化需要对照改前的原文，故把 v1.20 的默认�
 ### F · 扩展
 
 换日系角色卡时按卡内读音表往 `PROPER_NOUN_MAP` 加行（长词在前）。表只覆盖专名读音，不碰其它汉字——同形词不在表内，不误伤。若日后专名增多（>5 条），再考虑从卡正文自动解析读音表，现在不做（一卡的消费频率不值得建实体）。
+
+---
+
+## 一百一十二、语体长度口径按卡分流（依田芳乃「还是短」）（2026-11-08 · v1.31）
+
+> 需求（Rushiera 现场）：**有些群聊打开了依田芳乃的角色卡之后说话还是比较短**。Rushiera 追加口径（本轮定）：群记不同 → 群风不同是正常的，**发言节奏最终按群走**；先修机制层（A+B），有投诉再逐群调。
+
+### A · 取证（消费点：实发提示 + 三群对照）
+
+| 面 | 实况 |
+|:--|:--|
+| 卡在不在 | 在：群 361820329 实发 `systemPrompt`（`sessions/mw7cop81-a70d60ac.json:56`，`promptChars=53935`）以【角色设定】开头，`personas/yoshino.md` 全文 24,832 字原样在内，并带【本会话人设】声明段 |
+| 切卡面 | `config.json` `personaByChat` 三群指 `yoshino`（112562956 / 1135074533 / 361820329）；`persona.systemPromptMode=lean` + `systemPromptOverride` 非空 |
+| 对照①（群记干净） | 1135074533 群记只有 4 条（无长度约束）→ 实测 3–4 行芳乃语体（`messages/group_1135074533.json:18` / `:23`） |
+| 对照②（群记有「简短」） | 112562956 群记 g14「群里对猫的发言密度仍有微词」+ g16「纠正身份+一句劝，**简短即可**」→ 两条共约 55 字（`messages/group_112562956.json:3018-3019`）；群友当场说「这回复是不是**量太大**了」`:3020` |
+| 对照③（群记压结构） | 361820329 群记 g14「讲技术别滑成说明书腔、**少引号少分点、没新信息不冒泡**」→ 多为单条 13–19 字，且混用卡里明令禁的「草」 |
+| 非根因（已排除） | 代码无长度闸（`sender.js` 只有条数闸）· `engage.hardLimit.enabled=false` · 发言档位只管「这一拍进不进 LLM」（`engage-level.js:4-7`） |
+
+### B · 三条压制源
+
+| # | 来源 | 原文 / 落点 | 性质 |
+|:--:|:--|:--|:--|
+| 1 | **工具协议 §8（恒追加）** | `prompt.js:56`（改前）「普通对话默认 1 条，最多 2 条…**单条尽量短，多数 ≤30 字，不要小作文**」 | 机制面；任何 `inherit` 卡都吃。卡 §2.4「一段台词 3–7 行」被压成 1 条 30 字 |
+| 2 | **`systemPromptOverride` 孤儿配置** | `config.json` `persona.systemPromptOverride`（R喵 时代风格段，含「有时只发『草』『？』也比硬接强」）；R喵 11-07 改 `systemPrompt:'self'` 后对它失效，只剩芳乃吃（§一百一十 F 已记遗留） | 配置面；芳乃的调门其实由 R喵 稿子定 |
+| 3 | **群记 rules（按群）** | 上表两群；`personaScopeText()` 只压「不接人设卡 / 落款 / 声线是芳乃」这类，**不压「说话要短」** | 数据面；卡被群里历史归纳反压 |
+
+### C · 改动
+
+| 面 | 落点 | 内容 |
+|:--|:--|:--|
+| **A · 语体长度按卡** | `persona-cards.js` | 卡条目新增 `utterance` 两态：`'short'`（默认，原口径）/ `'card'`（长度按卡）。R喵 = `short`，芳乃 = `card`；`listProfiles` / `readCard` 透传（配置可覆盖，非法值回落 `short`） |
+| A · §8 分流 | `prompt.js` `toolProtocol(utterance)` | `card` → 「单条长度按【角色设定】那张卡规定的语体来——卡定了行数就写够行数，卡没规定长度时多数 ≤30 字」；`short` → 原文不动。三个调用点（专配卡分支 / override 分支 / full 标准分支）统一传 `card.utterance`；`personaCardOf()` 两个回落出口补 `utterance` |
+| **B · override 退役 R喵 味** | `_unpack/data/config.json` `persona.systemPromptOverride` | 删「有时只发『草』『？』也比硬接强」→ 换出口句「该不该开口、开多长，按角色卡与这个群的语感来——卡让说长就说长，群让收着就收着，不为填空硬接」。其余（参与度 / 回应参数 / 群聊不是客服队列 / 别露机器味 / 记忆教程 / 像真人 / 学群语感）保留——那是机制与纪律，不是人格 |
+| 自测 | `tools/verify-persona-card.mjs` | 新增 §四之一 5 条：芳乃 `card` · `card` 口径文案 · `short` 回落 · 非法值回落 · R喵 `short` |
+
+**为什么不改成 `systemPrompt:'self'`**：`self` 会整段绕过安全规则 / 工具协议 / 机制段，等于给外卡拆掉底线。长度问题只在 §8 一句，按卡分流即可。
+
+### D · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| `node tools/check-syntax.mjs` | **74/74 OK** |
+| `node tools/verify-persona-card.mjs` | **63/63**（原 58 + 新增 5） |
+| `node tools/verify-qqagent-talkstyle.mjs` | **26/26**（lean 仍不含工具协议段——证实运行时 §8 走的是 override 分支，本轮改在点上） |
+| `node tools/verify-persona.mjs` | **27/27** |
+| `node tools/verify-suite.mjs` | **29/30**——唯一红 `verify-navigator` 62/63，既有存量 |
+| 真链路面（未重启的替代取证） | 探针用**运行态 `config.json` 副本**实组装：三芳乃群 `utterance=card` / `byCard=true` / 旧「多数 ≤30 字」已不在 / 「也比硬接强」已不在 / 新出口句在 / 工具协议在位；R喵 群仍 374 字符、`toolProtocol=false`（`self` 卡未受影响） |
+
+### E · 未闭合（生效待重启）
+
+代码（`prompt.js` / `persona-cards.js`）与配置（`config.json`）都**未在运行态生效**（`getConfig()` 是进程内缓存）——需重启业务面（`启动QQBotB.vbs`）。重启后验：
+
+1. `GET http://127.0.0.1:3210/api/prompt-preview?chatKey=group:361820329` → §8 是「单条长度按【角色设定】」，且 override 里没有「也比硬接强」
+2. 群里喊一句让它讲道理 → 出 3–7 行（现象 / 比拟 / 道理），不再压成一行
+3. R喵 群（如 689942975）行为不变——`self` 卡照旧
+
+### F · 遗留 / 后续口径
+
+- **群记侧（本轮不动）**：两群的「少分点 / 不冒泡 / 简短即可」仍旧生效——这正是 Rushiera 说的「不同群不同风格」。若某群长起来被投诉，两条路：① 改群记（`memory` API 改 rule 条目）；② 给该群的卡覆盖 `utterance:'short'`（`personaProfiles` 按 id 覆盖，全局生效）。
+- 全部群统一短档的反向操作 = 把 `yoshino` 的 `utterance` 改回 `short`，一处即可。
+- `systemPromptOverride` 仍是孤儿配置（§一百一十 F 同一条）：日后把这四段收进机制面可整体退役。
+
+---
+
+## 一百一十三、群表情包看不到图（取图三链 + 表情名兜底）（2026-11-08 · v1.32）
+
+> 需求（Rushiera 现场）：**「群 bot 到目前还有部分表情包，但是看不到图」**。
+
+### A · 取证（消费点：会话 toolCall 记录 + 消息库 + 直链实测）
+
+| 面 | 实况 |
+|:--|:--|
+| 现场 | 12:36:54 群 361820329：`错误：图片获取失败：协议端缓存：OneBot get_image 超时（15 秒未完成）；HTTP 404`（`sessions/mw7cb9jh-aa279f24.json:138`） |
+| 触发消息 | mid 16708334：`kind=image` · file `53-534a4bfc5898439615fc0266fea9bcf9.gif` · url `gxh.vip.qq.com/club/item/parcel/item/53/534a4bfc…/raw300.gif` · summary `[对的对的]`；同一表情 12:44:42 又发在群 112562956 |
+| 频率 | 会话库：全失败 **14 次** + 部分失败 **7 次**（「另有 1 张获取失败」）——字面上的"部分表情包" |
+| 直链实测 | 两条**不同**表情的 `gxh.vip.qq.com/…/raw300.gif` 均 **HTTP 404**（换 UA 也 404 —— 不是请求头问题） |
+| 规模 | 消息库里 `gxh.vip.qq.com` 链接 **716 处** |
+| 收藏表情 | `stickers.json` 10 条，`url` 与 `localFile` **全为 `file:///`**，`sticker-images/` 下文件都在盘 |
+
+### B · 四条根因
+
+| # | 根因 | 证据 |
+|:--:|:--|:--|
+| 1 | **商城表情 CDN 老路径整体失效** | NapCat 硬拼 `gxh.vip.qq.com/club/item/parcel/item/<前2位>/<emojiId>/raw300.gif`（`napcat.mjs:73244`）；实测 404。属 QQ 侧事实，本仓修不了 |
+| 2 | **协议端 get_image 不吃 marketface** | `napcat.mjs:75830` 只取 `videoElement ?? fileElement ?? pttElement ?? picElement`——没有 `marketFaceElement`，商城表情必"element not found"/超时；且旧口径要白卡 15 秒 |
+| 3 | **取不到图时连"是什么表情"都丢** | `onebot.js:447` 只打 `[图片]`；`media.summary`（`[对的对的]`）没进正文，模型对这条消息一无所知 |
+| 4 | **收藏表情看图必失败（潜伏）** | `get_sticker_image` 直接把 `file:///` 丢给 `downloadImageAsDataUrl`，而它第一步 `validateImageUrl` 就拒非 http(s) → 10/10 必失败（现 0 调用、且有备注，故未爆） |
+
+### C · 改动（三处 + 一条自测）
+
+| 面 | 落点 | 内容 |
+|:--|:--|:--|
+| **P1 · 表情名入正文** | `onebot.js` `segmentsToText` | image 段读 `data.summary`：`[对的对的]`→`[表情包:对的对的]` · `[动画表情]`→`[表情包]` · 空/缺省→`[图片]`。标记 `[qqbotb-sticker-image-patch:seg-summary]` |
+| **P2 · 本地收藏可看图** | `tools.js` `get_sticker_image` | `file:///` 走 `localStickerPath` 受控目录闸 + `buildImagePayload`（读字节），与 `send_sticker` 同口径。标记 `[local-file]` |
+| **P3 · 取图不白卡 + 失败带名字** | `tools.js` `get_message_images` | `get_image` 超时 15s→**5s**；全失败回执附「（这条里的表情：X —— 图取不到就按名字理解，不要重复调用本工具）」。标记 `[get-image-timeout]` / `[failure-summary]` |
+| 自测 | `tools/verify-qqbotb-sticker-image.mjs`（新增） | 7 条断言：渲染三态 4 条 + 本地收藏出图片部件 1 条 + 失败回执带名字/带劝退 2 条 |
+
+### D · 验证
+
+| 项 | 结果 |
+|:--|:--|
+| `node tools/check-syntax.mjs` | **74/74 OK** |
+| `node tools/verify-qqbotb-sticker-image.mjs` | **7/7 OK** |
+| `node tools/verify-suite.mjs` | **29/30**——唯一红 `verify-navigator` 62/63（`健康检查·apisite 读到合并用量 — 离线`，外部服务 ApiSiteAnalyzer 未起，存量环境依赖） |
+| 影响面·断言处 | `verify-qqbotb-fixgroup.mjs:28` 原断言精确匹配 `call('get_image', { file: String(item.file) })`——本轮加了超时参数 → 断言改判据为「含 `'get_image', { file: String(item.file) }`」，兼容两种形态（改前 17/18 → 改后 18/18） |
+
+### E · 生效
+
+13:04:58 重启业务面（`启动QQBotB.vbs`）：控制台 `http://127.0.0.1:3210` 就绪 · 工具集 **59** 个 · OneBot `ws 3001 / http 3000`；业务面 worker PID 35584。v1.30 / v1.31 的待重启项同批生效。
+**副作用**：13:02–13:03 群 112562956 有一轮芳乃对话在途，被本次重启打断（重启脚本语义如此，非缺陷）。
+
+### F · P4 侦察（商城表情按 emoji id 取图——可行性）
+
+| 路线 | 事实 | 结论 |
+|:--|:--|:--|
+| NapCat 拼的 `raw300.gif` | 两条不同表情全 404 | 死路，不可依赖 |
+| 协议端 `get_image` | 四类 element 分支无 `marketFaceElement` → 商城表情必失败 | 不能兜底 |
+| 段内可用线索 | `key` / `emoji_id` / `emoji_package_id`（`napcat.mjs:73252-73254`）；业务面 `extractMediaFromSegments`（`onebot.js:499`）只存 `kind/file/url/summary`，三者全丢 | 需先落库才有样本 |
+| 内核能力 | NTQQ `wrapper.node` 有 `marketface fetch enc` / `marketface url` / `marketface download` 日志串，NapCat 未接线 | 改协议端才用得上，不在本仓 |
+
+**结论：能做，但分两步、且第二步未取证。** ① 先把 `key`/`emoji_id`/`emoji_package_id` 落进 media（一处小改，攒样本）② 拿真实 `key` 试下载路径（可能形态若干，需样本试错）。本轮只做 P1–P3——summary 已让模型在取不到图时知道"是什么表情"，这是当前唯一稳定可得的语义。
+
+🔴 **裁定（Rushiera 2026-11-08）：P4 不做**——商城表情图取不回来属 QQ 侧事实，为它落库字段 + 试错下载路径的投入与消费频率不匹配。结论留档，不再排期；日后若要重启，从本节 F 表起手。
+
+### G · 未闭合（真链路待群内触发）
+
+重启后群里发一张表情包 → 会话 JSON 的 `text` 应为 `[表情包:名字]`；再让它看图 → 失败回执带表情名、且不再卡 15 秒。

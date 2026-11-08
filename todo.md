@@ -22,6 +22,7 @@
 | 🔴 前置变化（2026-11-01 · **2026-11-04 已恢复端点**） | **API 信息曾清除、用量曾置空**（log §九十一）。2026-11-04 已回填：`api.baseUrl=http://127.0.0.1:18100/v1` · `api.model=low` · `api.apiKey`=宿主 LLM 池 `wbm` 条目钥匙（`data:secrets/llm-api.cfg` 同源，Rushiera 指令读取）——业务面 `/api/test/api` 实测 `ok=True model=low reply=pong`。余下：重启业务面（B31 代码 + v1.19 四条新路由生效前置）→ 群内真触发两条 |
 | 本轮追加（2026-11-08） | **思考档位四档待重启生效**——`thinking.js` 收口 `not/low/high/max`、本地端点判 `local-relay` 改发 `reasoning_effort`（v1.39）；壳侧缺档 = `not` 需壳 0.45.0 同批部署。判据：重启业务面后入站台账新样本带 `reasoning_effort`；选 not 或留空 → 出站 `thinking:{type:disabled}`，选 low/high/max → `{type:enabled}` + 原档位 |
 | 卡路径 | `workspace:QQBotB/tasks/R9.md`（已执行完毕，留档） |
+| 本轮追加（2026-11-08 · 二） | **语音先行待重启生效**（v1.40）——开了语音伴随的群改为「先等语音真发到群，再发那句文字」；未开语音零等待、对模型与群内视角不可见。判据：重启后在该群真触发一句 → 群里先语音后文字 + 业务面日志「语音已发群（…）——文字随后发出」（详见 log §一百一十八） |
 
 
 ### A2 · ✅ 已核销（2026-11-01 收工轮）——单体界面改版 + 记忆页签重做，均已重启验收

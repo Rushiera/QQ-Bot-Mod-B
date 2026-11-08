@@ -2837,15 +2837,16 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string} [options.caption] 风格描述
    * @param {boolean} [options.auto] 伴随模式——文字已由发言方发过，只发音频
    * @param {boolean} [options.queue] 排队口径（群语音伴随：忙时入队，不拒）
+   * @param {boolean} [options.wait] 等回执（语音先行：等这一句真发到群才返回，回执带 sent）
    * @param {string} [options.runMode] 强制档位（small = 依田芳乃 · v4.1-Small）
-   * @returns {Promise<object>} { ok, text?, message?, error?, vipOnly?, queued? }
+   * @returns {Promise<object>} { ok, text?, message?, error?, vipOnly?, queued?, waited?, sent? }
    */
-  async function ttsSpeak({ by = 'app', chat = null, text = '', caption = '', auto = false, runMode = '', queue = false, pronouns = null } = {}) {
+  async function ttsSpeak({ by = 'app', chat = null, text = '', caption = '', auto = false, runMode = '', queue = false, wait = false, pronouns = null } = {}) {
     const gate = mediaGate({ by, chat, feature: auto ? '群自动语音' : '语音生成' });
     if (!gate.ok) return gate;
     // 🔴 pronouns 必须一路带到 media —— 少了这一层，「人称口径」在 media 侧永远是 null，
     // 只能走单体的自解析兜底（那里拿不到业务面配置就回落 わたし / きみ）。判例 2026-11-07。
-    const result = await media.ttsSpeak({ chat: gate.chat, text, caption, auto, runMode, queue, pronouns });
+    const result = await media.ttsSpeak({ chat: gate.chat, text, caption, auto, runMode, queue, wait, pronouns });
     if (result.ok) {
       const label = auto ? '（自动语音）' : '（语音）';
       state.noteCommand({ chat: gate.chat, target: '', text: `${label}${String(text).slice(0, 60)}`, result: result.queued ? `排队第 ${result.queued} 句` : '已提交' });
@@ -3021,6 +3022,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         auto: body?.auto === true,
         runMode: body?.runMode ?? '',
         queue: body?.queue === true,
+        // 语音先行（2026-11-08）：业务面等「这一句真发到群」的回执再发对应的文字
+        wait: body?.wait === true,
         // 人称口径由调用方（业务面）带来；没带则 media 侧按群号自解析
         pronouns: body?.pronouns && typeof body.pronouns === 'object' ? body.pronouns : null
       })

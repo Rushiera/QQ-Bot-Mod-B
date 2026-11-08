@@ -4,6 +4,7 @@
 //   node tools/verify-media.mjs                    守门自测（不触网、不生成）
 //   node tools/verify-media.mjs --live-moss [--prompt-file <UTF-8 文本>]
 //   node tools/verify-media.mjs --live-tts  [--text-file <UTF-8 文本>]
+//   node tools/verify-media.mjs --live-tts-wait [--text-file <UTF-8 文本>]   （语音先行：排队 + 等回执）
 //   node tools/verify-media.mjs --live-tagger [--image <路径>]
 //
 // 边界：live 会真跑一次本地生成（MOSS 约 1 分钟 / TTS 十几秒到一分钟 / Tagger 几秒），
@@ -20,6 +21,7 @@ import { normalizeJapanesePronouns, localizeProperNouns, normalizeProperNouns, g
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LIVE_MOSS = process.argv.includes('--live-moss');
 const LIVE_TTS = process.argv.includes('--live-tts');
+const LIVE_TTS_WAIT = process.argv.includes('--live-tts-wait');
 const LIVE_TAGGER = process.argv.includes('--live-tagger');
 const ENDPOINT = 'http://127.0.0.1:8971';
 const VIP = '569145850';
@@ -291,6 +293,32 @@ if (LIVE_TTS) {
       && row.params.message.some((seg) => seg?.type === 'record'));
     check('live·TTS 语音发群', done && recordSent, `done=${done} sent=${live.sent.length}`);
   }
+}
+
+// ── 7b live：语音先行（排队 + wait 口径）────────────────────────────────────
+// 单独开关：只跑这一条，省掉一次完整合成（两个 live 一起跑容易顶到命令超时）。
+if (LIVE_TTS_WAIT) {
+  // 语音先行（2026-11-08）：排队口径 + wait=true —— 返回那一刻音频必须**已经在群里**，
+  // 这才是业务面「先等语音、再发文字」的依据（改前这里只等到「入队」就返回）。
+  const live2 = makeNav({
+    enabled: true,
+    requireVip: true,
+    endpoint: ENDPOINT,
+    tts: { pollMs: 2000, timeoutMs: 8 * 60 * 1000 }
+  });
+  const startedAt = Date.now();
+  const queued = await live2.nav.ttsSpeak({
+    by: 'app', chat: 'selftest', text: TTS_TEXT, auto: true, queue: true, wait: true
+  });
+  const elapsedMs = Date.now() - startedAt;
+  const recordsAtReturn = live2.sent.filter((row) => row.action === 'send_group_msg'
+    && Array.isArray(row.params?.message)
+    && row.params.message.some((seg) => seg?.type === 'record')).length;
+  check('live·语音先行·回执带 sent（音频真到群）',
+    queued.ok === true && queued.waited === true && queued.sent === true,
+    `ok=${queued.ok} waited=${queued.waited} sent=${queued.sent} err=${queued.error || ''}`);
+  check('live·语音先行·返回时音频已在群里（不是入队即返回）',
+    recordsAtReturn >= 1, `records=${recordsAtReturn} · 耗时 ${Math.round(elapsedMs / 1000)}s`);
 }
 
 // ── 8 live：WD Tagger 反推 ─────────────────────────────────────────────────

@@ -5449,3 +5449,56 @@ A/B 已随 **2026-11-08 13:04:58** 的业务面重启在运行态生效（consum
 - **不覆盖句中语气词**：只收句读起点（句中的「おや」可能是「親」的假名写法，见断言「あらゆる / ほうりつ」）。
 - **不动中文文字层**：`prompt.js` 输出口径与 `sender.js` 的 `JP_INTERJECTIONS` 各自独立，本轮零改动。
 - `persona-cards.js` 的 `jpPronounsOf(profileId, configured)` JSDoc 说「配置可覆盖 jp」，但 `listProfiles()` 实际只合并 name / path / note / systemPrompt / utterance——**注释与实现不符**，本轮未修（无消费点），待需要按群调语气词时一并处理。
+
+## 一百一十八、语音先行（先发语音，再发文字 · 2026-11-08 · v1.40）
+
+> 需求（Rushiera）：「当一个群开了语音伴随的话，会先等待语音伴随的结果回传，然后再把这句消息发出去——先发语音再发消息。这个机制对模型和群 bot 不可见，表现为群 bot 正常发消息，只不过开了语音伴随的话是迟了一点时间才出去的。没开语音伴随不设此限制。」
+
+### A · 改前口径（v0.86 起）
+
+| 面 | 改前行为 |
+|:--|:--|
+| 次序 | 文字**先发**，发成功后再挂语音——`sender.js` 里 `voiceReply(...).catch(()=>{})`，不 await |
+| 业务面等待 | 只等「入队」：`POST /api/nav/tts` 带 `queue:true`，单体返回 `{ok:true, queued:N}` 就结束（15 s 超时） |
+| 单体 | `ttsSpeak` 入队即返回，drain 循环串行合成 → 轮询 → 下音频 → 发群；结果只落活动流，不回到调用方 |
+
+结果：群里永远是「先看到字、几秒到几十秒后听到声」，语音与它的那句文字在时间上是脱钩的。
+
+### B · 改后口径（语音先行）
+
+| 面 | 改后行为 |
+|:--|:--|
+| 次序 | 开了语音的群：`sender.js` 在 `onebot.sendText` **之前** `await voiceReply(...)`——语音真发到群才发文字 |
+| 业务面等待 | 请求带 `wait:true`，**等回执**：`data.sent === true` 才算语音到群；超时 3 分钟（`WAIT_TIMEOUT_MS`）后放行文字 |
+| 单体 | `ttsSpeak` 的入队项带 `done` 承诺，`drainTts` 念完后 `settle({sent, text, error})`；`runTtsJob` 把 `waitTts` 的收口结果（`ok` = 音频真发到群）带出来 |
+| 未开语音的群 / 私聊 | 一行不差：`voiceReply` 内部 `isVoiceChat` 直接返回，零等待 |
+
+**不可见性**：模型侧（提示词 / 工具描述 / 工具回执）、群内视角（还是一条发言）都没有新增语义——差别只有「开了语音的群，这条消息晚一点到」。所以没进任何提示词，也没改工具的返回结构。
+
+### C · 实现（四处）
+
+| 面 | 文件 | 改动 |
+|:--|:--|:--|
+| 业务面次序 | `src/business/sender.js` | 语音调用前移到 `sendText` 之前并 `await`；`try/catch` 兜住异常（等不到只落痕，文字照发）；旧「发完再挂、不 await」形态删除 |
+| 业务面转发 | `src/business/voice-reply.js` | 新增 `wait`（默认 true）+ `WAIT_TIMEOUT_MS = 180000`；请求体带 `wait:true`；按 `data.sent !== true` 判「未到群」并出声；`AbortError` 归为超时（不抛） |
+| 单体回执 | `src/navigator/media.js` | `ttsSpeak` 收 `wait`：入队项挂 `done`/`settle`，被队列上限丢弃的项也 `settle`（否则调用方永远挂着）；`drainTts` 兑现 `settle`；`runTtsJob` 的 `awaitDone` 分支带出 `sent`；`waitTts` 六条出口全部返回 `{ok, error}` |
+| 路由透传 | `src/navigator/index.js` | `POST /api/nav/tts` 透传 `wait`；包装层 `ttsSpeak` 透传到 media |
+
+**为什么等「sent」而不是等「入队」**：入队即返回的语义下，业务面根本不知道语音什么时候到群——那样「先等语音」只能靠猜或固定 sleep。判据只能是消费点：`sayRecord` 的 OneBot 调用成功（`sent.ok`）。
+
+**为什么有上限**：合成十几秒到一分钟、排队更久；文字不能被无限期扣住。超时后文字先走、语音晚到——两种顺序都比「消息丢了」好。
+
+### D · 验收
+
+- 新静态自测 `tools/verify-qqbotb-voiceorder.mjs` → **22/22**（次序：语音在 `sendText` 之前且被 await / 旧形态已消失 / 只对群 / 标记唯一 / 请求带 wait / 未开语音早退 / 超时宽于入队 / 六条单体口径 / 路由透传）
+- `node tools/verify-media.mjs --live-tts-wait` → **24/24**：真跑一次 ComfyDock 合成 + 假 OneBot（群号 `selftest`，不打扰真群），实测 `ok=true waited=true sent=true`，**返回时音频已在群里**（`records=1` · 耗时 9 s）——这条是「等回传」的消费点实锤
+- 语法：`check-syntax` 业务面 **74/74** · 单体 **11/11**
+- 🔴 **待重启**（与 v1.33–v1.39 一次带业务面 + 单体）：重启后在开了语音的群真触发一句 → ① 群里**先听到语音、再看到字** ② 业务面日志出现「语音已发群（…）——文字随后发出」 ③ 未开语音的群零延迟（同批消息按老节奏到）
+
+### E · 边界（没做的事）
+
+- **不动 `tts_speak` 手动通道**：群里 @「念一下」仍走「忙就回绝 + large-int8」，不等回执（它本来就要求即时反馈）。
+- **不改两条既有闸**：发言配额 / 出站闸顺序 / 去重与分条一律不动——语音只在「这句要被发出去」之后、真正发出去之前插入等待。
+- **不做「失败重试」**：语音失败就是失败（文字照发），没有补发重试——重试会让「先语音后文字」变成「语音迟到 + 文字早走」的二重乱序。
+- **超时值不进配置面**：3 分钟是常量（合成实测 9–40 s，留足排队余量）；要按群调时再升为 `config.engage.voiceReply.waitTimeoutMs`。
+- **旧回放通道未同步**：`tools/patch-qqbotb-voicereply.mjs` 与 `tools/templates/voice-reply.js` 仍描述「发完再挂、不等」的旧口径——它们的目标是 `_unpack/resources/app`（旧打包业务面，**不在服务路径**：3210 的实读 PID 是 `app/src/business/worker.js`）。真要给那份旧副本重放，先把模板同步成现行语义。

@@ -90,7 +90,8 @@
 | `WD Tagger` | ComfyDock 的本地图片反推打标生成器（WD EVA02-Large Tagger v3）——输出 Danbooru 风格通用标签 / 角色标签 / 分级；群内工具 `wd_tag` |
 | `提示词自动翻译` | 群内生成能力的翻译层（`navigator.media.translate`）——MOSS 中文提示词 → 英文；IrodoriTTS 中文台词 → 日语；结构化 JSON 提示词只翻中文字段、保持结构 / 键名 / bbox |
 | `反推提示词` | 用户口语：把一张图交给 WD Tagger 产出可复用的提示词标签；对应工具 `wd_tag(messageId?)` |
-| `语音伴随` | 按群把本号的**每一句群文字发言**再用 TTS 念一遍日语发回群（2026-10-25）——音色固定 `依田芳乃 · v4.1-Small`，中文自动翻日语口语；开关按群（记忆页「🔊 语音伴随」，写 `config.engage.voiceReply.chats`，默认全关）；载体 `src/voice-reply.js`（业务面转发）+ 单体 `POST /api/nav/tts`（`by=auto` + `queue=true`，串行排队念完）；失败只落日志不阻断发言——见 `design-qqbotb-engage.md` §十七 |
+| `语音伴随` | 按群把本号的**每一句群文字发言**再用 TTS 念一遍日语发回群（2026-10-25）——音色固定 `依田芳乃 · v4.1-Small`，中文自动翻日语口语；开关按群（记忆页「🔊 语音伴随」，写 `config.engage.voiceReply.chats`，默认全关）；载体 `src/voice-reply.js`（业务面转发）+ 单体 `POST /api/nav/tts`（`by=auto` + `queue=true` + `wait=true`，串行排队念完）；失败只落日志不阻断发言——见 `design-qqbotb-engage.md` §十七 |
+| `语音先行` | 语音伴随的次序口径（2026-11-08）：开了语音的群，那句文字要**等它的语音真发到群**（单体回执 `sent:true`）再发出去——先语音后文字；没开语音的群零等待。对模型与群内视角不可见（照常发一条消息，只是晚一点到）；等待有上限（3 分钟），等不到就让文字先走——见 `design-qqbotb-engage.md` §十七 |
 | `日语人称口径` | 只对 TTS 日语译文生效的人称约定（2026-10-26）：第一人称一律 `わたし`（禁 俺 / 僕 / おれ / ぼく 等男性自称），第二人称优先 `きみ`（禁 お前 / 貴様 / あんた 等不礼貌说法，敬语场景用 あなた）；两道执行——翻译提示词写明 + `normalizeJapanesePronouns()` 代码兜底（汉字「私」→ わたし 带复合词排除表）；中文正文与英文提示词不受影响——见 `design-qqbotb_log.md` §七十六 |
 
 ## 八、群名单（2026-10-26）

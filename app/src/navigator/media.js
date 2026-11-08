@@ -426,6 +426,9 @@ export function createMediaService({
         } catch (error) {
           result = { ok: false, error: String(error?.message ?? error) };
         }
+        // 等回执的那一句（wait=true）在这里兑现：sent = 音频真发到了群
+        // （先兑现再记日志——日志抛异常也不能让等回执的调用方挂着）
+        job?.settle?.({ sent: result?.sent === true, text: result?.text, error: result?.error });
         if (!result?.ok) record('error', `排队语音未成：${result?.error ?? '未知原因'}`);
       }
     } finally {
@@ -760,9 +763,11 @@ export function createMediaService({
    * @param {string} [options.runMode] 强制档位（small / large / large-int8 / large-gpu）——
    *   空 = 按口径取默认：**手工念 → large-int8**（音质优先）· **伴随 / 排队 → small**（省时省显存）
    * @param {boolean} [options.queue] 排队口径（群语音伴随）——忙时不回绝，入队串行念完
-   * @returns {Promise<object>} { ok, text?, message?, error?, queued? }
+   * @param {boolean} [options.wait] 结果回传口径（2026-11-08 · 语音先行）——等这一句**真发到群**才返回，
+   *   回执带 `sent`（音频到群=true）；业务面靠它把「先语音后文字」的次序做实。仅与 queue 同用
+   * @returns {Promise<object>} { ok, text?, message?, error?, queued?, waited?, sent? }
    */
-  async function ttsSpeak({ chat, text, caption = '', auto = false, runMode = '', queue = false, pronouns = null }) {
+  async function ttsSpeak({ chat, text, caption = '', auto = false, runMode = '', queue = false, wait = false, pronouns = null }) {
     if (!String(text ?? '').trim()) return { ok: false, error: '文本是空的——语音要一句台词' };
     // 档位默认（Rushiera 2026-10-25）：**手工念**（群里点名 / 界面按钮）用 Large int8——音质优先；
     // **群语音伴随**（每句发言都念一遍）用 small——省时省显存。显式 runMode 优先于本默认。
@@ -770,16 +775,33 @@ export function createMediaService({
     // 排队口径（群语音伴随）：不参与「忙就拒」——几句话连着发时必须都能念到，
     // 由单条 drain 循环按序合成；返回时只代表「已入队」。
     if (queue) {
-      ttsQueue.push({ chat, text, caption, auto, runMode: mode, pronouns });
+      // 结果回传（2026-11-08 · 语音先行）：`wait=true` 的入队项带一个 done 承诺——drain 把它念完
+      // （音频真发到群 / 或失败）时兑现；业务面靠它决定那句文字什么时候发。不带 wait 的调用
+      // 行为一字不变（入队即回执）。
+      const job = { chat, text, caption, auto, runMode: mode, pronouns };
+      if (wait) job.done = new Promise((resolve) => { job.settle = resolve; });
+      ttsQueue.push(job);
       // 积压上限：留最近 12 句（旧的丢，出声）——语音是伴随产物，宁可漏念也不越念越旧
       while (ttsQueue.length > TTS_QUEUE_MAX) {
         const dropped = ttsQueue.shift();
+        // 被丢的那句也要回执——否则等它的调用方永远挂着（静默挂起比丢一句更糟）
+        dropped?.settle?.({ sent: false, error: `排队超上限（${TTS_QUEUE_MAX}）被丢弃` });
         record('error', `语音排队超上限（${TTS_QUEUE_MAX}）——丢弃最旧一句：${String(dropped?.text ?? '').slice(0, 30)}`);
       }
       const ahead = ttsPending();
       record('tts', `语音入队（第 ${ahead} 句待念）：${String(text).trim().slice(0, 40)}`);
       drainTts().catch((error) => record('error', `语音队列异常：${error?.message ?? error}`));
-      return { ok: true, queued: ahead, message: `已入队（第 ${ahead} 句）` };
+      if (!wait) return { ok: true, queued: ahead, message: `已入队（第 ${ahead} 句）` };
+      const settled = await job.done;
+      const arrived = settled?.sent === true;
+      return {
+        ok: true,
+        queued: ahead,
+        waited: true,
+        sent: arrived,
+        text: settled?.text,
+        error: arrived ? undefined : String(settled?.error ?? '未知原因')
+      };
     }
     if (ttsBusy) return { ok: false, error: '上一句还在跑——先等它出来，或等它自然结束' };
     return runTtsJob({ chat, text, caption, auto, runMode: mode, awaitDone: false, pronouns });
@@ -860,11 +882,19 @@ export function createMediaService({
       record('tts', `语音已提交：${japanese.slice(0, 40)}`);
       // 排队口径要把这一句念完才轮到下一句（waitTts 收口时释放 ttsBusy）；
       // 手动口径不等——立即回执，收尾在后台轮询。
+      // 结果回传（2026-11-08）：排队口径把 waitTts 的收口结果带出来——`sent` 才是
+      // 「音频真发到群」的判据，`ok` 只代表合成受理。
       if (awaitDone) {
-        await waitTts({ chat, source: String(text ?? '').trim(), auto });
-      } else {
-        waitTts({ chat, source: String(text ?? '').trim(), auto }).catch((error) => record('error', `语音收尾异常：${error?.message ?? error}`));
+        const settled = await waitTts({ chat, source: String(text ?? '').trim(), auto });
+        return {
+          ok: true,
+          text: japanese,
+          message: gen.message,
+          sent: settled?.ok === true,
+          error: settled?.ok === true ? undefined : String(settled?.error ?? '未知原因')
+        };
       }
+      waitTts({ chat, source: String(text ?? '').trim(), auto }).catch((error) => record('error', `语音收尾异常：${error?.message ?? error}`));
       return { ok: true, text: japanese, message: gen.message };
     } finally {
       if (!accepted) ttsBusy = false;
@@ -878,7 +908,7 @@ export function createMediaService({
    * @param {string|number} options.chat 回报群
    * @param {string} options.source 用户原话（进回执标题）
    * @param {boolean} [options.auto] 伴随模式——文字已发过，只发音频
-   * @returns {Promise<void>} 完成
+   * @returns {Promise<{ok:boolean, error?:string, file?:string}>} 收口结果（ok=true 才代表音频真发到了群）
    */
   async function waitTts({ chat, source, auto = false }) {
     const deadline = Date.now() + ttsWaitMs;
@@ -898,7 +928,7 @@ export function createMediaService({
           if (!name) {
             await sendText(chat, '语音合成完成了，但产物文件名为空——去 ComfyDock 面板看落点。');
             record('error', '语音完成但产物文件名为空');
-            return;
+            return { ok: false, error: '产物文件名为空' };
           }
           const file = path.join(outDir, `tts-${Date.now()}.wav`);
           try {
@@ -906,7 +936,7 @@ export function createMediaService({
           } catch (error) {
             await sendText(chat, `语音产物下载失败：${error?.message ?? error}`);
             record('error', `语音产物下载失败：${error?.message ?? error}`);
-            return;
+            return { ok: false, error: `产物下载失败：${error?.message ?? error}` };
           }
           // 语音配文（Rushiera 2026-10-19 定）：语音发回前先把「说话内容」原文发一条文字——两条一起到。
           // 判例：17:52「念一下你是谁」只发了语音、文字一条没有（session mvf2sfsh · sent=[]）。
@@ -920,22 +950,23 @@ export function createMediaService({
           record(sent.ok ? 'tts' : 'error', sent.ok
             ? `语音已发群（${path.basename(file)}）`
             : `语音发群失败：${sent.error}`);
-          return;
+          return { ok: sent.ok === true, error: sent.ok ? undefined : String(sent.error ?? '发群失败'), file: path.basename(file) };
         }
         if (job.state === 'error') {
           const reason = String(job.message || '未知原因');
           await sendText(chat, `语音合成失败：${reason}`);
           record('error', `语音合成失败：${reason}`);
-          return;
+          return { ok: false, error: reason };
         }
         if (job.state === 'idle') {
           await sendText(chat, '语音合成被中断（ComfyDock 侧已停）——要重来就再发一次。');
           record('error', '语音合成被中断（ComfyDock 侧已停）');
-          return;
+          return { ok: false, error: '合成被中断（ComfyDock 侧已停）' };
         }
       }
       await sendText(chat, '语音合成超时未收口——去 ComfyDock 面板看任务状态。');
       record('error', `语音轮询超时（${Math.round(ttsWaitMs / 60000)} 分钟）`);
+      return { ok: false, error: `轮询超时（${Math.round(ttsWaitMs / 60000)} 分钟）` };
     } finally {
       ttsBusy = false;
     }

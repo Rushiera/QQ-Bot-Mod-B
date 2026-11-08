@@ -1,16 +1,22 @@
-// 群语音伴随 —— 记忆页「🔊 语音」开关（[qqbotb-voicereply:module] · 2026-10-25）
+// 群语音伴随 —— 记忆页「🔊 语音」开关（[qqbotb-voicereply:module] · 2026-10-25 · 语音先行 2026-11-08）
 //
-// 语义（Rushiera 2026-10-25 定）：某个群开了语音后，本 bot 每发出一句**文字**发言，
-// 都再让自研单体用 IrodoriTTS（依田芳乃 · v4.1-Small）把这句话翻成日语口语念一遍，
-// 音频发回同一个群——群里既能看字也能听声。
+// 语义（Rushiera 2026-10-25 定 · 2026-11-08 改序）：某个群开了语音后，本 bot 每发出一句**文字**发言，
+// 都再让自研单体用 IrodoriTTS（依田芳乃 · v4.1-Small）把这句话翻成日语口语念一遍，音频发回同一个群。
 //
-// 为什么业务面这侧只做「转发」：翻译 / 合成 / 发音频全在自研单体（它持有 ComfyDock
-// 客户端与 OneBot 连接）；业务面只需要在「这句已经成功发出去」之后把文本递过去。
+// 🔴 次序（Rushiera 2026-11-08 定）：**先语音，后文字**——开了语音的群，那句文字要等它的语音
+// 真发出去（单体回执 `sent:true`）再发；没开语音的群不受任何影响。对模型与群内视角不可见：
+// 模型照常调用发消息、群 bot 照常发消息，区别只是「开了语音的群，文字晚一点才出去」。
 //
-// 三个边界：
+// 为什么业务面这侧只做转发：翻译 / 合成 / 发音频全在自研单体（它持有 ComfyDock 客户端与
+// OneBot 连接）；业务面在发文字**之前**把文本递过去，并等它的回执。
+//
+// 四个边界：
 //   1 只对**群**生效（私聊没有群号），开关按群，清单空 = 全关（默认全关）；
-//   2 失败出声（logger.warn）但不阻断发言——语音是伴随产物，不是发言的前置；
-//   3 走 auto 模式：那条文字我们自己刚发过，单体不再补发文字配文（否则重复刷屏）。
+//   2 失败可见但不阻断发言（logger.warn）——语音是伴随产物，等不到（离线 / 超时 / 发群失败）
+//     就照常把那句文字发出去，不让一条消息因为语音丢掉；
+//   3 走 auto 模式：那条文字我们自己随后会发，单体不再补发文字配文（否则重复刷屏）；
+//   4 等待有上限（WAIT_TIMEOUT_MS）——合成十几秒到一分钟，拖太久就该让文字先走，
+//     语音在单体侧仍会继续，晚到就晚到。
 import { getConfig, personaForChat } from './config.js';
 import { jpPronounsOf } from './persona-cards.js';
 import { logger } from './logger.js';
@@ -32,8 +38,11 @@ function jpPronounsForChat(chat) {
 /** 自研单体（Electron 应用）的本地 API 端点——语音合成入口在它那侧。 */
 const ENDPOINT = 'http://127.0.0.1:3280';
 
-/** 单次转发超时（毫秒）——合成是异步受理的，这里只等「入队」这一步。 */
+/** 单次转发的**入队**超时（毫秒）——只覆盖「把文本递过去」这一步。 */
 const REQUEST_TIMEOUT_MS = 15000;
+
+/** 等语音真发出去的超时（毫秒）——合成十几秒到一分钟；超过就让那句文字先走（语音仍会晚到）。 */
+const WAIT_TIMEOUT_MS = 180000;
 
 /** 缺省规则（config 缺字段时兜底；与 config.js 默认段同值）。
  *
@@ -137,18 +146,22 @@ export function isVoiceChat(chatKey) {
 /**
  * 把一句话交给自研单体去念（群开关触发）。
  *
- * 只做转发：能不能念、怎么念、念完发不发得出去，全由单体负责并在它的活动流里留痕。
- * 本函数不 await 合成结果（合成要十几秒到一分钟），也不抛出——调用点在发送成功之后，
- * 语音失败不该让已经发出去的那条消息变成"报错"。
+ * 只做转发 + 等回执：能不能念、怎么念、念完发不发得出去，全由单体负责并在它的活动流里留痕。
+ * 🔴 本函数**会等**（语音先行 2026-11-08）：`wait:true` 让单体把「音频真发到群」的结果带回来，
+ * 调用点（sender）据此决定那句文字什么时候发。等待失败 / 超时也**不抛出**——语音是伴随产物，
+ * 等不到就让文字先走（失败留 logger.warn，不把一条消息变成报错）。
  *
  * 排队（queue:true）：单体侧把这几句按序合成、依次发回群——发言常常连发两三条，
  * 手动口径那种「上一句还在跑就回绝」会让后面的句子丢掉声音。
  *
  * @param {string} chatKey 会话键（group:123456）
- * @param {string} text 刚发出去的那句文字
- * @returns {Promise<object>} { ok, queued?, skipped?, error? }
+ * @param {string} text 即将发出的那句文字
+ * @param {object} [options] 选项
+ * @param {boolean} [options.wait] 等音频到群（默认 true；false = 旧口径，入队即走）
+ * @returns {Promise<object>} { ok, sent?, queued?, skipped?, timedOut?, error? }（ok=true 才代表音频已到群）
  */
-export async function voiceReply(chatKey, text) {
+export async function voiceReply(chatKey, text, options = {}) {
+  const wait = options.wait !== false;
   const body = String(text ?? '').trim();
   if (!body) return { ok: false, skipped: true, error: '空文本' };
   if (!isVoiceChat(chatKey)) return { ok: false, skipped: true, error: '该群未开语音' };
@@ -157,7 +170,7 @@ export async function voiceReply(chatKey, text) {
   // 超长发言不念整段（单次合成 30 秒硬上限，见 clipForSpeech）——按句末切到能念完的长度
   const clipped = clipForSpeech(body, rule.maxChars).text;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), wait ? WAIT_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
   // 口径留痕（业务面侧）：排查「人称没变」时先看这行——它证明算没算对、带没带上
   const pronouns = jpPronounsForChat(chat);
   logger.info('voice', `人称口径 ${pronouns.first}/${pronouns.second} · 语尾 ${(pronouns.tails || []).join('/') || '无'}（群 ${chat}）`);
@@ -169,6 +182,8 @@ export async function voiceReply(chatKey, text) {
         by: 'auto',
         auto: true,
         queue: true,
+        // 语音先行：让单体把「这一句真发到群」的回执带回来（wait=false 时退回入队即回执）
+        wait,
         chat,
         text: clipped,
         caption: rule.caption,
@@ -183,13 +198,23 @@ export async function voiceReply(chatKey, text) {
     try { data = raw ? JSON.parse(raw) : {}; } catch { data = { ok: false, error: raw.slice(0, 160) }; }
     if (data?.ok !== true) {
       logger.warn('voice', `群 ${chat} 语音未受理：${data?.error ?? raw.slice(0, 160)}`);
-      return { ok: false, error: String(data?.error ?? '未受理') };
+      return { ok: false, sent: false, error: String(data?.error ?? '未受理') };
     }
-    logger.info('voice', `群 ${chat} 已提交语音伴随（${clipped.slice(0, 30)}）`);
-    return { ok: true, queued: data?.queued ?? null };
+    if (!wait) {
+      logger.info('voice', `群 ${chat} 已提交语音伴随（${clipped.slice(0, 30)}）`);
+      return { ok: true, queued: data?.queued ?? null };
+    }
+    if (data?.sent !== true) {
+      // 受理了但没送到群（合成失败 / 发群失败 / 排队丢弃）——文字照发，这里只留痕
+      logger.warn('voice', `群 ${chat} 语音未到群：${data?.error ?? '未知原因'}——文字照发`);
+      return { ok: false, sent: false, queued: data?.queued ?? null, error: String(data?.error ?? '未知原因') };
+    }
+    logger.info('voice', `群 ${chat} 语音已发群（${clipped.slice(0, 30)}）——文字随后发出`);
+    return { ok: true, sent: true, queued: data?.queued ?? null };
   } catch (error) {
-    logger.warn('voice', `群 ${chat} 语音转发失败：${error?.message ?? error}`);
-    return { ok: false, error: String(error?.message ?? error) };
+    const timedOut = error?.name === 'AbortError';
+    logger.warn('voice', `群 ${chat} ${timedOut ? `等语音超时（${Math.round(WAIT_TIMEOUT_MS / 1000)} 秒）` : '语音转发失败'}：${error?.message ?? error}——文字照发`);
+    return { ok: false, sent: false, timedOut, error: String(error?.message ?? error) };
   } finally {
     clearTimeout(timer);
   }

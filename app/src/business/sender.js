@@ -15,7 +15,7 @@ import { getScore, cooldownForScore, rapportRule } from './rapport.js';
 // 出站闸拦截落采集（[qqagent-level-patch:sender-import]）——补"被拦了但不留痕"的盲区
 import { record as recordEngage } from './engage-metrics.js';
 import { paramsFor } from './engage-level.js';
-// 群语音伴随（本号每句发言再用 TTS 念一遍）——[qqbotb-voicereply:sender-import]
+// 群语音伴随（本号每句发言先用 TTS 念一遍，再发文字）——[qqbotb-voicereply:sender-import]
 import { voiceReply } from './voice-reply.js';
 
 /** 假名语气词 → 中文音译（与角色卡 §17.1 中文对照表同源）。 */
@@ -556,6 +556,18 @@ export class SendQueue {
           console.warn(`[sender] 跳过重复消息（${this.#dedupeWindow()}ms 内已发过相同内容）：${String(text).slice(0, 30)}`);
           return { text, messageId: null, at: formatClockTime(Date.now()), deduped: true };
         }
+        // 群语音伴随（[qqbotb-voicereply:sender-hook]）——**语音先行**（Rushiera 2026-11-08 定）：
+        // 本群开了语音，就先等它的语音真发到群（单体回执 sent:true），再把这句文字发出去。
+        // 不开语音的群 / 私聊一行不差：voiceReply 内部 isVoiceChat 直接返回，零等待。
+        // 对模型与群内视角不可见——两边都照常"发一条消息"，只是开了语音的群文字晚一点到。
+        // 失败 / 超时不阻断（模块内部已落 logger.warn）：等不到就让文字先走，别把消息搭进去。
+        if (String(kind) === 'group') {
+          try {
+            await voiceReply(chatKey, text);
+          } catch (error) {
+            console.warn(`[sender] 语音伴随异常（文字照发 · ${chatKey}）：${error?.message ?? error}`);
+          }
+        }
         const data = await this.onebot.sendText(kind, id, text, {
           replyToMessageId: i === 0 ? options.replyToMessageId : null, // 引用挂在第一条上：回的就是那条
           atUserId: i === 0 ? options.atUserId : null
@@ -564,12 +576,6 @@ export class SendQueue {
         const ts = Date.now();
         this.store.appendSelf(chatKey, { text, ts, mid: data?.message_id ?? null });
         this.onSent?.({ chatKey, text, messageId: data?.message_id ?? null });
-        // 群语音伴随（[qqbotb-voicereply:sender-hook]）——本群开了语音就把这句念一遍。
-        // 放在「已经发出去」之后：语音是伴随产物，不是发言的前置；失败由模块自己落 logger.warn，
-        // 不抛出、不 await（合成十几秒到一分钟，等它会拖住整条发送链）。
-        if (String(kind) === 'group') {
-          voiceReply(chatKey, text).catch(() => { /* 模块内部已落痕 */ });
-        }
         return { text, messageId: data?.message_id ?? null, at: formatClockTime(ts) };
       }));
     }

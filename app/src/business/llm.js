@@ -12,8 +12,22 @@ function joinUrl(base, path) {
   return `${String(base).replace(/\/+$/, '')}${path}`;
 }
 
+// 本机中转站（壳）识别用——只对回环地址自报家门，直连外部端点一律不带：
+// 这个头的唯一用途是让本地壳把「哪路客户端」记进来源台账；
+// 一旦透到上游就成了可指认的客户端指纹（Rushiera 口径：出网形态不带这些特征）。
+const QQBOTB_CLIENT_ID = 'qqbotb/1.27';
+
+/** 端点是否本机回环（127.0.0.1 / localhost / [::1]）——只有这类才自报客户端身份。 */
+function isLoopbackBase(baseUrl) {
+  return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])([:/]|$)/i.test(String(baseUrl || ''));
+}
+
 function authHeaders(apiKey, baseUrl = '', model = '') {
   const h = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
+  // 客户端自报（仅回环端点）：壳据此在来源台账里记 tag=qqbotb/…，不必靠 system 头猜
+  if (isLoopbackBase(baseUrl)) {
+    h['x-client-id'] = QQBOTB_CLIENT_ID;
+  }
   // OpenCode Go 强制要求会话头做路由（缺了直接 400）。注意不能只认域名：
   // 走中转站转发时 baseUrl 不是 opencode.ai，只能靠模型 id 的 opencode-go/ 前缀识别。
   if (/opencode\.ai/i.test(String(baseUrl)) || /^opencode-go\//i.test(String(model || ''))) {

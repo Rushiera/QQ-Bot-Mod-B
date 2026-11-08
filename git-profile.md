@@ -17,7 +17,7 @@
 
 ## 二、上传模式
 
-**收工推送** —— 每次收工统一 `git add -A` → commit → push → `status -sb` 验证；commit message 含版本号 + 摘要。
+**收工推送** —— 每次收工统一 `add <显式路径>`（🔴 禁 `add -A`，见 `L2/Job/Git/exp.md` §1.2）→ commit → push → `status -sb` 验证；commit message 含版本号 + 摘要。
 
 ## 三、同步范围
 
@@ -52,9 +52,9 @@
 
 | 字段 | 值 |
 |:--|:--|
-| 上次同步时间 | 2026-11-08 16:22 |
-| 上次同步 commit | `b2c5751`（v1.38 TTS 语气词节流 + 思考档位四档 local-relay + 档案面）+ `af42e22`（thinking.js 中继默认档注释订正）——push 均带 `-c http.proxy=http://127.0.0.1:7897`，一次即通 |
-| 远程状态 | 与 origin 同步（`b2c5751..af42e22 main -> main` · `status -sb` 干净）——直连未试，按本档案规则直接带 `-c http.proxy=http://127.0.0.1:7897` |
+| 上次同步时间 | 2026-11-08 17:57 |
+| 上次同步 commit | `fa74aa4`（v1.40 语音先行：先语音后文字 + 自测 22/22 + 档案面）——push 前直连试过一次（`Recv failure: Connection was reset`），带 `-c http.proxy=http://127.0.0.1:7897` 一次即通 |
+| 远程状态 | 与 origin 同步（`9cc8ffb..fa74aa4 main -> main` · `status -sb` = `## main...origin/main` 无 ahead/behind）——直连本条已实测失败，按 §五 规则直接带代理 |
 
 ## 五、项目特有规则
 

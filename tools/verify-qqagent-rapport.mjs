@@ -87,7 +87,12 @@ const fakeOnebot = {
   async sendPoke() { sentCount += 1; return { message_id: sentCount }; }
 };
 const fakeStore = { appendSelf() {} };
-const sender = new SendQueue({ onebot: fakeOnebot, store: fakeStore });
+const sender = new SendQueue({
+  onebot: fakeOnebot,
+  store: fakeStore,
+  // 语音伴随出口注入 stub（2026-11-08）：不注入就真发语音到真群
+  voiceReplyFn: async () => ({ ok: false, skipped: true, error: '自测不发群' })
+});
 
 const setRapportCfg = (patchObj) => {
   getConfig().engage = {

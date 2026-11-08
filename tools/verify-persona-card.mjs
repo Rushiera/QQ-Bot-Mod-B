@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  listProfiles, readCard, sharedText, profileIdOf, writeCard, jpPronounsOf,
+  listProfiles, readCard, sharedText, profileIdOf, writeCard, jpPronounsOf, voiceSourceOf,
   CARD_MAX_CHARS, DEFAULT_PROFILE_ID, DEFAULT_PROFILES, PROJECT_ROOT
 } from '../app/src/business/persona-cards.js';
 
@@ -120,7 +120,7 @@ check('inherit 卡照旧注入标准提示词（lead + 风格段）',
   sysYoshino.includes('那张卡是风格参考') && sysYoshino.includes('【像真人一样】'));
 check('inherit 卡含输出语言口径段（业务面口径 · 与卡不冲突）',
   sysYoshino.includes('【输出语言（业务面口径') && sysYoshino.includes('日文只出现在两类地方')
-    && sysYoshino.includes('语气词与感叹词走中文音译'));
+    && sysYoshino.includes('不写「哦呀 / 哎呀 / 呵呵」这类中文音译'));
 check('inherit 卡仍注入公共机制段（R喵 不注入，内容在卡里）',
   sysYoshino.includes('四条底线（不可协商）') && !sysRmiao.includes('四条底线（不可协商）'));
 check('两次组装字节一致（同配置幂等）', buildSystemPrompt({ skillContext: {} }) === sysYoshino);
@@ -224,6 +224,24 @@ check('芳乃 带日语语尾口径（TTS 层）', (jpPronounsOf('yoshino').tail
   JSON.stringify(jpPronounsOf('yoshino').tails));
 check('芳乃 带语气词清单（TTS 层）', (jpPronounsOf('yoshino').interjections || []).includes('おや'));
 check('默认卡不带语尾口径（不串味）', (jpPronounsOf('rmiao').tails || []).length === 0);
+
+console.log('\n六之三、语音源口径（voiceSource · 日语先行 · 2026-11-08）');
+// 甲案：日语母语卡（voiceSource='ja'）先日语成句、再落等价中文；日语原句随 send_message 的 jp
+// 喂语音，跳过「中文→日语」翻译。判据 → design-qqbotb_log.md §一百一十九。
+check('芳乃卡标了声纹源 voiceSource=ja', voiceSourceOf('yoshino') === 'ja', voiceSourceOf('yoshino'));
+check('R喵 卡不标（走老链：中文起稿 + 事后翻译）', voiceSourceOf('rmiao') === '', voiceSourceOf('rmiao'));
+check('未知 id 回落空串（老链）', voiceSourceOf('nope') === '');
+check('芳乃系统提示追加【日语先行】段', sysYoshino.includes('【日语先行 · 这张卡以日语为母语】'));
+check('日语先行段含「先日语成句 → 再落等价中文」与 jp 参数名',
+  sysYoshino.includes('先在脑子里用日语成句') && sysYoshino.includes('jp 参数') && sysYoshino.includes('等价的中文'));
+check('R喵 系统提示不带【日语先行】段（字节前缀零变化）', !sysRmiao.includes('【日语先行'));
+// 语气词口径二次改向（Rushiera 2026-11-08）：几乎不带 · 要带写假名原形 · 上限 5%
+check('输出语言段：语气词目标 0 / 上限 5%',
+  sysYoshino.includes('真要带一处，写**假名原形**') && sysYoshino.includes('5% 以下'));
+check('输出语言段：不再教中文音译', !sysYoshino.includes('语气词与感叹词走中文音译'));
+check('卡内口径同步（§2.7 频控 · §17.1 注）',
+  yoshino.text.includes('目标 **0**，上限 **5%**') && yoshino.text.includes('不写「哦呀——」「哎呀——」「呵呵——」'),
+  String(yoshino.text.length));
 
 console.log('\n七、卡正文写回（人设页「看 / 改正文」保存路径）');
 

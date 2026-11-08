@@ -79,11 +79,16 @@ ok('7b-4 无任何标点则硬切到上限', hardRes.text.length === 20 && hardR
 // ── 8~10 发送面挂钩 ────────────────────────────────────────────────────────
 const senderSrc = readOf(path.join(SRC, 'sender.js'));
 ok('8 sender.js 导入 voiceReply', /import\s*\{\s*voiceReply\s*\}\s*from\s*'\.\/voice-reply\.js'/.test(senderSrc));
-ok('9 发送成功后挂伴随即（voiceReply(chatKey, text)）', /voiceReply\(chatKey,\s*text\)/.test(senderSrc));
+ok('9 发送后先等语音再发文字（this.voiceReplyFn(chatKey, text, { spoken })）',
+  /voiceReplyFn\(chatKey,\s*text,\s*\{\s*spoken\s*\}\)/.test(senderSrc));
+ok('9d 语音出口可注入（构造参数 voiceReplyFn → this.voiceReplyFn）',
+  /voiceReplyFn = voiceReply/.test(senderSrc) && /this\.voiceReplyFn = typeof voiceReplyFn/.test(senderSrc));
+ok('9b 语音源透传（voice-reply 请求体带 japanese）', /japanese:\s*spoken/.test(readOf(path.join(SRC, 'voice-reply.js'))));
 ok('10 只对群挂（kind === group 判据在位）', /String\(kind\)\s*===\s*'group'/.test(senderSrc));
 
 // ── 11~12 单体侧 ───────────────────────────────────────────────────────────
 const mediaSrc = readOf(path.join(MONO, 'navigator', 'media.js'));
+ok('9c 单体语音源判定（给了正文日语就跳过翻译）', /export function resolveTtsSource/.test(mediaSrc));
 ok('11a ttsSpeak 接 auto 参数', /async function ttsSpeak\(\{[^}]*auto = false/.test(mediaSrc));
 ok('11b ttsSpeak 接 runMode 并写进 ComfyDock 配置', /cfg\.RunMode = mode/.test(mediaSrc));
 ok('11c waitTts auto 时不补发文字配文', /if \(!auto\)\s*\{[\s\S]{0,200}?await sendText\(chat, String\(source/.test(mediaSrc));

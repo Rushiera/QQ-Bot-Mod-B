@@ -3018,6 +3018,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         by: body?.by === 'qq' ? 'qq' : (body?.by === 'auto' ? 'auto' : 'app'),
         chat: body?.chat ?? null,
         text: body?.text ?? '',
+        // 日语原句（甲案 2026-11-08）：`voiceSource:'ja'` 的卡由模型给出，随请求带到单体；
+        // 有它就跳过「中文→日语」翻译，空串 = 老链
+        japanese: body?.japanese ?? '',
         caption: body?.caption ?? '',
         auto: body?.auto === true,
         runMode: body?.runMode ?? '',

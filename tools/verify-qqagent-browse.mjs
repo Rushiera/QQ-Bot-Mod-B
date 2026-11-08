@@ -215,7 +215,12 @@ const PRIVATE = 'private:10001';
 {
   let n = 0;
   const fakeOnebot = { async sendText() { n += 1; return { message_id: n }; } };
-  const sender = new SendQueue({ onebot: fakeOnebot, store: { appendSelf() {} } });
+  const sender = new SendQueue({
+    onebot: fakeOnebot,
+    store: { appendSelf() {} },
+    // 语音伴随出口注入 stub（2026-11-08）：不注入就真发语音到真群
+    voiceReplyFn: async () => ({ ok: false, skipped: true, error: '自测不发群' })
+  });
   setBrowseLevel(KEY, 3);
   const before = browseState(KEY).expiresAt;
   await new Promise((r) => setTimeout(r, 25));

@@ -134,7 +134,12 @@ check('兼容：systemPromptEnabled=false → 按 lean 处理', compat.length > 
 {
   let sentCount = 0;
   const fakeOnebot = { async sendText() { sentCount += 1; return { message_id: sentCount }; } };
-  const sender = new SendQueue({ onebot: fakeOnebot, store: { appendSelf() {} } });
+  const sender = new SendQueue({
+    onebot: fakeOnebot,
+    store: { appendSelf() {} },
+    // 语音伴随出口注入 stub（2026-11-08）：不注入就真发语音到真群
+    voiceReplyFn: async () => ({ ok: false, skipped: true, error: '自测不发群' })
+  });
   const s0 = sender.quotaState(KEY);
   check('未发言 → sinceLastMs = null', s0 && s0.sinceLastMs === null, JSON.stringify(s0));
   await sender.sendTextBatch(KEY, ['第一句']);

@@ -158,22 +158,28 @@ export function isVoiceChat(chatKey) {
  * @param {string} text 即将发出的那句文字
  * @param {object} [options] 选项
  * @param {boolean} [options.wait] 等音频到群（默认 true；false = 旧口径，入队即走）
+ * @param {string} [options.spoken] 日语原句（voiceSource='ja' 卡由模型给出）——给了就直接念它，
+ *   单体跳过「中文→日语」翻译；空 = 老链（中文翻日语）。
  * @returns {Promise<object>} { ok, sent?, queued?, skipped?, timedOut?, error? }（ok=true 才代表音频已到群）
  */
 export async function voiceReply(chatKey, text, options = {}) {
   const wait = options.wait !== false;
   const body = String(text ?? '').trim();
-  if (!body) return { ok: false, skipped: true, error: '空文本' };
+  if (!body && !String(options.spoken ?? '').trim()) return { ok: false, skipped: true, error: '空文本' };
   if (!isVoiceChat(chatKey)) return { ok: false, skipped: true, error: '该群未开语音' };
   const rule = voiceRule();
   const chat = String(chatKey).split(':')[1] || '';
   // 超长发言不念整段（单次合成 30 秒硬上限，见 clipForSpeech）——按句末切到能念完的长度
   const clipped = clipForSpeech(body, rule.maxChars).text;
+  // 日语原句（若有）原样带走：它已经是要念的那句话，切分交给单体（同一套 30 秒规则）
+  const spoken = String(options.spoken ?? '').trim();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), wait ? WAIT_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
   // 口径留痕（业务面侧）：排查「人称没变」时先看这行——它证明算没算对、带没带上
   const pronouns = jpPronounsForChat(chat);
   logger.info('voice', `人称口径 ${pronouns.first}/${pronouns.second} · 语尾 ${(pronouns.tails || []).join('/') || '无'}（群 ${chat}）`);
+  // 语音源留痕（甲案 2026-11-08）：念的是「正文日语」还是「中文翻译」——排查译文失真时先看这行
+  logger.info('voice', `语音源：${spoken ? `正文日语（${spoken.slice(0, 24)}）` : '中文翻译'}`);
   try {
     const response = await fetch(`${ENDPOINT}/api/nav/tts`, {
       method: 'POST',
@@ -186,6 +192,8 @@ export async function voiceReply(chatKey, text, options = {}) {
         wait,
         chat,
         text: clipped,
+        // 日语原句：单体拿到它就不再走「中文→日语」翻译（空串 = 老链）
+        japanese: spoken,
         caption: rule.caption,
         runMode: rule.runMode,
         // 日语人称口径在业务面算好随请求带走——单体侧只跑媒体能力，不必读业务面配置

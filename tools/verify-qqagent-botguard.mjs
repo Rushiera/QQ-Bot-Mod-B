@@ -69,7 +69,12 @@ const fakeOnebot = {
   async sendPoke() { sentCount += 1; return { message_id: sentCount }; }
 };
 const fakeStore = { appendSelf() {} };
-const sender = new SendQueue({ onebot: fakeOnebot, store: fakeStore });
+const sender = new SendQueue({
+  onebot: fakeOnebot,
+  store: fakeStore,
+  // 语音伴随出口必须注入（2026-11-08）：它直连单体 3280，不走 fakeOnebot —— 不注入就真发语音到真群
+  voiceReplyFn: async () => ({ ok: false, skipped: true, error: '自测不发群' })
+});
 
 const setGuard = (patchObj) => {
   getConfig().engage = { ...(getConfig().engage || {}), botGuard: { ...(getConfig().engage?.botGuard || {}), ...patchObj } };

@@ -18,24 +18,34 @@ import { paramsFor } from './engage-level.js';
 // 群语音伴随（本号每句发言先用 TTS 念一遍，再发文字）——[qqbotb-voicereply:sender-import]
 import { voiceReply } from './voice-reply.js';
 
-/** 假名语气词 → 中文音译（与角色卡 §17.1 中文对照表同源）。 */
+/** 假名语气词 ↔ 中文音译对照（与角色卡 §17.1 同源）——本表用于**反向**归一：中文音译 → 假名。 */
 const JP_INTERJECTIONS = [
   ['おや', '哦呀'],
+  ['おや', '噢呀'],
   ['あら', '哎呀'],
+  ['あら', '啊啦'],
   ['ふふ', '呵呵']
 ];
 
-/** 平假名 / 片假名——判断「这一行还是不是日文」。 */
-const KANA_RE = /[\u3040-\u309f\u30a0-\u30ff]/;
+/** 独立出现的「中文音译语气词」——行首 / 标点 / 空白之后起，后面跟标点 / 空白 / 行尾。 */
+const ZH_INTERJECTION_RE = /(^|[，。！？、…—「『（(\s])(哦呀|噢呀|哎呀|啊啦|呵呵)(?=[，。！？、…—」』）)\s]|$)/g;
+
+/** 中文音译 → 假名原形。 */
+const ZH_TO_KANA = new Map(JP_INTERJECTIONS.map(([kana, zh]) => [zh, kana]));
 
 /**
- * 语气词归一到中文音译（**只对日系人设卡生效**）——假名语气词写回中文。
+ * 语气词归一为**假名原形**（**只对日系人设卡生效**）——中文音译写回日文。
  *
- * 判例 2026-11-08（改向）：上一版把「哦呀」改写成「おや」，与本卡 §17.1 的中文对照表
- * 正好相反，群里「おや」吃到 8/57 条、六条连续开场，而签名语尾 〜でしてー 一条都没有
- * （判据 → `design-qqbotb_log.md` §一百一十五）。口径改为「语气词走中文音译，日文只留
- * 专名与复述台词」后，出站口随之反向：**整行去掉语气词后不再含假名**（= 中文行）才改写，
- * 日语台词行一个字符都不动。R喵 那类中文卡不走本函数（口径不是「きみ」才进）。
+ * 口径（Rushiera 2026-11-08 二次改向）：群里正常中文打字几乎不带语气词——目标 ≈0、上限 5%；
+ * 真要带一处就写假名原形（おや / あら / ふふ），不写「哦呀 / 哎呀 / 呵呵」。
+ * 上一版方向正好相反（假名 → 中文音译，判据 `design-qqbotb_log.md` §一百一十五），本次整条反向，
+ * 本函数是硬层：提示词给倾向，这里保证「一旦出现必是假名」这条能被机械兑现。
+ *
+ * 只认**独立出现**的语气词（行首 / 标点 / 空白之后，后面紧跟标点 / 空白 / 行尾）——
+ * 中文词里恰好含这两个字（「哎呀妈呀」整体被当词）不改写，避免把词切开。
+ * 出现率本身不在此闸——那是提示词口径 + `tools/yoshino-interject-stat.mjs` 的观测面。
+ *
+ * R喵 那类中文卡不走本函数（口径不是「そなた」才进）。
  *
  * @param {string} text 待发送文本
  * @param {string} chatKey 会话键（决定该群当前生效的卡）
@@ -51,18 +61,7 @@ function normalizeJpInterjections(text, chatKey) {
     jp = null;
   }
   if (!jp || jp.second === 'きみ') return s;
-  return s
-    .split('\n')
-    .map((line) => {
-      // 去掉语气词后还剩假名 = 日文行（复述台词 / 整句日文）——原样保留
-      let rest = line;
-      for (const [kana] of JP_INTERJECTIONS) rest = rest.split(kana).join('');
-      if (KANA_RE.test(rest)) return line;
-      let out = line;
-      for (const [kana, zh] of JP_INTERJECTIONS) out = out.split(kana).join(zh);
-      return out;
-    })
-    .join('\n');
+  return s.replace(ZH_INTERJECTION_RE, (all, lead, word) => `${lead}${ZH_TO_KANA.get(word) ?? word}`);
 }
 
 /** 记一条拦截事件（采集是旁路，失败不影响发送判定）。 */
@@ -108,10 +107,14 @@ export function toFileUri(input) {
 }
 
 export class SendQueue {
-  constructor({ onebot, store, onSent = null, log = null }) {
+  constructor({ onebot, store, onSent = null, log = null, voiceReplyFn = voiceReply }) {
     this.onebot = onebot;
     this.store = store;
     this.onSent = onSent;
+    // 群语音伴随的出口——**可注入**（2026-11-08 修：语音这条路直连单体 `127.0.0.1:3280`，
+    // 不经过注入的 onebot；自测里的假 OneBot 拦得住文字、拦不住语音 → 自测真发语音到真群）。
+    // 默认就是真函数；自测/干跑构造时传 stub 即彻底断开发群路径。
+    this.voiceReplyFn = typeof voiceReplyFn === 'function' ? voiceReplyFn : voiceReply;
     // 回退/降级这类"行为变了但没报错"的事必须留痕，否则排查时看不到曾经降级过
     this.log = typeof log === 'function' ? log : null;
     this.chains = new Map();      // chatKey -> enqueue fn
@@ -481,7 +484,7 @@ export class SendQueue {
 
   /**
    * 发送一批文本消息（一条或多条）。
-   * options: { replyToMessageId, atUserId }
+   * options: { replyToMessageId, atUserId, voiceTexts }（voiceTexts = 与 messages 逐条对齐的日语原句，可缺）
    * 返回 { sent: [{text, messageId}], failed: [{text, error}] }；全部失败时抛错。
    */
   async sendTextBatch(chatKey, messages, options = {}) {
@@ -499,8 +502,10 @@ export class SendQueue {
     //    （03:00 那次「能，图在这：…[image-open]…」整条被当文本发出，群里只见路径）。
     //    现在整条扫描：命中完整包裹即发图，其余文本照发。
     const texts = [];
+    const voiced = [];   // 与 texts 逐条对齐的日语原句（'' = 这条没带，走翻译回退）
     const blockImages = [];
-    for (const m of list) {
+    for (let li = 0; li < list.length; li += 1) {
+      const m = list[li];
       const lines = String(m ?? '').split(/\r?\n/);
       const rest = [];
       let cursor = 0;
@@ -520,7 +525,9 @@ export class SendQueue {
         cursor = i + 1;
       }
       const body = rest.join('\n').trim();
-      if (body) texts.push(body);
+      if (!body) continue;
+      texts.push(body);
+      voiced.push(Array.isArray(options.voiceTexts) ? String(options.voiceTexts[li] ?? '').trim() : '');
     }
     for (const file of blockImages) {
       try {
@@ -531,14 +538,25 @@ export class SendQueue {
     }
     const hardSplitAt = Number(getConfig().send?.hardSplitAt) || 0;
     const parts = [];
-    for (const m of texts) {
+    const partVoice = [];   // 与 parts 逐条对齐：日语原句只挂在该条消息的第一段上
+    for (let ti = 0; ti < texts.length; ti += 1) {
+      const m = texts[ti];
       const plain = normalizeJpInterjections(mdToPlain(String(m ?? '')), chatKey);
       if (!plain) continue;
       // 最后防线：任何上游畸形路径漏下来的 "[object Object]" 到这儿直接拦掉，
       // 用户永远不该在 QQ 里看到这串字符。全被拦 → 下方抛"消息内容为空"回给模型。
       if (/^\[object Object\]$/.test(plain)) continue;
-      if (hardSplitAt > 0 && plain.length > hardSplitAt) parts.push(...splitForQQ(plain, hardSplitAt));
-      else parts.push(plain);
+      const spoken = voiced[ti] || '';
+      if (hardSplitAt > 0 && plain.length > hardSplitAt) {
+        const split = splitForQQ(plain, hardSplitAt);
+        for (let k = 0; k < split.length; k += 1) {
+          parts.push(split[k]);
+          partVoice.push(k === 0 ? spoken : '');
+        }
+      } else {
+        parts.push(plain);
+        partVoice.push(spoken);
+      }
     }
     if (!parts.length) throw new Error('消息内容为空');
 
@@ -546,6 +564,7 @@ export class SendQueue {
     const promises = [];
     for (let i = 0; i < parts.length; i++) {
       const text = parts[i];
+      const spoken = partVoice[i] || '';
       const isLast = i === parts.length - 1;
       const gap = this.#gap(text, isLast);
       promises.push(chain(async () => {
@@ -563,7 +582,9 @@ export class SendQueue {
         // 失败 / 超时不阻断（模块内部已落 logger.warn）：等不到就让文字先走，别把消息搭进去。
         if (String(kind) === 'group') {
           try {
-            await voiceReply(chatKey, text);
+            // spoken = 模型给的日语原句（voiceSource='ja' 卡）——有就直接念它，跳过翻译；
+            // 空串 = 走老链（中文→日语翻译）。两种情形对模型与群内视角都不可见。
+            await this.voiceReplyFn(chatKey, text, { spoken });
           } catch (error) {
             console.warn(`[sender] 语音伴随异常（文字照发 · ${chatKey}）：${error?.message ?? error}`);
           }

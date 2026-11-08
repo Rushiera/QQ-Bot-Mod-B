@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createNavigator } from '../app/src/navigator/index.js';
-import { normalizeJapanesePronouns, localizeProperNouns, normalizeProperNouns, gateInterjections, resetInterjectionGate } from '../app/src/navigator/media.js';
+import { normalizeJapanesePronouns, localizeProperNouns, normalizeProperNouns, gateInterjections, resetInterjectionGate, resolveTtsSource } from '../app/src/navigator/media.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LIVE_MOSS = process.argv.includes('--live-moss');
@@ -342,6 +342,23 @@ if (LIVE_TAGGER) {
     check('live·Tagger 标签发群', done && textSent, `done=${done} sent=${live.sent.length}`);
   }
 }
+
+// ── 9 语音源判定（甲案 · 日语先行 · 2026-11-08）────────────────────────────
+// 业务面把模型给的日语原句（send_message 的 jp）随请求带到单体：含假名就直接念它、跳过
+// 「中文→日语」翻译；不含假名（模型塞了中文）→ 出声 + 回退翻译。判据 → log §一百一十九。
+const srcJa = resolveTtsSource('替人听烦恼的呢——', 'そなたの話、わたくしが聞きましょうー');
+check('语音源·正文日语直接采用（跳过翻译）',
+  srcJa.source === 'ja' && srcJa.warn === '' && srcJa.text.includes('そなた'),
+  `${srcJa.source} / ${srcJa.text}`);
+check('语音源·正文日语里的汉字专名归一成假名',
+  resolveTtsSource('x', '依田芳乃と申しますー').text.includes('よりたよしの'));
+const srcZh = resolveTtsSource('替人听烦恼的呢——', '替人听烦恼的呢——');
+check('语音源·jp 不含假名 = 回退翻译 + 出声',
+  srcZh.source === 'translate' && srcZh.text === '替人听烦恼的呢——' && srcZh.warn.includes('不含假名'), srcZh.warn);
+check('语音源·没给 jp = 老链且不出声',
+  resolveTtsSource('替人听烦恼的呢——', '').source === 'translate' && resolveTtsSource('中文', '').warn === '');
+check('语音源·undefined 同样回落老链', resolveTtsSource('中文', undefined).source === 'translate');
+check('语音源·只有长音符「ー」不算假名', resolveTtsSource('吃是吃得ー。', '吃是吃得ー。').source === 'translate');
 
 const passed = results.filter((r) => r.ok).length;
 console.log(`\n结果：${passed}/${results.length} 通过`);

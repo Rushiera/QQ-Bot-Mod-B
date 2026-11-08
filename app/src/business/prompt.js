@@ -13,7 +13,7 @@
 import { getConfig, personaForChat } from './config.js';
 // 人设卡（角色卡）实体面——人格的唯一载体是文件，配置里只记 id。
 // [qqbotb-persona-card] 2026-11-07：roleText 单字段拆成「人格卡 + 共用机制段」。
-import { readCard, readText, sharedText, profileIdOf } from './persona-cards.js';
+import { readCard, readText, sharedText, profileIdOf, voiceSourceOf } from './persona-cards.js';
 // 滑条换算放在独立模块（零依赖），避免 config.js ↔ prompt.js 循环依赖。
 // 这里 re-export 是为了让已经从 prompt.js 引用的代码不受影响。
 import { sliderToTier as _sliderToTier, tierToSlider as _tierToSlider, TIER_SLIDER_BANDS as _TIER_SLIDER_BANDS } from './tier-slider.js';
@@ -292,17 +292,29 @@ function leadText(cfg) {
  * 是交付口径，必须对任何卡（含自带全套的 self 卡）都成立。口径来源：Rushiera 2026-11-08
  * （群 112562956 整句日文事件，判据 → `design-qqbotb_log.md` §一百一十）。
  *
+ * 2026-11-08 二次改向（Rushiera 定）：
+ * ① 语气词从「走中文音译」改成「几乎不用；要带就写假名原形」，出现率上限 5%（判据 → log §一百一十九）；
+ * ② 日语母语卡（`voiceSource:'ja'`）追加「日语先行」段——先用日语成句，再落等价中文，
+ *    日语原句走 `send_message` 的 `jp` 参数喂语音；非日语卡不输出该段（字节前缀零变化）。
+ *
+ * @param {{id?: string}} [card] 当前生效的角色卡（决定是否追加「日语先行」段）
  * @returns {string} 段落文本
  */
-function outputLanguageText() {
-  return [
+function outputLanguageText(card = null) {
+  const jaFirst = voiceSourceOf(card?.id) === 'ja';
+  const lines = [
     '【输出语言（业务面口径 · 与角色卡不冲突）】',
     '角色卡提供的是「这个人是谁、什么语体、什么用词」——那是风格参考；一条消息最后以什么语言落到群里，由本段决定。',
     '1. 群里写下的文字一律用中文，语体特征——慢句、三段式、语尾延长、敬语感、古语腔——也用中文写。语尾同样落在中文上：卡里 〜でしてー / 〜のでしてー 的中文形态是「……呢——」「……是也——」（例：「替人听烦恼的呢——」「今日是好日的呢——」）；句末只挂一个「ー」不算语尾，把 でして 原形搬进中文句子也不算。',
-    '2. 日文只出现在两类地方：① 角色名与专有名词，照原样；② 明确在复述台词——解释一句日语、引用卡里的台词、演剧情片段时可以用日文，但要让人看出这是台词或原文（加引号或【】），不是你的日常发言。语气词与感叹词走中文音译：写「哦呀——」「哎呀——」「呵呵——」「唔——」，不写 おや / あら / ふふ / ふむ。',
-    '3. 人称代词不属于上面两类——中文句子里写「我」「你」，不夹 わたくし / そなた / あなた / きみ（写「说给你听」，不写「说给そなた听」）；日文名词、代词、动词、助词一律不夹进中文句子。语气词是偶发的呼应、不是开场填充：同一条消息里不起头连用，连续两条发言不复用同一个语气词。',
-    '4. 语音伴随是另一条链：文字转语音时会把中文翻成日语再朗读，那是朗读环节，不影响群里写下的文字是什么语言。'
-  ].join('\n');
+    '2. 日文只出现在两类地方：① 角色名与专有名词，照原样；② 明确在复述台词——解释一句日语、引用卡里的台词、演剧情片段时可以用日文，但要让人看出这是台词或原文（加引号或【】），不是你的日常发言。',
+    '3. 语气词：正常打字说话几乎不带语气词——起句直接从内容起（看见的、听见的、想到的那件事）。真要带一处，写**假名原形**（おや / あら / ふむ / ふふ），不写「哦呀 / 哎呀 / 呵呵」这类中文音译；出现率压在 5% 以下（大约二十句一次），同一条里不起头连用，连续两条不复用同一个。',
+    '4. 人称代词：中文句子里写「我」「你」，不夹 わたくし / そなた / あなた / きみ（写「说给你听」，不写「说给そなた听」）；日文名词、代词、动词、助词一律不夹进中文句子。',
+    '5. 语音伴随是另一条链：文字转语音时有它自己的读法，那是朗读环节，不影响群里写下的文字是什么语言。'
+  ];
+  if (jaFirst) {
+    lines.push('6.【日语先行 · 这张卡以日语为母语】一条发言先在脑子里用日语成句——照卡 §二 的三档语域与招牌语尾（わたくし / そなた / 〜でしてー）把这句话写定；再按卡 §17.1 的对照表换成**等价的中文**（不是逐字直译，要像这个人用中文说话），这一步是润色；最后只把中文放进 send_message 的 messages，那句日语原句放进同一次调用的 jp 参数——jp 只喂语音合成，群里不会出现。顺序别反：先写中文再倒翻日语，卡的口吻就丢了。');
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -476,7 +488,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
     const selfScope = personaScopeText(chatKey, persona);
     if (selfScope) parts.push('', selfScope);
     // 输出语言不属「人格 / 说话纪律」——它是交付口径；卡自带全套也照样追加（2026-11-08）
-    parts.push('', outputLanguageText());
+    parts.push('', outputLanguageText(card));
     if (cfg.customRules && String(cfg.customRules).trim()) {
       parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
     }
@@ -494,7 +506,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
     if (cardWarn) parts.push('', cardWarn);
     const cardScope = personaScopeText(chatKey, persona);
     if (cardScope) parts.push('', cardScope);
-    parts.push('', outputLanguageText());
+    parts.push('', outputLanguageText(card));
     parts.push(...renderSkillSections(skillSections));
     if (cfg.customRules && String(cfg.customRules).trim()) {
       parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
@@ -518,7 +530,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
     // 会话人设声明：覆盖模式同样要能压过【记忆】里"不接人设卡"的旧条目
     const overrideScope = personaScopeText(chatKey, persona);
     if (overrideScope) parts.push('', overrideScope);
-    parts.push('', outputLanguageText());
+    parts.push('', outputLanguageText(card));
     parts.push(...renderSkillSections(skillSections));
     if (cfg.customRules && String(cfg.customRules).trim()) {
       parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
@@ -546,7 +558,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
 
   // 注入 Skill 提示词片段（已按 priority 降序；一律排在核心规则之后）
   // 输出语言口径属静态交付段，排在动态 Skill 段之前（缓存前缀稳定优先）
-  parts.push('', outputLanguageText());
+  parts.push('', outputLanguageText(card));
   parts.push(...renderSkillSections(skillSections));
 
   if (cfg.customRules && String(cfg.customRules).trim()) {

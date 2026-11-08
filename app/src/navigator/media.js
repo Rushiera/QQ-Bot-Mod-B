@@ -189,6 +189,32 @@ export function normalizeProperNouns(text) {
   return out;
 }
 
+/**
+ * 语音源判定（纯函数 · 便于自测）——甲案 2026-11-08。
+ *
+ * 语义：调用方（业务面 → 单体）若带来了**正文日语**（角色卡 `voiceSource:'ja'`，模型先用日语成句，
+ * 那句日语随 `send_message` 的 `jp` 走下来），就用它当 TTS 台词，跳过「中文→日语」翻译——
+ * 那一跳正是人称 / 语尾 / 专名失真的根因（判据 → `design-qqbotb_log.md` §一百一十九）。
+ *
+ * 判据：**含假名**才算日语。给了却不含假名（模型把中文塞进 jp）= 回退翻译 + 出声，
+ * 不静默按「已是日语」硬念（2026-11-07 判例：中文被日语声线硬念）。
+ *
+ * @param {string} text 中文原句（回退路径用）
+ * @param {string} [japanese] 调用方带来的日语原句
+ * @returns {{source: 'ja'|'translate', text: string, warn: string}} 选中的语音源（warn 非空须出声）
+ */
+export function resolveTtsSource(text, japanese) {
+  const provided = String(japanese ?? '').trim();
+  if (provided && hasKana(provided)) {
+    return { source: 'ja', text: normalizeProperNouns(provided), warn: '' };
+  }
+  return {
+    source: 'translate',
+    text: String(text ?? ''),
+    warn: provided ? `正文日语不含假名（疑似中文）——回退翻译：${provided.slice(0, 30)}` : ''
+  };
+}
+
 // ── 语气词节流（TTS 专属 · 2026-11-08）──────────────────────────────
 //
 // 口径（Rushiera 2026-11-08）：念出来的日语里，语气词大约三成台词带一处就够——おや 可以用，
@@ -757,6 +783,7 @@ export function createMediaService({
    * @param {object} options 选项
    * @param {string|number} options.chat 回报群
    * @param {string} options.text 要说的内容（中文自动翻日语）
+   * @param {string} [options.japanese] 日语原句（`voiceSource:'ja'` 卡随请求带来）——有则**跳过翻译**直接念
    * @param {string} [options.caption] 风格描述（中文会一并翻日语）
    * @param {boolean} [options.auto] 伴随模式（群开关开的自动语音）——
    *   文字已由发言方发过，成果只发音频、不再补发文字配文
@@ -767,7 +794,7 @@ export function createMediaService({
    *   回执带 `sent`（音频到群=true）；业务面靠它把「先语音后文字」的次序做实。仅与 queue 同用
    * @returns {Promise<object>} { ok, text?, message?, error?, queued?, waited?, sent? }
    */
-  async function ttsSpeak({ chat, text, caption = '', auto = false, runMode = '', queue = false, wait = false, pronouns = null }) {
+  async function ttsSpeak({ chat, text, caption = '', auto = false, runMode = '', queue = false, wait = false, pronouns = null, japanese = '' }) {
     if (!String(text ?? '').trim()) return { ok: false, error: '文本是空的——语音要一句台词' };
     // 档位默认（Rushiera 2026-10-25）：**手工念**（群里点名 / 界面按钮）用 Large int8——音质优先；
     // **群语音伴随**（每句发言都念一遍）用 small——省时省显存。显式 runMode 优先于本默认。
@@ -778,7 +805,7 @@ export function createMediaService({
       // 结果回传（2026-11-08 · 语音先行）：`wait=true` 的入队项带一个 done 承诺——drain 把它念完
       // （音频真发到群 / 或失败）时兑现；业务面靠它决定那句文字什么时候发。不带 wait 的调用
       // 行为一字不变（入队即回执）。
-      const job = { chat, text, caption, auto, runMode: mode, pronouns };
+      const job = { chat, text, caption, auto, runMode: mode, pronouns, japanese };
       if (wait) job.done = new Promise((resolve) => { job.settle = resolve; });
       ttsQueue.push(job);
       // 积压上限：留最近 12 句（旧的丢，出声）——语音是伴随产物，宁可漏念也不越念越旧
@@ -804,7 +831,7 @@ export function createMediaService({
       };
     }
     if (ttsBusy) return { ok: false, error: '上一句还在跑——先等它出来，或等它自然结束' };
-    return runTtsJob({ chat, text, caption, auto, runMode: mode, awaitDone: false, pronouns });
+    return runTtsJob({ chat, text, caption, auto, runMode: mode, awaitDone: false, pronouns, japanese });
   }
 
   /**
@@ -813,13 +840,14 @@ export function createMediaService({
    * @param {object} options 选项
    * @param {string|number} options.chat 回报群
    * @param {string} options.text 要说的内容（中文自动翻日语）
+   * @param {string} [options.japanese] 日语原句（调用方给的正文日语）——有则跳过翻译
    * @param {string} [options.caption] 风格描述
    * @param {boolean} [options.auto] 伴随模式——只发音频、不补文字配文
    * @param {string} [options.runMode] 强制档位（空 = 沿用面板当前档）
    * @param {boolean} [options.awaitDone] 等收口（排队口径用——念完才轮到下一句）
    * @returns {Promise<object>} { ok, text?, message?, error? }
    */
-  async function runTtsJob({ chat, text, caption = '', auto = false, runMode = '', awaitDone = false, pronouns = null }) {
+  async function runTtsJob({ chat, text, caption = '', auto = false, runMode = '', awaitDone = false, pronouns = null, japanese = '' }) {
     ttsBusy = true;
     let accepted = false;
     try {
@@ -832,12 +860,23 @@ export function createMediaService({
         : (typeof jpPronounsOf === 'function' ? await jpPronounsOf(chat) : undefined);
       // 口径来源留痕：区分「请求体带来的」与「单体自解析」，排查人称没变时先看这条
       record('tts', `人称口径 ${jpPronouns ? `${jpPronouns.first} / ${jpPronouns.second}` : '缺省'} · 语尾 ${(jpPronouns?.tails || []).join('/') || '无'}（来源：${pronouns ? '请求体' : '自解析'}）`);
-      let japanese;
-      try {
-        japanese = await translateJapanese(text, jpPronouns);
-      } catch (error) {
-        return { ok: false, error: String(error?.message ?? error) };
+      // 语音源（甲案 2026-11-08）：调用方给了日语原句（模型按卡先用日语成句，随 send_message 的 jp 带来）
+      // 就直接念它——「中文→日语」那一跳翻译正是人称 / 语尾 / 专名失真的根因。
+      // 判据见 resolveTtsSource：含假名才算日语；给了却不含假名 = 出声 + 回退翻译（失败必须可见）。
+      const picked = resolveTtsSource(text, japanese);
+      if (picked.warn) record('error', `语音源：${picked.warn}`);
+      let japaneseText;
+      if (picked.source === 'ja') {
+        japaneseText = picked.text;
+        record('tts', `语音源：正文日语（跳过翻译）——${japaneseText.slice(0, 30)}`);
+      } else {
+        try {
+          japaneseText = await translateJapanese(text, jpPronouns);
+        } catch (error) {
+          return { ok: false, error: String(error?.message ?? error) };
+        }
       }
+      japanese = japaneseText;
       // 语气词节流（2026-11-08）：念出来的日语里语气词约三成台词带一处、不连击。
       // 只收 TTS 台词，中文正文一个字不动（中文侧口径在 prompt.js / sender.js）。
       const gated = gateInterjections(japanese, chat);

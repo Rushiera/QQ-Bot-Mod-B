@@ -134,7 +134,14 @@ async function loadSide(baseDir, tag) {
   const { SendQueue } = await import(mod('sender.js'));
   const rapport = await import(mod('rapport.js'));
   const mock = mockOnebot(tag);
-  const queue = new SendQueue({ onebot: mock, store: mockStore(), onSent: null, log: null });
+  const queue = new SendQueue({
+    onebot: mock,
+    store: mockStore(),
+    onSent: null,
+    log: null,
+    // 语音伴随出口注入 stub（2026-11-08）：不注入就真发语音到真群
+    voiceReplyFn: async () => ({ ok: false, skipped: true, error: '影子比对不发群' })
+  });
   return { tag, baseDir, config, rapport, mock, queue };
 }
 

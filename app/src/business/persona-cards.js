@@ -56,7 +56,7 @@ export const DEFAULT_PROFILE_ID = 'rmiao';
  * - `'card'`   §8 改成「长度按卡」——卡规定了行数就写够行数（依田芳乃卡：一段 3–7 行）。
  *              给「语体本身就是慢句长句」的卡用，免得通用短句纪律把它压成一行。
  *
- * @type {Array<{id: string, name: string, path: string, note: string, systemPrompt?: string, utterance?: 'short'|'card', jp?: {first: string, second: string}}>}
+ * @type {Array<{id: string, name: string, path: string, note: string, systemPrompt?: string, utterance?: 'short'|'card', voiceSource?: 'ja', jp?: {first: string, second: string}}>}
  */
 export const DEFAULT_PROFILES = [
   {
@@ -74,6 +74,10 @@ export const DEFAULT_PROFILES = [
     id: 'yoshino', name: '依田芳乃', path: 'personas/yoshino.md', note: '角色卡 · 原件整体导入（内容勿改）',
     // 外部角色卡走标准提示词（人格在卡、纪律在提示词）。
     systemPrompt: 'inherit',
+    // 语音源口径（甲案 · 2026-11-08）：这张卡以日语为母语——发言先由模型用日语成句，
+    // 日语句随 send_message 的 `jp` 一起来，语音链直接念它（不再走中文→日语翻译）。
+    // 未声明的卡（R喵 等）不写本字段 = 空串 = 老链一字不变。
+    voiceSource: 'ja',
     // 语体长度口径：卡里 §2.4 定了「一段台词 3–7 行」——§8 按卡走，
     // 不被通用「多数 ≤30 字」压成一行（2026-11-08）。
     utterance: 'card',
@@ -110,6 +114,25 @@ export function jpPronounsOf(profileId, configured) {
   const second = String(jp?.second || '').trim() || DEFAULT_JP_PRONOUNS.second;
   const list = (value) => (Array.isArray(value) ? value.map((v) => String(v).trim()).filter(Boolean) : []);
   return { first, second, tails: list(jp?.tails), interjections: list(jp?.interjections) };
+}
+
+/**
+ * 取某张卡的语音源口径（`voiceSource`）——`'ja'` = 日语先行卡。
+ *
+ * 语义（甲案 · 2026-11-08 · Rushiera 定）：卡以日语为母语时，发言由模型**先用日语成句**，
+ * 再把等价中文发给群；日语原句随 `send_message` 的 `jp` 参数据一起来，语音链直接念它，
+ * 不再走「中文→日语」那一跳翻译（`design-qqbotb_log.md` §一百一十九）。
+ *
+ * 未声明 / 未知卡 → 空串 = 老链（中文起稿 + 事后翻译），一字节不变。
+ *
+ * @param {string} [profileId] 人设 id（空 / 未知 → 空串）
+ * @param {Array} [configured] `config.personaProfiles`（可覆盖内置条）
+ * @returns {'ja'|''} 语音源口径
+ */
+export function voiceSourceOf(profileId, configured) {
+  const id = String(profileId || '').trim() || DEFAULT_PROFILE_ID;
+  const hit = listProfiles(configured).find((p) => p.id === id);
+  return String(hit?.voiceSource || '').trim() === 'ja' ? 'ja' : '';
 }
 
 /**

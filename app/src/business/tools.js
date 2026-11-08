@@ -40,6 +40,21 @@ import {
   listArchivedGroupEntries, groupArchiveStats
 } from './group-memory.js';
 
+/**
+ * 日语原句参数归一（`send_message` 的 `jp`）——**保留位次**，不丢空位。
+ *
+ * 与 normalizeMessageList 的分工：messages 会 salvage / 去空，位次可能变化；
+ * 这里只做「能念的串留下、其余留空位」，靠下标与 messages 对齐（空位 = 这条走翻译回退）。
+ *
+ * @param {unknown} input 传入值（字符串 / 字符串数组 / 空）
+ * @returns {string[]} 按下标的日语原句数组（缺位为空串）
+ */
+function normalizeVoiceList(input) {
+  if (input == null) return [];
+  const arr = Array.isArray(input) ? input : [input];
+  return arr.map((v) => (typeof v === 'string' ? v.trim() : ''));
+}
+
 /** 当前配置的 GIF 选路（vision/video 开关组合，规则矩阵见 resolveGifRoute 注释）。 */
 function currentGifRoute() {
   const cfg = getConfig();
@@ -311,13 +326,14 @@ function registerAllTools() {
   registerTool({
     id: 'send_message',
     name: '发送消息',
-    description: '发送消息到当前聊天（本工具只能发到本次会话对应的群/私聊；要发到别处用 send_to）。messages 传字符串=发一条；传字符串数组=分多条发送（推荐，更像真人）。只有需要明确"我回的是哪条"时才传 replyToMessageId 引用；需要点名某人才传 atUserId。不要在字符串内部用空格分句。',
+    description: '发送消息到当前聊天（本工具只能发到本次会话对应的群/私聊；要发到别处用 send_to）。messages 传字符串=发一条；传字符串数组=分多条发送（推荐，更像真人）。只有需要明确"我回的是哪条"时才传 replyToMessageId 引用；需要点名某人才传 atUserId。不要在字符串内部用空格分句。若本群的角色卡以日语为母语（卡里标了日语原声），再传 jp：先把这句话用日语说一遍放进去——jp 只给语音合成念，群里发出去的仍然是 messages 里的中文。',
     category: 'messaging',
     icon: '💬',
     parameters: {
       type: 'object',
       properties: {
         messages: { description: '要发送的内容：字符串=一条；数组=分多条', oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+        jp: { description: '（可选 · 仅日语母语角色卡）这句话的日语原句：字符串=对应第一条；数组=与 messages 逐条对齐。只用于语音合成，不会发到群里。中文字面不写在这里。', oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
         replyToMessageId: { type: ['integer', 'string'], description: '要引用/回复的消息 id（聊天记录里每条消息前的 #数字，可选）' },
         atUserId: { type: ['integer', 'string'], description: '要 @ 的群成员 QQ 号（可选，与引用二选一，不要滥用）' }
       },
@@ -329,7 +345,9 @@ function registerAllTools() {
         if (!messages.length) return err('消息内容为空');
         const result = await ctx.sender.sendTextBatch(ctx.chatKey, messages, {
           replyToMessageId: args.replyToMessageId ?? null,
-          atUserId: args.atUserId ?? null
+          atUserId: args.atUserId ?? null,
+          // 日语原句（voiceSource='ja' 卡带来的）——按位与 messages 对齐，只喂语音链
+          voiceTexts: normalizeVoiceList(args.jp)
         });
         ctx.session.sent.push(...result.sent.map((s) => ({ type: 'text', text: s.text, at: s.at })));
         ctx.emit('session-update', ctx.session.id);

@@ -5502,3 +5502,131 @@ A/B 已随 **2026-11-08 13:04:58** 的业务面重启在运行态生效（consum
 - **不做「失败重试」**：语音失败就是失败（文字照发），没有补发重试——重试会让「先语音后文字」变成「语音迟到 + 文字早走」的二重乱序。
 - **超时值不进配置面**：3 分钟是常量（合成实测 9–40 s，留足排队余量）；要按群调时再升为 `config.engage.voiceReply.waitTimeoutMs`。
 - **旧回放通道未同步**：`tools/patch-qqbotb-voicereply.mjs` 与 `tools/templates/voice-reply.js` 仍描述「发完再挂、不等」的旧口径——它们的目标是 `_unpack/resources/app`（旧打包业务面，**不在服务路径**：3210 的实读 PID 是 `app/src/business/worker.js`）。真要给那份旧副本重放，先把模板同步成现行语义。
+
+---
+
+## 一百一十九、日语先行（日语原句直供语音 · 中文语气词压到 5% 以下 · 2026-11-08 · v1.41）
+
+> 需求（Rushiera）：「当角色卡为日文角色的角色卡时，应当先理解上下文写出日文段落，然后再翻译回中文最后再润色……日文有了就可以先投 TTS，然后再琢磨怎么用中文来表达这句话。」（拍板：甲案 · 中文用**等价表达**）
+> 二次口径（Rushiera 同轮追加）：「正常聊天中文打字的话语气词用得其实是极少的，你日文怎么样无所谓，但中文尽可能就不要语气词，就算有也需要打日文，而且出现率 5% 以下。」
+
+### A · 改前口径
+
+| 面 | 改前行为 |
+|:--|:--|
+| 起稿语言 | 中文起稿——模型只写中文，日文仅限专名与复述台词（`outputLanguageText()` 第 2 条） |
+| 语音源 | 中文 → 单体 `translateJapanese()` 翻成日语：**一次 LLM 往返**（超时 30 s），译文失真的根因就在这一跳 |
+| 为压失真叠的四层补丁 | `normalizeJapanesePronouns()`（人称）· `PROPER_NOUN_MAP`（依田 → よりた）· 翻译提示词里的语尾口径 · `gateInterjections()`（语气词闸） |
+| 中文语气词 | v1.35 口径：走**中文音译**（「哦呀——」「哎呀——」「呵呵——」），一条至多一处、连续三条至多一次；出站口把假名写回中文音译 |
+
+### B · 改后口径
+
+**B1 · 语音源 = 正文日语（甲案）**
+
+| 面 | 改后行为 |
+|:--|:--|
+| 起稿顺序 | 先在脑子里用日语成句（卡 §二 三档语域 + 招牌语尾 わたくし / そなた / 〜でしてー）→ 按卡 §17.1 换**等价中文**（润色，不逐字直译） |
+| 工具面 | `send_message` 增可选 `jp`（`string | string[]`，与 `messages` **按位对齐**）——只喂语音，群里只出现 `messages` |
+| 语音链 | `sender` 按位取 `jp[i]` → `voice-reply` 请求体 `japanese` → 单体 `resolveTtsSource()` 见**含假名**就直接念它、**跳过翻译** |
+| 兜底 | `jp` 缺位 / 不含假名 → 老链（翻译）+ 出声；R喵 群、未开语音的群、私聊**一字节不变** |
+
+**B2 · 中文语气词（二次改向）**
+
+| 面 | 改后行为 |
+|:--|:--|
+| 目标 | **0**；上限 **5%**（约二十句一次） |
+| 形态 | 真要带一处就写**假名原形**（おや / あら / ふむ / ふふ），不写中文音译 |
+| 硬层 | `sender` 的归一方向**反转**：中文音译 → 假名原形；只认独立出现的语气词（行首 / 标点后起，标点 / 行尾收），词内不误伤 |
+| 日语侧 | 不变——TTS 台词本来就是日语，语气词闸（≈30%）保留作兜底（Rushiera：「你日文怎么样无所谓」） |
+| 观测 | `tools/yoshino-interject-stat.mjs` 的「语气词起头」「含语气词」两列即判据面 |
+
+### C · 实现（八处）
+
+| 面 | 文件 | 改动 |
+|:--|:--|:--|
+| 卡元数据 | `src/business/persona-cards.js` | 芳乃条加 `voiceSource:'ja'`；新增导出 `voiceSourceOf(profileId)`（未知 / 未声明 → 空串 = 老链） |
+| 工具面 | `src/business/tools.js` | `send_message` 增 `jp` 参数（`oneOf string\|array`）+ 描述；新增 `normalizeVoiceList()`（**保留位次**，不丢空位）；`sendTextBatch` 透传 `voiceTexts` |
+| 发送面 | `src/business/sender.js` | 两层按位对齐：`texts`↔`voiced`（图片包裹剥离后）· `parts`↔`partVoice`（长消息切分只挂**第一段**）；`normalizeJpInterjections()` 方向反转；调用改 `voiceReply(chatKey, text, { spoken })` |
+| 转发面 | `src/business/voice-reply.js` | 收 `options.spoken` → 请求体 `japanese`；新增「语音源：正文日语 / 中文翻译」日志行 |
+| 路由 | `src/navigator/index.js` | `POST /api/nav/tts` 透传 `japanese` |
+| 单体 | `src/navigator/media.js` | `ttsSpeak` / `runTtsJob` / 排队 job 收 `japanese`；新增**纯函数** `resolveTtsSource(text, japanese)`——含假名 → `ja`（并过 `normalizeProperNouns`）；不含 → `translate` + `warn`（出声后回退） |
+| 提示词 | `src/business/prompt.js` | `outputLanguageText(card)`：第 3 条重写（语气词目标 0 / 上限 5% / 写假名原形）+ 第 6 条【日语先行】（**仅 `voiceSource='ja'` 卡输出**）；四个调用点带上 `card` |
+| 卡与机制段 | `personas/yoshino.md` · `personas/_shared.md` | 卡：硬禁用件「语气词」行 · §2.7 频控 · §11 注 · §12 注 · §17.1 三行表 + 注（反例换成中文音译）；机制段第 16 行指针句口径更新 |
+
+**为什么不在主线做「先投 TTS 再写中文」**：按字面实现要两次模型调用——省的是同一轮里剩下的几百毫秒生成时间，花的是多一次往返（RTT + 首字延迟）+ 两条内容可能不一致（日语说了、中文没写，或反过来）。真正的收益是**译文质量**与**省掉翻译那一跳**，两样在单次调用里都已拿到。
+
+**为什么硬层不做频率闸**：5% 是交付口径，不是机械判据——硬删会把「哎呀」这类正当用词切掉（「哎呀妈呀」整体是词，不是语气词）。所以硬层只保证「一旦出现必是假名」，频率靠提示词 + 统计观测。
+
+### D · 验收
+
+- `node tools/check-syntax.mjs` → **74/74**（业务面）
+- `node tools/verify-persona-card.mjs` → **75/75**（新增 9 条：`voiceSource` 按卡分派 / 芳乃系统提示含【日语先行】/ R喵 不含 / 语气词口径 0–5% / 不再教中文音译 / 卡内口径同步）
+- `node tools/verify-media.mjs` → **28/28**（新增 6 条：`resolveTtsSource` 的 ja 采用 · 专名归一 · 中文回退出声 · 缺位老链 · `undefined` 回落 · 长音符「ー」不算假名）
+- `node tools/verify-qqbotb-voiceorder.mjs` → **27/27**（原 22 + 新增 5 条：逐条传 `spoken` · `partVoice` 按位对齐 · 请求体 `japanese` · 路由透传 · 单体 ja 分支）
+- `node tools/verify-qqbotb-voicereply.mjs` → **32/32**（case 9 改成新形态 + `japanese` 透传 + `resolveTtsSource` 在位）
+- `node tools/verify-ui-contract.mjs` → **54/54** · `node tools/verify-import-integrity.mjs` → ALL PASS（99 文件 / 441 符号，含 `navigator`）
+- 🔴 **`check-syntax` 只扫 `app/src/business`**——`navigator/` 两件本轮用 `node --check` 单独验过（通过）。扫描面缺口记 todo
+- 🔴 **待重启业务面 + 单体**（与 v1.33–v1.40 一次带上）：重启后在芳乃群真触发一句 → ① 单体活动流「语音源：正文日语（跳过翻译）」+ 业务面 `voice` 段「语音源：正文日语」 ② 听得见 〜でしてー 收尾 ③ 中文消息里零中文音译语气词、假名语气词起头 <5%（`node tools/yoshino-interject-stat.mjs dump` 的芳乃期表） ④ R喵 群照旧（无【日语先行】段、语音走翻译）
+
+### E · 边界（没做的事）
+
+- **不做两次模型调用**：见上「为什么不在主线做」。
+- **不改 TTS 语气词闸（≈30%）**：日语侧口径按 Rushiera「日文怎么样无所谓」——闸留下作兜底，是否放宽列观察项。
+- **不给中文侧做硬性频率闸**：见上「为什么硬层不做频率闸」。
+- **工具回执不新增字段**：`jp` 传没传不回到模型可见面（回执结构与 v1.40 一致），排查看日志。
+- **旧回放通道未同步**：`tools/patch-qqbotb-voicereply.mjs` 与 `tools/templates/voice-reply.js` 仍是「发完再挂」的旧口径（目标 = `_unpack/resources/app`，不在服务路径）——同 §一百一十八 E 末条。
+
+---
+
+## 一百二十、自测语音漏发到真群（2026-11-08 · v1.42）
+
+> 现象（Rushiera 报）：群 1097492606「明明没有发言，连发好多条语音」。
+> 结论：**是我跑 `verify-suite.mjs` 的产物**，但根因不在那次运行，而在自测隔离缺一条路。
+
+### A · 现场取证（业务面日志 `app/data/logs/2026-11-08.log`）
+
+| 时刻 | 事实 |
+|:--|:--|
+| 17:51–18:15 | 该群语音 8 条，每条都能对上同一时刻的文字回复 + 用户追问（**真实对话**，非测试） |
+| **18:19:02–18:20:15** | **12 条语音、无对应文字**，间隔 4–11 s；合成文案是测试夹具——「回机器人：第 1 条」「名单空：应当放行」「这条会失败」「失败后的下一轮应当放行」「回普通群友」「窗口过期后应当放行」 |
+| 18:19–18:20 | 恰好是我跑 `verify-suite.mjs`（botguard 70 s / browse 18 s / cattools 9 s …）的时段 |
+| 18:20:15 之后 | **零新增**（修完重跑 8 套自测，日志 180 条命中数不变） |
+
+夹具原文命中处：`verify-qqagent-botguard.mjs:89/99/100/144/154/159` · `verify-qqagent-rapport.mjs:180/190/195` · `verify-qqagent-hardlimit.mjs:91`。
+
+### B · 根因链（三件事同时成立才出事）
+
+```
+自测构造 SendQueue({ onebot: fakeOnebot })   ← 只替换了 OneBot
+  └─ sendTextBatch('group:1097492606', [夹具文本])
+       ├─ 文字：走 this.onebot（假）→ 拦住 ✔
+       └─ 语音伴随钩子：直接调模块内 voiceReply()
+            └─ fetch('http://127.0.0.1:3280/api/nav/tts')  ← 真单体，不经 mock
+                 └─ 单体合成 → OneBot 真发群 ✘
+```
+
+三个条件：① 语音这条路**不经过注入的 OneBot**（`voice-reply.js` 里 `ENDPOINT` 是模块常量）；② 自测群号 `group:1097492606` 是**真实群**（十余套自测共用同一个 KEY）；③ 该群在 `engage.voiceReply.chats`（现 9 群）里 → `isVoiceChat` 判真。
+
+判据族归类：**假绿环境**（验证环境须与消费点同构）的反面——这次是「假环境把真实副作用挡住了一半」，文字被拦让人误以为整套发送路径被隔离。
+
+### C · 修法（可注入 + 哨兵）
+
+| 面 | 文件 | 改动 |
+|:--|:--|:--|
+| 出口可注入 | `src/business/sender.js` | `constructor({ …, voiceReplyFn = voiceReply })` → `this.voiceReplyFn`；钩子改 `await this.voiceReplyFn(chatKey, text, { spoken })`。默认仍是真的，生产路径零变化 |
+| 自测注入 stub | `verify-qqagent-{botguard,rapport,hardlimit,engage,browse,talkstyle}.mjs` · `shadow-diff.mjs` | 构造时传 `voiceReplyFn: async () => ({ ok:false, skipped:true, error:'自测不发群' })`（**skipped 而非 sent:true**——不让「语音先行」类断言被假回执糊过去） |
+| 哨兵 | `tools/verify-qqbotb-voiceorder.mjs` §8 | `8a` sender 用 `this.voiceReplyFn`；`8b` **扫 `tools/*.mjs` 里所有 `new SendQueue(` 的文件，未注入 `voiceReplyFn` 即红**（新增一类发送面脚本时自动拦住） |
+| 顺带 | `verify-qqbotb-voiceorder` / `voicereply` | 原先断言字面量 `voiceReply(...)` 的 5+2 条改成 `this.voiceReplyFn(...)` 形态 |
+
+### D · 验收
+
+- `verify-qqagent-botguard` **17/17** · `rapport` **52/52** · `hardlimit` **11/11** · `talkstyle` **26/26** · `engage` **27/27** · `browse` **49/49** · `shadow-diff` `node --check` 过
+- `verify-qqbotb-voiceorder` **29/29**（+2：注入闸与漏注入扫描）· `verify-qqbotb-voicereply` **33/33**（+1）
+- **消费点实锤**：修完把上述 8 套全跑一遍，日志 `2026-11-08.log` 里「已发语音到群 1097492606」**仍是 180 条、末条 18:20:15**（零新增）
+
+### E · 边界（没做的事）
+
+- **不改单体 `/api/nav/tts`**：加「测试模式拒绝」等于往生产路径插测试分支，反过来又成新盲区。
+- **不换自测群号**：`group:1097492606` 被十余套断言（含 HTML 文案 `群1097492606`）引用，换号 = 大范围改断言且降低覆盖面；注入口是更小的改动面。
+- **不动 `voiceReply` 的 `ENDPOINT`**：它是业务面→单体的唯一定点，抽配置是另一件事（真要换端点再立项）。
+- **没做「自测期间临时关群开关」**：那是跑测前的人工步骤，靠不住；注入口是机制面的解法。

@@ -53,17 +53,17 @@ const media = read(NAVIGATOR, 'media.js');
 const navIndex = read(NAVIGATOR, 'index.js');
 
 // ── 1 次序：语音在文字之前，且等它 ──────────────────────────────────────────
-const voiceCallAt = sender.indexOf('await voiceReply(');
+const voiceCallAt = sender.indexOf('await this.voiceReplyFn(');
 const sendTextAt = sender.indexOf('const data = await this.onebot.sendText(');
 ok('1a 语音调用在位（await voiceReply）', voiceCallAt > 0);
 ok('1b 语音调用在 sendText 之前', voiceCallAt > 0 && sendTextAt > 0 && voiceCallAt < sendTextAt,
   `voice=${voiceCallAt} sendText=${sendTextAt}`);
 ok('1c 旧形态（发完再挂、不 await）已不存在', !/voiceReply\(chatKey, text\)\.catch\(/.test(sender));
 ok('1d 异常兜底不影响文字（try/catch 包住语音）',
-  /try\s*\{\s*\n\s*await voiceReply\(chatKey, text\);\s*\n\s*\}\s*catch/.test(sender));
+  /try\s*\{\s*\n(?:\s*\/\/[^\n]*\n)*\s*await this\.voiceReplyFn\(chatKey, text, \{ spoken \}\);\s*\n\s*\}\s*catch/.test(sender));
 
 // ── 2 作用面：只对群；标记唯一 ──────────────────────────────────────────────
-ok('2a 语音只对群触发', /if \(String\(kind\) === 'group'\) \{\s*\n\s*try \{\s*\n\s*await voiceReply\(/.test(sender));
+ok('2a 语音只对群触发', /if \(String\(kind\) === 'group'\) \{\s*\n\s*try \{[\s\S]{0,500}?await this\.voiceReplyFn\(/.test(sender));
 ok('2b 标记 [qqbotb-voicereply:sender-hook] 唯一',
   (sender.match(/\[qqbotb-voicereply:sender-hook\]/g) || []).length === 1);
 
@@ -96,6 +96,33 @@ ok('5g 排队口径把收口结果带出 runTtsJob', /const settled = await wait
 // ── 6 路由透传 ──────────────────────────────────────────────────────────────
 ok('6a 路由把 wait 传给 ttsSpeak', /wait: body\?\.wait === true,/.test(navIndex));
 ok('6b 包装层透传 wait', /media\.ttsSpeak\(\{ chat: gate\.chat, text, caption, auto, runMode, queue, wait, pronouns \}\)/.test(navIndex));
+
+// ── 7 语音源（甲案 · 日语先行 · 2026-11-08）────────────────────────────────
+// 模型给的日语原句（send_message 的 jp）经 sender → voice-reply → 路由 → 单体，
+// 单体见含假名就跳过「中文→日语」翻译。判据 → design-qqbotb_log.md §一百一十九。
+ok('7a sender 逐条传日语原句（voiceReplyFn(chatKey, text, { spoken })）',
+  /this\.voiceReplyFn\(chatKey, text, \{ spoken \}\)/.test(sender));
+ok('7b sender 按位对齐（partVoice 与 parts 同长 · 长消息切分只挂第一段）',
+  /const partVoice = \[\]/.test(sender) && /partVoice\.push\(k === 0 \? spoken : ''\)/.test(sender));
+ok('7c voice-reply 请求体带 japanese', /japanese: spoken,/.test(voice));
+ok('7d 路由透传 japanese', /japanese: body\?\.japanese \?\? '',/.test(navIndex));
+ok('7e 单体跳过翻译（resolveTtsSource 的 ja 分支在位）',
+  /export function resolveTtsSource/.test(media) && /picked\.source === 'ja'/.test(media));
+
+// ── 8 自测隔离：语音出口必须注入 stub（2026-11-08 事故）────────────────────────
+// 事故：`verify-suite` 一跑，群 1097492606 连收十余条语音。根因 = 语音伴随直连单体
+// `127.0.0.1:3280`（模块内 fetch），不走注入的 mock OneBot —— 假 OneBot 拦得住文字、拦不住语音；
+// 而该群号恰在 `engage.voiceReply.chats` 里。修法 = `SendQueue({ voiceReplyFn })` 可注入，
+// 所有自测/干跑构造时传 stub。本组把「有没有漏注入」变成可复跑的判据。
+const toolsDir = HERE;
+const queueUsers = fs.readdirSync(toolsDir).filter((f) => {
+  if (!/\.mjs$/.test(f)) return false;
+  try { return /new SendQueue\(/.test(fs.readFileSync(path.join(toolsDir, f), 'utf8')); } catch { return false; }
+});
+const missingInject = queueUsers.filter((f) => !/voiceReplyFn:/.test(fs.readFileSync(path.join(toolsDir, f), 'utf8')));
+ok('8a 语音出口可注入（sender 用 this.voiceReplyFn）', /this\.voiceReplyFn\(/.test(sender));
+ok(`8b 所有构造 SendQueue 的脚本都注入 voiceReplyFn（${queueUsers.length} 件）`,
+  missingInject.length === 0, `未注入：${missingInject.join(', ') || '无'}`);
 
 // ── 输出 ────────────────────────────────────────────────────────────────────
 console.log(JSON.stringify({ ok: fails.length === 0, pass, fail: fails.length, fails }, null, 2));

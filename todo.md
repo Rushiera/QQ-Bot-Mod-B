@@ -107,6 +107,10 @@
 
 16. 🔴 **TTS 语气词节流真链路验收（2026-11-08 · 待重启 · v1.38）**——重启 `启动QQBotB.vbs` 后在芳乃群让它连说五句以上：① 大约三成台词听得见 `おや` / `あら` / `ふむ` 起头，其余直接起句（不连击）② 单体日志出现「语气词闸：收掉句首（近 10 条已用 3/3）」或「放行一处」③ 中文正文一个字不变 ④ 剥掉语气词后句子通顺、不留「——」孤头。改前基线：11-08 97 条 TTS 里 23 条 `おや` 起头（23.7%）。改动面：`app/src/navigator/media.js`（`gateInterjections` + 分桶 + 接线 `runTtsJob`）· `app/src/navigator/index.js:279`（提示词倾向层）。自测 `verify-media` 22/22 → `design-qqbotb_log.md` §一百一十七；统计口径 `node tools/tts-interject-stat.mjs [YYYY-MM-DD]`（改前 11-08：97 条 / 语气词起头 32.0% / おや 起头 23.7% / 最长おや连击 6）
 
+17. 🔴 **日语先行 + 中文语气词 5% 真链路验收（2026-11-08 · 待重启 · v1.41）**——重启 `启动QQBotB.vbs` 后在群 112562956 发一句：① 单体活动流出现「语音源：正文日语（跳过翻译）——…」，业务面 `voice` 段出现「语音源：正文日语（…）」，「日语翻译」那一跳不再发生 ② 听得见 〜でしてー / 〜のでしてー 收尾、人称 わたくし / そなた ③ 中文消息里**没有**「哦呀／哎呀／呵呵」这类中文音译；假名语气词起头 < 5%（`node tools/yoshino-interject-stat.mjs dump` 芳乃期表：语气词起头占比、含语气词占比）④ R喵 群照旧：系统提示无【日语先行】段、语音仍走中文→日语翻译 ⑤ 两级兜底都出声——没带 `jp` → 单体「语音源：中文翻译」；把中文当 `jp` 传 → 「正文日语不含假名（疑似中文）——回退翻译」。改动面：`persona-cards.js` / `tools.js` / `sender.js` / `voice-reply.js` / `navigator/{index,media}.js` / `prompt.js` / `personas/{yoshino,_shared}.md`；自测 `verify-persona-card` 75/75 · `verify-media` 28/28 · `verify-qqbotb-voiceorder` 27/27 · `verify-qqbotb-voicereply` 32/32 → `design-qqbotb_log.md` §一百一十九
+
+18. 🟡 **`check-syntax` 扫描面只覆盖 `app/src/business`**（74 文件）——`navigator/` 六件（`index.js` / `media.js` 等）不在门禁内：v1.41 改了 `navigator/{index,media}.js`，`check-syntax` 仍报 74/74 绿但根本没扫到。处置二选一：① 把 `navigator` / `web` / `onebot` / `napcat` / `incident` 纳入同一入口（判据 = 总数涨到实读文件数）② 新起 `check-syntax-all` 并把它写进「改后判据」行。未做前，动这些目录必须逐件 `node --check`（v1.41 已按此处置）
+
 
 
 ---

@@ -142,6 +142,54 @@ export function normalizeJapanesePronouns(text, pronouns) {
 }
 
 /**
+ * 日语台词里的**专有名词读音表**（中文 / 汉字形态 → 假名）。
+ *
+ * 为什么需要：翻译出口只给了人称口径，专名读音全靠模型猜——实测（2026-11-08 探针
+ * `workspace:tools/CatTemp/tts-name-probe.mjs`）三条自我介绍里两种病都出现了：
+ * ①「依田芳乃，请多指教」→「よしのだよしの」（姓氏丢了、名重复）
+ * ②「我是依田家的芳乃」→「依田家の芳乃」（汉字留给 TTS 猜，依田常被念成 いでん / いた）
+ * 正确读音取自人设卡 `personas/yoshino.md:76`（依田 よりた · 芳乃 よしの）。
+ *
+ * 扩展方式：换日系角色卡时按卡内读音表加行；**长词在前**——否则「依田家」会被「依田」先吃掉半截。
+ *
+ * @type {Array<{from: string, to: string}>}
+ */
+const PROPER_NOUN_MAP = [
+  { from: '依田家', to: 'よりたけ' },
+  { from: '依田芳乃', to: 'よりたよしの' },
+  { from: '依田', to: 'よりた' },
+  { from: '芳乃', to: 'よしの' }
+];
+
+/**
+ * 译前把中文专名换成假名——让模型直接读到读音，不再自由音译。
+ *
+ * @param {string} text 中文原文
+ * @returns {string} 替换后的文本
+ */
+export function localizeProperNouns(text) {
+  let out = String(text ?? '');
+  for (const { from, to } of PROPER_NOUN_MAP) out = out.split(from).join(to);
+  return out;
+}
+
+/**
+ * 译后把残留的汉字形态收回假名——模型仍可能把假名改写回汉字，或把名字叠着重复。
+ *
+ * 只处理表内专名，不碰其它汉字（同形词不在表内，不误伤）。
+ *
+ * @param {string} text 日语译文
+ * @returns {string} 归一后的文本
+ */
+export function normalizeProperNouns(text) {
+  let out = String(text ?? '');
+  // 实测病态：模型把「依田芳乃」读成「よしのだよしの」（名重复、姓丢失）
+  out = out.replace(/よしのだよしの|よりたのよしのよしの/g, 'よりたよしの');
+  for (const { from, to } of PROPER_NOUN_MAP) out = out.split(from).join(to);
+  return out;
+}
+
+/**
  * 去掉模型包在译文外面的代码围栏与引号。
  *
  * @param {string} text 模型输出
@@ -412,18 +460,19 @@ export function createMediaService({
    * @returns {Promise<string>} 日语文本
    */
   async function translateJapanese(text, pronouns) {
-    const source = String(text ?? '').trim();
+    // 译前先落读音：中文专名换成假名，模型就不会自由音译（判据 → log §一百一十一）
+    const source = localizeProperNouns(String(text ?? '').trim());
     if (!source) throw new Error('文本是空的');
     // 🔴 混排句也要整句翻：只看「有没有假名」会漏掉「おや——，你又递来一张符纸了ー。」这类半日半中
     // ——假名在、中文也在，跳过翻译就变成日语声线硬念中文（2026-11-07 实测）。
     // 判据：有假名且没有中文高频字 = 纯日语，只做人称归一；其余一律整句翻。
     // 不能直接用 hasChinese 判——它按 CJK 表意文字算，日语汉字（依田家 / 悩み）也会命中。
     const ZH_HINT = /[的了吗呢吧啊你我他她它们是很就都这个那说么怎没还给把被让，！？]/;
-    if (hasKana(source) && !ZH_HINT.test(source)) return normalizeJapanesePronouns(source, pronouns);
-    if (!hasChinese(source) && !ZH_HINT.test(source)) return normalizeJapanesePronouns(source, pronouns);
+    if (hasKana(source) && !ZH_HINT.test(source)) return normalizeProperNouns(normalizeJapanesePronouns(source, pronouns));
+    if (!hasChinese(source) && !ZH_HINT.test(source)) return normalizeProperNouns(normalizeJapanesePronouns(source, pronouns));
     const out = await translate(source, 'ja', { pronouns });
     if (!out) throw new Error('中文转日语失败（翻译端点未配置或超时）');
-    return normalizeJapanesePronouns(cleanText(out), pronouns);
+    return normalizeProperNouns(normalizeJapanesePronouns(cleanText(out), pronouns));
   }
 
   /**

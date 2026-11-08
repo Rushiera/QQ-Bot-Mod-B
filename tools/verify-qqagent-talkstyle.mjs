@@ -94,7 +94,12 @@ check('lean 仍短于 full（机制段常驻，但纪律段被省）', lean.leng
 // verify-persona-card §四 覆盖。这里只守住两条边界：人格段不进、机制段仍在。
 setPersona({ profileId: 'rmiao', systemPromptMode: 'lean' });
 const rmiaoLean = buildSystemPrompt({ persona: getConfig().persona });
-check('self 卡（R喵）：系统提示为空（公共设计全绕过，内容在卡里）', rmiaoLean === '', rmiaoLean.length + ' 字符');
+// 2026-11-08：输出语言口径改为对任何卡恒追加（交付面，非人格）——self 卡不再是空串，
+// 但公共设计仍全绕过：不含 lead / 风格段 / 机制段。判据 → design-qqbotb_log.md §一百一十。
+check('self 卡（R喵）：只剩输出语言口径（公共设计全绕过，内容在卡里）',
+  rmiaoLean.includes('【输出语言（业务面口径') && !rmiaoLean.includes('你的人格、语体与行为准则')
+    && !rmiaoLean.includes('四条底线（不可协商）') && !rmiaoLean.includes('【像真人一样】'),
+  rmiaoLean.length + ' 字符');
 
 // ── A4. off 模式 ───────────────────────────────────────────────────────────
 setPersona({ systemPromptMode: 'off' });

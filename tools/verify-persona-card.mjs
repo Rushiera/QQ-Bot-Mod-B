@@ -72,8 +72,10 @@ const shared = sharedText();
 check('机制段非空', shared.length > 1000, String(shared.length));
 check('机制段含四条底线 / 路由 / 领航员', shared.includes('四条底线（不可协商）') && shared.includes('路由索引') && shared.includes('领航员速查'));
 check('机制段不含具体人格（不写"你是R喵"）', !shared.includes('你是R喵') && !shared.includes('依田'));
-check('机制段含说话口径（文字中文 / 语气词可日文 / 语音另算）',
-  shared.includes('一律用中文') && shared.includes('语气词') && shared.includes('语音伴随'));
+// 2026-11-08：语言口径从机制段搬到 prompt.js 恒追加段（self 卡与 override 分支都要覆盖），
+// 机制段只留一句指针——判据 → design-qqbotb_log.md §一百一十。
+check('机制段不再承载语言口径（已收口到 prompt.js 恒追加段）',
+  !shared.includes('一律用中文') && shared.includes('已收口到 `prompt.js`'));
 
 console.log('\n三、profileId 解析');
 check('空 persona → 默认 id', profileIdOf({}) === DEFAULT_PROFILE_ID);
@@ -99,7 +101,10 @@ function configOf(profileId) {
 setRuntimeConfig(configOf('rmiao'));
 const sysRmiao = buildSystemPrompt({ skillContext: {} });
 const cardRmiao = personaCardOf({ profileId: 'rmiao' });
-check('self 卡：系统提示为空（公共设计全部绕过）', sysRmiao === '', String(sysRmiao.length));
+// 2026-11-08：self 卡不再"完全为空"——输出语言口径属交付面，对任何卡都追加（见 §一百一十）
+check('self 卡只剩输出语言口径（公共设计仍绕过）',
+  sysRmiao.includes('【输出语言（业务面口径') && !sysRmiao.includes('你的人格、语体与行为准则') && !sysRmiao.includes('四条底线（不可协商）'),
+  String(sysRmiao.length));
 check('R喵卡自带系统提示词（systemPrompt=self）', cardRmiao.systemPrompt === 'self', cardRmiao.systemPrompt);
 check('自带提示词的卡不注入标准提示词',
   !sysRmiao.includes('【像真人一样】') && !sysRmiao.includes('【反 AI 味') && !sysRmiao.includes('你的人格、语体与行为准则'),
@@ -112,7 +117,9 @@ const sysYoshino = buildSystemPrompt({ skillContext: {} });
 const cardYoshino = personaCardOf({ profileId: 'yoshino' });
 check('换卡后卡正文跟着换', cardYoshino.text.includes('依田芳乃') && !cardYoshino.text.includes('说话纪律（本卡自带'));
 check('inherit 卡照旧注入标准提示词（lead + 风格段）',
-  sysYoshino.includes('优先于本提示词') && sysYoshino.includes('【像真人一样】'));
+  sysYoshino.includes('那张卡是风格参考') && sysYoshino.includes('【像真人一样】'));
+check('inherit 卡含输出语言口径段（业务面口径 · 与卡不冲突）',
+  sysYoshino.includes('【输出语言（业务面口径') && sysYoshino.includes('日文只出现在三类地方'));
 check('inherit 卡仍注入公共机制段（R喵 不注入，内容在卡里）',
   sysYoshino.includes('四条底线（不可协商）') && !sysRmiao.includes('四条底线（不可协商）'));
 check('两次组装字节一致（同配置幂等）', buildSystemPrompt({ skillContext: {} }) === sysYoshino);

@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createNavigator } from '../app/src/navigator/index.js';
-import { normalizeJapanesePronouns } from '../app/src/navigator/media.js';
+import { normalizeJapanesePronouns, localizeProperNouns, normalizeProperNouns } from '../app/src/navigator/media.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LIVE_MOSS = process.argv.includes('--live-moss');
@@ -178,6 +178,26 @@ const banned = [/俺/, /僕/, /ぼく/, /おれ/, /わし/, /お前/, /おまえ
 const clean = normalizeJapanesePronouns('俺がお前を助ける。僕たちも行く。あんたは待っていろ');
 check('人称·归一后不含男性 / 不礼貌代词',
   clean === 'わたしがきみを助ける。わたしたちも行く。きみは待っていろ' && !banned.some((re) => re.test(clean)), clean);
+
+// ── 5b. 专名读音（2026-11-08 · 依田芳乃 = よりた よしの）──────────────────
+// 判据 → design-qqbotb_log.md §一百一十一；读音来源 personas/yoshino.md:76
+const named = localizeProperNouns('我是依田家的芳乃，替人听烦恼。');
+check('专名·译前把中文名换成假名（依田家 / 芳乃）',
+  named === '我是よりたけ的よしの，替人听烦恼。', named);
+const nameCases = [
+  ['よしのだよしの、よろしくお願いいたします', 'よりたよしの、よろしくお願いいたします'],
+  ['わたくしは依田家の芳乃ですわ', 'わたくしはよりたけのよしのですわ'],
+  ['わたくしは依田芳乃です', 'わたくしはよりたよしのです'],
+  ['依田芳乃、请多指教', 'よりたよしの、请多指教']
+];
+const nameBad = [];
+for (const [src, want] of nameCases) {
+  const got = normalizeProperNouns(src);
+  if (got !== want) nameBad.push(`${src} → ${got}（期望 ${want}）`);
+}
+check('专名·译后汉字收回假名（4 例 · 含重复病灶）', nameBad.length === 0, nameBad.join('；'));
+check('专名·归一后不再残留「依田」「芳乃」汉字',
+  !/依田|芳乃/.test(normalizeProperNouns('わたくしは依田芳乃、依田家のものです')));
 
 // ── 6 live：MOSS 生图 ──────────────────────────────────────────────────────
 if (LIVE_MOSS) {

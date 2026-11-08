@@ -263,7 +263,30 @@ function resolvePromptMode(persona) {
  * @returns {string} lead 文本
  */
 function leadText(cfg) {
-  return `你是「${cfg?.botName ?? ''}」。你的人格、语体与行为准则在【角色设定】段的角色卡里——那份优先于本提示词里任何与说话风格、语气、节奏有关的说法。本提示词只管与人格无关的部分：安全底线、工具协议、群聊纪律、机制与索引。`;
+  return `你是「${cfg?.botName ?? ''}」。你的人格、语体与行为准则在【角色设定】段的角色卡里——那张卡是风格参考：它决定你是谁、用什么节奏与用词说话。一条消息最后以什么语言、什么形态发出去，看本提示词与机制段的输出口径（尤其【输出语言】段）。本提示词管与人格无关的部分：安全底线、工具协议、群聊纪律、机制与索引。`;
+}
+
+/**
+ * 输出语言口径（业务面 · 恒追加段）。
+ *
+ * 与角色卡的分工（非对抗式）：卡定义「这个人是谁、什么语体、什么用词」，本段定义
+ * 「一条消息最后以什么语言落到群里」。卡负责风格，业务面负责交付形态——两者不冲突。
+ *
+ * 为什么写死在这里、不进 `personas/_shared.md`：shared 属机制面——`self` 卡会整段绕过它，
+ * `override` 分支又把它排在全局覆盖之后；而「群里写中国话、日文只在语气词与明确台词位置出现」
+ * 是交付口径，必须对任何卡（含自带全套的 self 卡）都成立。口径来源：Rushiera 2026-11-08
+ * （群 112562956 整句日文事件，判据 → `design-qqbotb_log.md` §一百一十）。
+ *
+ * @returns {string} 段落文本
+ */
+function outputLanguageText() {
+  return [
+    '【输出语言（业务面口径 · 与角色卡不冲突）】',
+    '角色卡提供的是「这个人是谁、什么语体、什么用词」——那是风格参考；一条消息最后以什么语言落到群里，由本段决定。',
+    '1. 群里写下的文字一律用中文。日系角色（如依田芳乃）的语体特征——慢句、三段式、语尾延长、敬语感、古语腔——用中文写出来，不要把手里的日文台词原句直接搬到群里当发言。',
+    '2. 日文只出现在三类地方：① 语气词与感叹词（おや / あら / ふふ / あのね），写假名原形，不写中文音译（写「おや」不写「哦呀」）；② 角色名与专有名词，照原样；③ 明确在复述台词——解释一句日语、引用卡里的台词、演剧情片段时可以用日文，但要让人看出这是台词或原文（加引号或【】），不是你的日常发言。',
+    '3. 语音伴随是另一条链：文字转语音时会把中文翻成日语再朗读，那是朗读环节，不影响群里写下的文字是什么语言。'
+  ].join('\n');
 }
 
 /**
@@ -431,11 +454,13 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
   //   'inherit'（默认）—— 照旧 lead + 风格段。
   const cardPrompt = String(card.systemPrompt || 'inherit').trim();
   if (cardPrompt === 'self') {
-    // 只留两样不是「公共设计」的东西：卡缺失告警（可见性）与管理员附加规则（人工设定）。
+    // self 卡绕过所有公共设计，只留四样：卡缺失告警（可见性）· 会话人设声明 · 输出语言口径（交付面，非人格）· 管理员附加规则（人工设定）。
     const parts = [];
     if (cardWarn) parts.push(cardWarn);
     const selfScope = personaScopeText(chatKey, persona);
     if (selfScope) parts.push('', selfScope);
+    // 输出语言不属「人格 / 说话纪律」——它是交付口径；卡自带全套也照样追加（2026-11-08）
+    parts.push('', outputLanguageText());
     if (cfg.customRules && String(cfg.customRules).trim()) {
       parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
     }
@@ -453,6 +478,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
     if (cardWarn) parts.push('', cardWarn);
     const cardScope = personaScopeText(chatKey, persona);
     if (cardScope) parts.push('', cardScope);
+    parts.push('', outputLanguageText());
     parts.push(...renderSkillSections(skillSections));
     if (cfg.customRules && String(cfg.customRules).trim()) {
       parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
@@ -476,6 +502,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
     // 会话人设声明：覆盖模式同样要能压过【记忆】里"不接人设卡"的旧条目
     const overrideScope = personaScopeText(chatKey, persona);
     if (overrideScope) parts.push('', overrideScope);
+    parts.push('', outputLanguageText());
     parts.push(...renderSkillSections(skillSections));
     if (cfg.customRules && String(cfg.customRules).trim()) {
       parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
@@ -483,8 +510,9 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
     return parts.join('\n');
   }
 
-  // lead 明确"人格以角色卡为准"——标准提示词里任何与说话风格有关的条目（简短、群友语感）
-  // 都在卡之下：换成人设卡之后，卡说了算（2026-11-07 角色卡分离）。
+  // lead 说明分工：卡管「这个人是谁、什么语体、什么用词」，本提示词管交付口径
+  // （输出语言 / 群聊纪律 / 安全 / 工具 / 机制）——两者各管一段，不写成"谁压谁"
+  // （2026-11-08 措辞改从属式，判据 → design-qqbotb_log.md §一百一十）。
   const lead = leadText(cfg);
   // lean 模式（[qqagent-talkstyle-patch:prompt-lean]）：只留决定"开不开口"的几段 ——
   // 安全 / 工具协议 / 群管家 / 引用 / 表情 / 场景 / 举报等段全省（≈1.2KB/轮）。
@@ -501,6 +529,8 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
   if (personaScope) parts.push('', personaScope);
 
   // 注入 Skill 提示词片段（已按 priority 降序；一律排在核心规则之后）
+  // 输出语言口径属静态交付段，排在动态 Skill 段之前（缓存前缀稳定优先）
+  parts.push('', outputLanguageText());
   parts.push(...renderSkillSections(skillSections));
 
   if (cfg.customRules && String(cfg.customRules).trim()) {

@@ -57,8 +57,8 @@ await check('寻址：ccbp:L1/Tree.md', () => {
   return r.path;
 });
 
-await check('寻址：workspace:QQBotB/project.md', () => {
-  const r = fileTools.resolveReadPath('workspace:QQBotB/project.md');
+await check('寻址：workspace:QQBotB/app/package.json', () => {
+  const r = fileTools.resolveReadPath('workspace:QQBotB/app/package.json');
   assert(fs.existsSync(r.path), `文件不存在：${r.path}`);
   return r.path;
 });

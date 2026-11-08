@@ -172,7 +172,7 @@ export function registerFileTools() {
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: '受控根内路径：<rootId>:<相对路径>（如 ccbp:L1/Tree.md、workspace:QQBotB/project.md）或受控根内绝对路径' },
+        path: { type: 'string', description: '受控根内路径：<rootId>:<相对路径>（如 ccbp:L1/Tree.md、ccbp:Project/QQBotB/project.md、workspace:QQBotB/role/nav-rules.md）或受控根内绝对路径' },
         startLine: { type: ['integer', 'string'], description: '可选：起始行（1-based）' },
         endLine: { type: ['integer', 'string'], description: '可选：结束行（含）' }
       },

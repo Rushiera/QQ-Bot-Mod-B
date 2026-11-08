@@ -165,14 +165,14 @@ export function registerFileTools() {
   registerTool({
     id: 'read_file',
     name: '读取文件',
-    description: '读取受控根内的文本文件（只读，带行号，可分段）。用于按需取件：CCBP 知识文件（ccbp:L0/... / ccbp:L1/... / ccbp:L2/...）与项目文档（workspace:QQBotB/...）。'
+    description: '读取受控根内的文本文件（只读，带行号，可分段）。用于按需取件：CCBP 知识文件（ccbp:L0/... / ccbp:L1/... / ccbp:L2/...）与项目档案（ccbp:Project/QQBotB/...）· 工程文件（workspace:QQBotB/...）。'
       + '路径写法 <rootId>:<相对路径>；大文件用 startLine / endLine 分段，不要一次读太多。',
     category: 'knowledge',
     icon: '📖',
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: '受控根内路径：<rootId>:<相对路径>（如 ccbp:L1/Tree.md、workspace:QQBotB/project.md）或受控根内绝对路径' },
+        path: { type: 'string', description: '受控根内路径：<rootId>:<相对路径>（如 ccbp:L1/Tree.md、ccbp:Project/QQBotB/project.md、workspace:QQBotB/role/nav-rules.md）或受控根内绝对路径' },
         startLine: { type: ['integer', 'string'], description: '可选：起始行（1-based）' },
         endLine: { type: ['integer', 'string'], description: '可选：结束行（含）' }
       },

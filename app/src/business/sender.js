@@ -18,12 +18,24 @@ import { paramsFor } from './engage-level.js';
 // 群语音伴随（本号每句发言再用 TTS 念一遍）——[qqbotb-voicereply:sender-import]
 import { voiceReply } from './voice-reply.js';
 
+/** 假名语气词 → 中文音译（与角色卡 §17.1 中文对照表同源）。 */
+const JP_INTERJECTIONS = [
+  ['おや', '哦呀'],
+  ['あら', '哎呀'],
+  ['ふふ', '呵呵']
+];
+
+/** 平假名 / 片假名——判断「这一行还是不是日文」。 */
+const KANA_RE = /[\u3040-\u309f\u30a0-\u30ff]/;
+
 /**
- * 语气词归一（**只对日系人设卡生效**）——中文音译写成假名原形。
+ * 语气词归一到中文音译（**只对日系人设卡生效**）——假名语气词写回中文。
  *
- * 判例 2026-11-07：芳乃卡语气词本该是「おや」，模型连着两轮写成「哦呀」；提示词层
- * 写了「不要音译」仍然复发（low 档对长卡的措辞不敏感）。出站口兜一层：R喵 那类中文卡
- * 一个字都不动，只有口径不是「きみ」的日系卡才替换。
+ * 判例 2026-11-08（改向）：上一版把「哦呀」改写成「おや」，与本卡 §17.1 的中文对照表
+ * 正好相反，群里「おや」吃到 8/57 条、六条连续开场，而签名语尾 〜でしてー 一条都没有
+ * （判据 → `design-qqbotb_log.md` §一百一十五）。口径改为「语气词走中文音译，日文只留
+ * 专名与复述台词」后，出站口随之反向：**整行去掉语气词后不再含假名**（= 中文行）才改写，
+ * 日语台词行一个字符都不动。R喵 那类中文卡不走本函数（口径不是「きみ」才进）。
  *
  * @param {string} text 待发送文本
  * @param {string} chatKey 会话键（决定该群当前生效的卡）
@@ -40,9 +52,17 @@ function normalizeJpInterjections(text, chatKey) {
   }
   if (!jp || jp.second === 'きみ') return s;
   return s
-    .replace(/哦呀|噢呀/g, 'おや')
-    .replace(/啊啦|阿啦/g, 'あら')
-    .replace(/呼呼/g, 'ふふ');
+    .split('\n')
+    .map((line) => {
+      // 去掉语气词后还剩假名 = 日文行（复述台词 / 整句日文）——原样保留
+      let rest = line;
+      for (const [kana] of JP_INTERJECTIONS) rest = rest.split(kana).join('');
+      if (KANA_RE.test(rest)) return line;
+      let out = line;
+      for (const [kana, zh] of JP_INTERJECTIONS) out = out.split(kana).join(zh);
+      return out;
+    })
+    .join('\n');
 }
 
 /** 记一条拦截事件（采集是旁路，失败不影响发送判定）。 */

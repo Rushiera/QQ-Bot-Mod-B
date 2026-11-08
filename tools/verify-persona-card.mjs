@@ -119,7 +119,8 @@ check('换卡后卡正文跟着换', cardYoshino.text.includes('依田芳乃') &
 check('inherit 卡照旧注入标准提示词（lead + 风格段）',
   sysYoshino.includes('那张卡是风格参考') && sysYoshino.includes('【像真人一样】'));
 check('inherit 卡含输出语言口径段（业务面口径 · 与卡不冲突）',
-  sysYoshino.includes('【输出语言（业务面口径') && sysYoshino.includes('日文只出现在三类地方'));
+  sysYoshino.includes('【输出语言（业务面口径') && sysYoshino.includes('日文只出现在两类地方')
+    && sysYoshino.includes('语气词与感叹词走中文音译'));
 check('inherit 卡仍注入公共机制段（R喵 不注入，内容在卡里）',
   sysYoshino.includes('四条底线（不可协商）') && !sysRmiao.includes('四条底线（不可协商）'));
 check('两次组装字节一致（同配置幂等）', buildSystemPrompt({ skillContext: {} }) === sysYoshino);

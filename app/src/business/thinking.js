@@ -10,8 +10,9 @@
 //    这里只返回建议，绝不自己发请求。
 //
 // 档位口径（用户设置 api.thinkingEffort）：
-//   off / low / medium / high / xhigh / max —— off 是"能思考的模型也明确关闭"，
-//   其余档位含义上都是"开"：强度递增，渠道只支持低档时向下就近映射。
+//   not / low / high / max —— 四档与服务端（本地中转壳）档位表对齐；
+//   not = 显式不思考（服务端硬关思考），其余三档含义上都是"开"：强度递增。
+//   壳侧默认给入站请求开思考，"不发参数"等于走默认（开着），要关照传 not。
 
 /** 本地/自建端点：不发花哨参数，避免把自建网关打挂。 */
 const LOCAL_HOSTS = /^(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\]|host\.docker\.internal)$/i;
@@ -27,9 +28,11 @@ const LOCAL_HOSTS = /^(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\]|host\.docker\.i
  *   OpenRouter 的 reasoning:{} → 网关 400，思考模式失效还多打一次降级请求。
  */
 const MODEL_RULES = [
-  // 本地端点优先（域名命中就不管模型名了）
-  { dialect: 'ollama', host: LOCAL_HOSTS, model: null, supports: ['off', 'on'] },
-  { dialect: 'local-openai', host: LOCAL_HOSTS, model: null, supports: [] },
+  // 本地端点优先（域名命中就不管模型名了）——按 OpenAI 兼容中转处理：发 reasoning_effort。
+  // 四档 not / low / high / max 与服务端（本地中转壳）档位表对齐；not = 服务端硬关思考，
+  // 由中转桥接成 thinking:{type:disabled}（壳默认开思考，见 PayloadPipeline 第 11 步）。
+  // 原 ollama 方言（只发 think:true）已退役——127.0.0.1 上的中转不认那个字段。
+  { dialect: 'local-relay', host: LOCAL_HOSTS, model: null, supports: ['not', 'effort'] },
 
   { dialect: 'deepseek', host: /deepseek\.com$/i, model: /deepseek.*(reasoner|thinking|v4|v3\.\d)/i, supports: ['off', 'on'] },
   { dialect: 'deepseek', host: /deepseek\.com$/i, model: /deepseek/i, supports: ['off', 'on'] },
@@ -59,13 +62,14 @@ export const DIALECT_LABELS = {
   gemini: 'Gemini 思考',
   openrouter: 'OpenRouter reasoning',
   xai: 'xAI 推理强度',
+  'local-relay': '本地中转（OpenAI 兼容）',
   ollama: 'Ollama 本地',
   'local-openai': '自建 OpenAI 兼容端点',
   generic: '通用（不发送思考参数）'
 };
 
-/** 用户可选的思考档位（off = 明确关闭，其余 = 开启且强度递增）。 */
-export const THINKING_EFFORTS = ['off', 'low', 'medium', 'high', 'xhigh', 'max'];
+/** 用户可选的思考档位（与服务端档位表对齐：not = 显式不思考，其余 = 开启且强度递增）。 */
+export const THINKING_EFFORTS = ['not', 'low', 'high', 'max'];
 
 /** OpenAI 系 reasoning_effort 的合法取值（xhigh/max 会被就近映射到 high）。 */
 const OPENAI_EFFORTS = ['minimal', 'low', 'medium', 'high'];
@@ -233,6 +237,13 @@ export function buildThinkingParams({ effort = '', dialect = 'generic', budget =
         params.reasoning = { effort: 'minimal' };
         applied = true;
       }
+      break;
+    }
+    case 'local-relay': {
+      // 本地中转（壳）：四档原样下发 reasoning_effort；not 由中转桥接成 thinking disabled。
+      // 不走 OPENAI_EFFORTS 就近映射——max 必须原样到服务端，由服务端档位表裁决。
+      if (e === 'not' || e === 'off') { params.reasoning_effort = 'not'; applied = true; }
+      else if (on) { params.reasoning_effort = e; applied = true; }
       break;
     }
     case 'ollama': {

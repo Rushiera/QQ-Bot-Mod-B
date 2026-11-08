@@ -189,6 +189,134 @@ export function normalizeProperNouns(text) {
   return out;
 }
 
+// ── 语气词节流（TTS 专属 · 2026-11-08）──────────────────────────────
+//
+// 口径（Rushiera 2026-11-08）：念出来的日语里，语气词大约三成台词带一处就够——おや 可以用，
+// 但不能变成「每三四句就一句おや」的口头禅。
+//
+// 为什么不能只靠提示词：模型无法统计自己产出的频率，单次生成时也看不见前几句用了什么；
+// 「不要每句都用」这类软约束只能压一部分。所以分两层：
+//   ① 提示词（navigator/index.js 的语尾口径行）只给倾向——多数句子直接起句；
+//   ② 硬层放这里——最近 10 条台词最多 3 条带语气词（≈30%），且不连击，超额剥句首。
+//
+// 改前实测（`app/data/logs` 的 `[tts] 语音已提交` 行）：11-07 53 条里 11 条 おや 起头（20.8%）、
+// 11-08 97 条里 23 条（23.7%）——听感偏密，且全部集中在同一句首位置。
+
+/** 计入配额的语气词（会话语气词；「おはよう」这类问候语不算）。 */
+const INTERJ_WORDS = ['おや', 'あら', 'ふふ', 'ふむ', 'ほう', 'ほー'];
+
+/** 配额窗口（条数）与窗口内允许带语气词的条数——3/10 ≈ 30%。 */
+const INTERJ_QUOTA_WINDOW = 10;
+const INTERJ_QUOTA_MAX = 3;
+
+/** 最近若干条台词是否带了语气词（按会话分桶；末尾 = 最近一条，用于「不连击」）。 */
+const INTERJ_STATE = new Map();
+
+/**
+ * 取某个会话的语气词历史窗口。
+ *
+ * 按群分桶的理由：3% 的偏差落在单群听感上会被放大——同一时刻几个群都在念，
+ * 共享一个窗口会让某个群连续全带、另一个群连续全不带。分桶后每群各自约三成。
+ *
+ * @param {string} [scope] 会话键（群号 / chatKey；空 = 共用缺省桶）
+ * @returns {boolean[]} 历史（可原地 push / shift）
+ */
+function historyOf(scope) {
+  const key = String(scope ?? '').trim() || 'default';
+  if (!INTERJ_STATE.has(key)) INTERJ_STATE.set(key, []);
+  return INTERJ_STATE.get(key);
+}
+
+/**
+ * 语气词 token：词本身 + 紧跟的标点（逗号 / 破折号 / 长音 / 省略号 / 空白）。
+ *
+ * 位置合不合法另判（见 `headInterjections`）——句中的「おや」多为「亲（父母）」的假名写法，
+ * 不能见词就删。
+ */
+const INTERJ_TOKEN_RE = new RegExp(
+  '(?:' + INTERJ_WORDS.join('|') + ')(?=[、，,。．.！!？?ー—…\\-\\s　]|$)[、，,。．.！!？?ー—…\\-\\s　]*',
+  'gu'
+);
+
+/** 语气词可出现的「前一个字符」——行首 / 句读 / 引号开 / 空白。 */
+const INTERJ_PREV_RE = /[。．.!！?？…\n「『、，,\s　]/u;
+
+/**
+ * 找一行里位于句读起点的语气词（位置 + 长度，按出现顺序）。
+ *
+ * @param {string} line 单行台词
+ * @returns {Array<{at: number, len: number}>} 命中
+ */
+function headInterjections(line) {
+  const hits = [];
+  INTERJ_TOKEN_RE.lastIndex = 0;
+  let match;
+  while ((match = INTERJ_TOKEN_RE.exec(line)) !== null) {
+    const at = match.index;
+    if (at === 0 || INTERJ_PREV_RE.test(line[at - 1])) hits.push({ at, len: match[0].length });
+  }
+  return hits;
+}
+
+/**
+ * 按配额收掉句首语气词（TTS 台词专用）。
+ *
+ * 放行条件：窗口内配额未满 **且** 上一条台词没带语气词（防连击）。放行时一条只留一处，
+ * 多出来的照样收掉；不放行时全部收掉。整行是引号台词的（`「…」`）不动——那是复述原文。
+ *
+ * @param {string} text 日语台词
+ * @param {string} [scope] 会话键（群号 / chatKey）——每群独立配额
+ * @returns {{text: string, allowed: boolean, changed: boolean, used: number, window: number, max: number}} 结果
+ */
+export function gateInterjections(text, scope) {
+  const raw = String(text ?? '');
+  const history = historyOf(scope);
+  const meta = { used: history.filter(Boolean).length, window: INTERJ_QUOTA_WINDOW, max: INTERJ_QUOTA_MAX };
+  if (!raw.trim()) return { text: raw, allowed: true, changed: false, ...meta };
+  const lastUsed = history[history.length - 1] === true;
+  const quotaLeft = meta.used < INTERJ_QUOTA_MAX && !lastUsed;
+  let kept = 0;
+  const out = raw
+    .split('\n')
+    .map((line) => {
+      // 整行是一句引用台词——按原文念，不节流
+      if (/^\s*「[\s\S]*」\s*$/.test(line)) return line;
+      const hits = headInterjections(line);
+      if (!hits.length) return line;
+      let outLine = line;
+      // 从后往前删——前面命中点的下标不漂移；放行时只留第一处
+      for (let i = hits.length - 1; i >= 0; i -= 1) {
+        if (quotaLeft && kept === 0 && i === 0) { kept = 1; continue; }
+        outLine = outLine.slice(0, hits[i].at) + outLine.slice(hits[i].at + hits[i].len);
+      }
+      return outLine;
+    })
+    .join('\n');
+  const body = out.trim();
+  // 剥空了（整句只有一个语气词）→ 回落原样，按「已用」记账，不让语音变成空台词
+  if (!body) {
+    history.push(true);
+    while (history.length > INTERJ_QUOTA_WINDOW) history.shift();
+    return { text: raw, allowed: true, changed: false, ...meta, used: history.filter(Boolean).length };
+  }
+  history.push(kept > 0);
+  while (history.length > INTERJ_QUOTA_WINDOW) history.shift();
+  return { text: body, allowed: kept > 0, changed: body !== raw, ...meta, used: history.filter(Boolean).length };
+}
+
+/**
+ * 清空语气词节流窗口。
+ *
+ * 只给自测用——生产链路不调用；跑断言前先清零，各用例之间不互相污染。
+ *
+ * @param {string} [scope] 只清某个会话桶（空 = 全清）
+ * @returns {void}
+ */
+export function resetInterjectionGate(scope) {
+  if (scope === undefined) INTERJ_STATE.clear();
+  else INTERJ_STATE.delete(String(scope).trim() || 'default');
+}
+
 /**
  * 去掉模型包在译文外面的代码围栏与引号。
  *
@@ -688,6 +816,13 @@ export function createMediaService({
       } catch (error) {
         return { ok: false, error: String(error?.message ?? error) };
       }
+      // 语气词节流（2026-11-08）：念出来的日语里语气词约三成台词带一处、不连击。
+      // 只收 TTS 台词，中文正文一个字不动（中文侧口径在 prompt.js / sender.js）。
+      const gated = gateInterjections(japanese, chat);
+      if (gated.changed) {
+        record('tts', `语气词闸：${gated.allowed ? '放行一处' : '收掉句首'}（近 ${gated.window} 条已用 ${gated.used}/${gated.max}）`);
+      }
+      japanese = gated.text;
       let style = String(caption ?? '').trim();
       if (style && hasChinese(style) && !hasKana(style)) {
         try {

@@ -831,25 +831,21 @@ return `
       <div class="field"><label>思考强度</label>
         <select id="sc-thinking-effort">
           ${[
-            ['off', '关（不思考，明确关闭）'],
-            ['', '默认（跟随模型/网关）'],
-            ['on-noeffort', '开（明确开启，不指定强度）'],
+            ['', '默认（跟随服务端）'],
+            ['not', '不思考（服务端硬关）'],
             ['low', '低（快、省 token）'],
-            ['medium', '中'],
             ['high', '高（慢、细致）'],
-            ['xhigh', '超高（更慢、更深入）'],
             ['max', '拉满（最强推理）']
           ].map(([v, l]) => {
             const eff = c.api?.thinkingEffort || '';
             const mode = c.api?.thinkingMode || 'auto';
-            // (mode, effort) 二维状态压成一维下拉：off 优先，其次 effort 档；
-            // "on 但没指定强度"是独立档 on-noeffort（不能折叠进"默认"——
-            // 那样一次保存会把明确开启改写成 auto，见 saveConfig chat 分支）。
-            const sel = mode === 'off' ? 'off' : (eff || (mode === 'on' ? 'on-noeffort' : ''));
+            // (mode, effort) 二维状态压成一维下拉：not 档优先（mode=off 的旧配置也落 not），
+            // 其余按 effort 直读；都没设 = 默认（跟随服务端）。
+            const sel = mode === 'off' ? 'not' : (eff || '');
             return `<option value="${v}" ${sel === v ? 'selected' : ''}>${l}</option>`;
           }).join('')}
         </select>
-        <div class="hint">内置落成各厂商思考参数（off~max 六档）；渠道不支持高档时向下就近映射。</div></div>
+        <div class="hint">四档：not / low / high / max（与服务端档位表对齐）；not = 让服务端关掉思考，其余三档强度递增。</div></div>
       <div class="field-row">
         <div class="field"><label>防抖聚批窗口（毫秒）</label><input type="number" id="sc-wakedelay" min="0" value="${esc(c.wakeDelayMs)}" /></div>
         <div class="field"><label>批次间隔（毫秒）</label><input type="number" id="sc-draindelay" min="0" value="${esc(c.drainDelayMs)}" /></div>

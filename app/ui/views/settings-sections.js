@@ -362,15 +362,12 @@
   // 二、聊天设置（原版 06-settings-render.js:816 renderChatSection）
   // ══════════════════════════════════════════════════════════════════════
 
-  /** 思考强度档位（原版 :833-842 同表：`(mode, effort)` 二维压成一维）。 */
+  /** 思考强度档位（四档，与服务端档位表对齐：not = 显式不思考，其余强度递增）。 */
   const THINKING_OPTIONS = [
-    ['off', '关（不思考，明确关闭）'],
-    ['', '默认（跟随模型/网关）'],
-    ['on-noeffort', '开（明确开启，不指定强度）'],
+    ['', '默认（跟随服务端）'],
+    ['not', '不思考（服务端硬关）'],
     ['low', '低（快、省 token）'],
-    ['medium', '中'],
     ['high', '高（慢、细致）'],
-    ['xhigh', '超高（更慢、更深入）'],
     ['max', '拉满（最强推理）']
   ];
 
@@ -596,20 +593,18 @@
   function thinkingValueOf(api) {
     const mode = (api && api.thinkingMode) || 'auto';
     const effort = (api && api.thinkingEffort) || '';
-    if (mode === 'off') return 'off';
-    if (effort) return effort;
-    return mode === 'on' ? 'on-noeffort' : '';
+    if (mode === 'off') return 'not';
+    return effort;
   }
 
   /**
-   * 一维下拉值 → 写回 patch 片段（`off` / `on-noeffort` / 空 / 具体档位四支）。
+   * 一维下拉值 → 写回 patch 片段（`not` / 空 / 具体档位三支）。
    *
    * @param {string} value 下拉值
    * @returns {object} `{thinkingMode, thinkingEffort}`
    */
   function thinkingPatchOf(value) {
-    if (value === 'off') return { thinkingMode: 'off', thinkingEffort: '' };
-    if (value === 'on-noeffort') return { thinkingMode: 'on', thinkingEffort: '' };
+    if (value === 'not') return { thinkingMode: 'on', thinkingEffort: 'not' };
     if (value === '') return { thinkingMode: 'auto', thinkingEffort: '' };
     return { thinkingMode: 'on', thinkingEffort: value };
   }
@@ -708,7 +703,7 @@
             (n) => push(ctx, { api: { maxRounds: n } }))
         ]),
         selectField(ctx, '思考强度', thinkingValueOf(api), THINKING_OPTIONS,
-          '内置落成各厂商思考参数；渠道不支持高档时向下就近映射',
+          '四档 not / low / high / max（与服务端档位表对齐）；not = 让服务端关掉思考',
           (v) => push(ctx, { api: thinkingPatchOf(v) })),
         h.row([
           numField(ctx, '防抖聚批窗口（毫秒）', c.wakeDelayMs, { min: 0 }, (n) => push(ctx, { wakeDelayMs: n })),

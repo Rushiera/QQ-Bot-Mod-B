@@ -76,8 +76,9 @@ export const DEFAULT_CONFIG = {
     maxRounds: 12,                          // 单次运行的最多工具轮数
     timeoutMs: 180000,
     // 思考强度（实际落成各厂商参数由 src/thinking.js 内置方言表负责）：
-    //   thinkingEffort off/low/medium/high/xhigh/max —— off=能思考的模型也明确关闭，
-    //     其余档位=开启且强度递增（渠道不支持高档时向下就近映射）
+    //   thinkingEffort not/low/high/max —— 四档与服务端（本地中转壳）档位表对齐；
+    //     not = 显式不思考（服务端据此桥接成 thinking:{type:disabled}），
+    //     其余三档 = 开启且强度递增（服务端按模型支持档就近裁决）
     //   thinkingMode  off/auto/on（旧三态，effort 为空时的兼容口径）
     //   thinkingBudget token 数 —— 思考预算，仅 Claude 兼容 / 部分网关生效，0=不指定
     // 目的：防"雷霆大思考"（几千 token 的 reasoning 拖慢且烧钱）或该思考的完全不思考。

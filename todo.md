@@ -103,6 +103,8 @@
 
 15. 🟡 **语体长度按卡（A/B）已生效 · 剩两条（2026-11-08 · v1.31 + v1.34）**——A（`utterance` 按卡分流 §8）/ B（override 退役 R喵 味那句）已随 **13:04:58** 重启进运行态，`GET /api/prompt-preview?chatKey=group:361820329` 实读确认；剩：① **B'（`prompt.js` `humanRhythm` 同句）待下次重启**——只影响「override 清空 / lean 无 override」那条路与界面「载入当前」初值，**当前行为不受影响** ② 群内观感待真触发——三个芳乃群下次有未读时看行数，判据 = 讲道理出 3–7 行（现象 / 比拟 / 道理）、闲聊仍可一句。逐群调法（某群卡覆盖 `utterance:'short'` 或改该群群记）→ `design-qqbotb_log.md` §一百一十二 F
 
+16. 🔴 **TTS 语气词节流真链路验收（2026-11-08 · 待重启 · v1.38）**——重启 `启动QQBotB.vbs` 后在芳乃群让它连说五句以上：① 大约三成台词听得见 `おや` / `あら` / `ふむ` 起头，其余直接起句（不连击）② 单体日志出现「语气词闸：收掉句首（近 10 条已用 3/3）」或「放行一处」③ 中文正文一个字不变 ④ 剥掉语气词后句子通顺、不留「——」孤头。改前基线：11-08 97 条 TTS 里 23 条 `おや` 起头（23.7%）。改动面：`app/src/navigator/media.js`（`gateInterjections` + 分桶 + 接线 `runTtsJob`）· `app/src/navigator/index.js:279`（提示词倾向层）。自测 `verify-media` 22/22 → `design-qqbotb_log.md` §一百一十七；统计口径 `node tools/tts-interject-stat.mjs [YYYY-MM-DD]`（改前 11-08：97 条 / 语气词起头 32.0% / おや 起头 23.7% / 最长おや连击 6）
+
 
 
 ---

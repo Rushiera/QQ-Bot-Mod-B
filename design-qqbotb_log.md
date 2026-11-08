@@ -5118,6 +5118,7 @@ R喵 说话方式的变化需要对照改前的原文，故把 v1.20 的默认�
 | **A · 语体长度按卡** | `persona-cards.js` | 卡条目新增 `utterance` 两态：`'short'`（默认，原口径）/ `'card'`（长度按卡）。R喵 = `short`，芳乃 = `card`；`listProfiles` / `readCard` 透传（配置可覆盖，非法值回落 `short`） |
 | A · §8 分流 | `prompt.js` `toolProtocol(utterance)` | `card` → 「单条长度按【角色设定】那张卡规定的语体来——卡定了行数就写够行数，卡没规定长度时多数 ≤30 字」；`short` → 原文不动。三个调用点（专配卡分支 / override 分支 / full 标准分支）统一传 `card.utterance`；`personaCardOf()` 两个回落出口补 `utterance` |
 | **B · override 退役 R喵 味** | `_unpack/data/config.json` `persona.systemPromptOverride` | 删「有时只发『草』『？』也比硬接强」→ 换出口句「该不该开口、开多长，按角色卡与这个群的语感来——卡让说长就说长，群让收着就收着，不为填空硬接」。其余（参与度 / 回应参数 / 群聊不是客服队列 / 别露机器味 / 记忆教程 / 像真人 / 学群语感）保留——那是机制与纪律，不是人格 |
+| **B' · 同句第二载体** | `prompt.js` `humanRhythm()` | 同一句也在标准提示词函数里（override 清空 / lean 无 override 时的那条路，且是界面「载入当前标准提示词」的初值来源）——同步换成上面那句，避免"改了一处、另一处又把它带回"。R喵 卡 `personas/rmiao.md` 副本**保留**（`self` 卡自带人格，短句是它的口径） |
 | 自测 | `tools/verify-persona-card.mjs` | 新增 §四之一 5 条：芳乃 `card` · `card` 口径文案 · `short` 回落 · 非法值回落 · R喵 `short` |
 
 **为什么不改成 `systemPrompt:'self'`**：`self` 会整段绕过安全规则 / 工具协议 / 机制段，等于给外卡拆掉底线。长度问题只在 §8 一句，按卡分流即可。
@@ -5132,14 +5133,14 @@ R喵 说话方式的变化需要对照改前的原文，故把 v1.20 的默认�
 | `node tools/verify-persona.mjs` | **27/27** |
 | `node tools/verify-suite.mjs` | **29/30**——唯一红 `verify-navigator` 62/63，既有存量 |
 | 真链路面（未重启的替代取证） | 探针用**运行态 `config.json` 副本**实组装：三芳乃群 `utterance=card` / `byCard=true` / 旧「多数 ≤30 字」已不在 / 「也比硬接强」已不在 / 新出口句在 / 工具协议在位；R喵 群仍 374 字符、`toolProtocol=false`（`self` 卡未受影响） |
+| **消费点实锤（已生效）** | 13:04:58 业务面重启（并发会话 v1.32 那次）后实读 `GET /api/prompt-preview?chatKey=group:361820329`：`systemPrompt` 里 §8 已是「单条长度按【角色设定】…卡定了行数就写够行数」，override 已是新出口句，`standardPrompt` 亦同步（B' 之后）——A/B 已在运行态，非"待重启" |
 
-### E · 未闭合（生效待重启）
+### E · 生效与剩余闭合项
 
-代码（`prompt.js` / `persona-cards.js`）与配置（`config.json`）都**未在运行态生效**（`getConfig()` 是进程内缓存）——需重启业务面（`启动QQBotB.vbs`）。重启后验：
+A/B 已随 **2026-11-08 13:04:58** 的业务面重启在运行态生效（consumption point：`api/prompt-preview` 实读，非声明）。剩余待闭合两条：
 
-1. `GET http://127.0.0.1:3210/api/prompt-preview?chatKey=group:361820329` → §8 是「单条长度按【角色设定】」，且 override 里没有「也比硬接强」
-2. 群里喊一句让它讲道理 → 出 3–7 行（现象 / 比拟 / 道理），不再压成一行
-3. R喵 群（如 689942975）行为不变——`self` 卡照旧
+1. **B'（`prompt.js` `humanRhythm`）需下一次重启**才进运行态——但它只影响「override 清空 / lean 无 override」那条路与界面「载入当前」初值，**当前行为不受影响**（运行态走 override 分支）。
+2. **群内观感待真触发**：重启后三个芳乃群还没有过一轮（`sessions/` 里 grep 不到新 §8 的运行记录，361820329 最后一条会话 12:46）。下一次有未读时看实际行数，判据 = 讲道理的回应出 3–7 行（现象 / 比拟 / 道理），闲聊仍可一句。
 
 ### F · 遗留 / 后续口径
 

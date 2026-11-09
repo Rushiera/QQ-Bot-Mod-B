@@ -317,19 +317,17 @@ const salvageBody = await navSalvage.api['POST /api/nav/reset']({ body: { key: '
 check('nav_reset·抢救模式回执回显（干跑）', salvageBody?.body?.rescue === true && salvageBody?.body?.dryRun === true,
   JSON.stringify(salvageBody?.body ?? {}).slice(0, 90));
 
-const pickedAny = await navSalvage.pickRescueCat({});
-const idleIds = new Set(cats.filter((row) => !row?.runState || String(row.runState) === 'idle').map((row) => String(row.id)));
-check('抢救·选中猫为空闲猫（非在跑）', !pickedAny || idleIds.has(String(pickedAny.key)),
-  pickedAny ? `${pickedAny.name}（${pickedAny.reason}）` : '无候选');
-const majorRow = cats.find((row) => String(row.id) === 'majordomo');
-const majorIdle = !majorRow?.runState || String(majorRow.runState) === 'idle';
-check('抢救·majordomo 空闲时优先 / 忙时让位',
-  !pickedAny || (majorIdle ? String(pickedAny.key) === 'majordomo' : String(pickedAny.key) !== 'majordomo'),
-  `${majorIdle ? '主干空闲' : '主干在跑'} → ${pickedAny ? pickedAny.name : '无候选'}`);
-
-const pickedOther = await navSalvage.pickRescueCat({ excludeKey: 'majordomo' });
-check('抢救·选猫排除目标猫自身', !pickedOther || String(pickedOther.key) !== 'majordomo',
-  pickedOther ? `${pickedOther.name}（${pickedOther.reason}）` : '无候选');
+// 代读猫改造（Rushiera 2026-11-09）：不再复用常驻代读猫——每次重建临时新建一只，用完销毁
+const rescueSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
+check('代读·临时新建而非复用常驻猫',
+  rescueSrc.includes('async function createRescueCat') && rescueSrc.includes('async function dropRescueCat')
+  && !rescueSrc.includes('pickRescueCat'),
+  '');
+check('代读·用完销毁（先归档再删）',
+  rescueSrc.includes('cat.delete ${key}') && rescueSrc.includes('临时代读猫已销毁'),
+  '');
+const dropCalls = (rescueSrc.match(/await dropRescueCat\(rescuer\);/g) || []).length;
+check('代读·四个出口都销毁', dropCalls >= 4, `dropRescueCat 调用 ${dropCalls} 处（期望 ≥4）`);
 
 const srcSalvage = await navSalvage.grabCatSource('majordomo');
 check('抢救·完整前文抓取（只读 fullctx + 关键信息位置索引）',
@@ -337,30 +335,33 @@ check('抢救·完整前文抓取（只读 fullctx + 关键信息位置索引）
   `${srcSalvage.count} 条 / ${srcSalvage.chars} 字符${srcSalvage.truncated ? '·超限截断' : ''} · 索引 ${srcSalvage.index.length} 字符`);
 
 const salvageSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
-check('代读·源码段在位（固定代读猫 + 开工先清它的前文 + 交接报告）',
-  salvageSrc.includes('async function rescueSummary') && salvageSrc.includes('async function pickRescueCat')
+check('代读·源码段在位（临时新建代读猫 + 交接报告 + 前文索引）',
+  salvageSrc.includes('async function rescueSummary') && salvageSrc.includes('async function createRescueCat')
   && salvageSrc.includes('function keyIndex') && salvageSrc.includes('交接报告已取到')
-  && salvageSrc.includes('rescueCatKey') && salvageSrc.includes('清上一次抢救内容'),
+  && salvageSrc.includes('rescueCatPrefix') && salvageSrc.includes('临时代读猫创建失败'),
   '');
 check('语尾口径·源码段在位（TTS 适配层 · 只影响日语译文，不改群里中文）',
   salvageSrc.includes('语尾口径') && salvageSrc.includes('jpTails') && salvageSrc.includes('のでしてー'),
   '');
-// 固定代读猫分支（Rushiera 2026-10-30）——配置写的是**显示名**（nav_rescue），必须解析到会话 id，
-// 否则「固定代读猫未就绪」会让所有前文整理直接失败（2026-10-30 修）。
-const navFixed = createNavigator({
-  log,
-  dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-fixed-')),
-  config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [], rescueCat: 'nav_rescue' } },
-  onebot: { call: async () => ({}), status: () => ({ self: { userId: 2405997337 } }) }
-});
-const rescueRow = cats.find((row) => String(row?.name) === 'nav_rescue') || {};
-const fixedPick = await navFixed.pickRescueCat({});
-check('代读·固定猫按显示名解析到会话 id',
-  !!fixedPick && !!rescueRow.id && String(fixedPick.key) === String(rescueRow.id) && fixedPick.name === 'nav_rescue',
-  fixedPick ? `${fixedPick.key} / ${fixedPick.name}（${fixedPick.reason}）` : '未解析');
-const fixedExclude = await navFixed.pickRescueCat({ excludeKey: String(rescueRow.id ?? '') });
-check('代读·目标猫就是代读猫本身 → 拒绝', fixedExclude === null, fixedExclude ? `误选 ${fixedExclude.name}` : '返回 null');
-navFixed.stop();
+// 在途闸 + 来源记账 + 面板防抖（Rushiera 2026-11-09）——2026-11-09 11:37 双跑事故的固化判据：
+// 同一只猫只能有一次整理在途（第二次回 busy），不同猫并发；来源进日志；面板按钮在途置灰。
+check('整理·在途闸在位（同猫串行 / 别名归一 / busy 回执）',
+  salvageSrc.includes('const resetPending = new Map()') && salvageSrc.includes('该猫已在整理中')
+  && salvageSrc.includes('resetPending.delete(rawKey)') && salvageSrc.includes('runResetSession'),
+  '');
+check('整理·来源记账在位（describeSource + 路由透传 headers）',
+  salvageSrc.includes('function describeSource') && salvageSrc.includes("'POST /api/nav/reset': async ({ body, headers })")
+  && salvageSrc.includes('来源='),
+  '');
+const navViewSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'ui', 'views', 'navigator.js'), 'utf8');
+check('整理·面板按钮防抖（在途置灰 + 重复点击忽略 + 来源标记）',
+  navViewSrc.includes('state.acting.has(tag)') && navViewSrc.includes("source: 'panel:nav-view'")
+  && navViewSrc.includes('整理中…'),
+  '');
+check('整理·在途态进 status（面板按服务端在途表置灰，不只靠 HTTP 往返那一瞬）',
+  salvageSrc.includes('resetting: [...resetPending.entries()]')
+  && navViewSrc.includes('resettingKeys') && navViewSrc.includes('resettingKeys.has(key)'),
+  '');
 
 navSalvage.stop();
 

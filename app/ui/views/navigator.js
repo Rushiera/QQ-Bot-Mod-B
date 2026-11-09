@@ -61,7 +61,9 @@
     intent: null,
     hub: null,
     persona: null,
-    advancedLoaded: false
+    advancedLoaded: false,
+    /** 在途动作（`reset:<key>` 等）——按钮置灰用，防同一次点击发两次请求。 */
+    acting: new Set()
   };
 
   /**
@@ -754,6 +756,10 @@
     const s = state.status || {};
     const cats = Array.isArray(s.cats) ? s.cats : [];
     const busy = new Set(Array.isArray(s.busy) ? s.busy : []);
+    // 整理在途（服务端在途表）——后台整理几分钟，按钮要在这整段时间里保持置灰
+    const resettingKeys = new Set(
+      (Array.isArray(s.resetting) ? s.resetting : []).map((item) => String(item?.key || ''))
+    );
     refs.catCount.textContent = String(cats.length);
     refs.catsBox.textContent = '';
 
@@ -769,6 +775,7 @@
       const key = String(row.id || row.name || '');
       const runState = String(row.runState || row.phase || '');
       const working = busy.has(key) || runState === 'running' || runState === 'waiting';
+      const resetting = resettingKeys.has(key) || resettingKeys.has(String(row.name || ''));
       const line = el('div', {
         class: `navx-cat${key === state.cat ? ' active' : ''}`,
         onclick: () => { state.cat = key; refs.catSelect.value = key; renderCats(); }
@@ -780,7 +787,13 @@
           el('button', { class: 'navx-mini', text: '详情', onclick: (event) => { event.stopPropagation(); showDetail(key); } }),
           el('button', { class: 'navx-mini', text: '截图', onclick: (event) => { event.stopPropagation(); shoot(key); } }),
           el('button', { class: 'navx-mini', text: '新会话', onclick: (event) => { event.stopPropagation(); newSession(key); } }),
-          el('button', { class: 'navx-mini', text: '整理', title: '前文整理重启（后台执行）', onclick: (event) => { event.stopPropagation(); resetSession(key); } })
+          el('button', {
+            class: 'navx-mini',
+            text: (state.acting.has(`reset:${key}`) || resetting) ? '整理中…' : '整理',
+            title: '前文整理重启（后台执行——同猫串行，不同猫并发）',
+            disabled: state.acting.has(`reset:${key}`) || resetting,
+            onclick: (event) => { event.stopPropagation(); resetSession(key); }
+          })
         )
       );
       refs.catsBox.appendChild(line);
@@ -996,12 +1009,31 @@
    * @returns {Promise<void>} 完成
    */
   async function resetSession(key) {
+    const tag = `reset:${key}`;
+    // 防抖（Rushiera 2026-11-09）：一次点击只发一次——在途期间按钮置灰，重复点击直接忽略。
+    if (state.acting.has(tag)) return;
+    // 服务端在途表已含这只猫 → 直接提示，不再发请求（按钮置灰是主闸，这里是键盘 / 旧渲染的兜底）
+    const inFlight = (Array.isArray(state.status?.resetting) ? state.status.resetting : [])
+      .map((item) => String(item?.key || ''));
+    if (inFlight.includes(key)) {
+      if (refs) refs.sendResult.textContent = `${key}：已在整理中——本次未重复执行`;
+      return;
+    }
+    state.acting.add(tag);
+    renderCats();
     const chat = (state.status && state.status.activeChat) || null;
-    const result = await act('/api/nav/reset', { key, chat });
-    if (!refs) return;
-    refs.sendResult.textContent = result.ok === true
-      ? `${key}：整理重启已在后台执行——进度看「活动流」`
-      : `${key}：整理重启失败——${result.error || '未知原因'}`;
+    try {
+      const result = await act('/api/nav/reset', { key, chat, source: 'panel:nav-view' });
+      if (!refs) return;
+      refs.sendResult.textContent = result.ok !== true
+        ? `${key}：整理重启失败——${result.error || '未知原因'}`
+        : (result.busy === true
+          ? `${key}：已在整理中——本次未重复执行`
+          : `${key}：整理重启已在后台执行——进度看「活动流」`);
+    } finally {
+      state.acting.delete(tag);
+      if (refs) renderCats();
+    }
   }
 
   // ── 5. 登记 ──────────────────────────────────────────────────────────────

@@ -232,8 +232,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   // 抢救模式代读上限（design §六b 抢救模式）——超出保留头尾、砍中段
   const rescueMaxRaw = Number(navConfig.rescueMaxChars);
   const rescueMaxChars = Number.isFinite(rescueMaxRaw) && rescueMaxRaw > 0 ? rescueMaxRaw : RESCUE_SOURCE_MAX;
-  // 固定代读猫（Rushiera 2026-10-30）——会话重建一律由它代读，不再让目标猫自己收工
-  const rescueCatKey = String(navConfig.rescueCat ?? '').trim();
+  // 代读猫（Rushiera 2026-11-09 改）——每次重建**临时新建一只**（用完销毁），不复用常驻猫。
+  // 配置项 `navigator.rescueCat` 复用为**名前缀**（默认 nav_rescue）：并发重建各建各的，互不抢前文。
+  const rescueCatPrefix = String(navConfig.rescueCat ?? '').trim() || 'nav_rescue';
   const services = Array.isArray(navConfig.services) ? navConfig.services : [];
   const vipUser = String(navConfig.vipUser || '');
   // 图像编辑（design-qqbotb-navigator.md §十八）——ComfyDock「[生成]」工作区
@@ -2195,55 +2196,101 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     return false;
   }
 
+  /** 临时代读猫序号（同一前缀下递增——每次重建一只新的，用完销毁）。 */
+  let rescueCatSeq = 0;
+
   /**
-   * 挑代读猫——固定猫优先（`navigator.rescueCat`），未配置时回落「空闲且最干净」。
+   * 建一只临时代读猫（Rushiera 2026-11-09）。
    *
-   * 固定猫语义（Rushiera 2026-10-30）：会话重建不再由目标猫自述，一律交给 CH4 里专门做这事的猫。
-   * 固定猫忙也照用（调用方会先开新会话把它腾出来）；找不到该猫 → 返回 null 由调用方出声中止。
+   * 为什么不再复用常驻猫：常驻代读猫是全进程共享的单点——两次重建撞在一起时，后到的那次会在同
+   * 一只猫上再开一次新会话，把正在代读的那场清掉（实测 2026-11-09：两套流程并行、两次
+   * `cat.new-session`、两份交接报告）。改成每次新建一只，并发重建各读各的，互不抢前文。
    *
-   * @param {object} options 选项
-   * @param {string} [options.excludeKey] 排除的猫（目标猫自身）
-   * @returns {Promise<object|null>} { key, name, contextCount, reason }；无可用时 null
+   * 流程：`cat.new <名>`（静默态）→ 轮询猫群清单取会话 id → `cat.start <id>`（分配端口）
+   * → 等能读 `keyinfo`（就绪）。失败一律返回 null，由调用方出声中止。
+   *
+   * @returns {Promise<object|null>} { key, name, contextCount, reason }；创建失败时 null
    */
-  async function pickRescueCat({ excludeKey = '' } = {}) {
-    const rows = await ch4.cats();
-    const exclude = new Set([String(excludeKey || '')]);
-    if (rescueCatKey) {
-      if (exclude.has(rescueCatKey)) return null;
-      // 固定猫按 **id 或显示名** 匹配——配置里写的是显示名（`nav_rescue`），
-      // 而猫群条目的 `id` 是会话数字 id（2026-10-30 修：只比 id 会恒判「未就绪」）。
-      const hit = rows.find((row) => String(row?.id ?? '') === rescueCatKey
-        || String(row?.name ?? '') === rescueCatKey);
-      if (!hit) return null;
-      const key = String(hit.id ?? rescueCatKey);
-      if (exclude.has(key)) return null;
-      return {
-        key,
-        name: String(hit.name || rescueCatKey),
-        contextCount: Number(hit.contextCount ?? 0),
-        reason: '固定代读猫'
-      };
+  async function createRescueCat() {
+    let name = '';
+    try {
+      const rows = await ch4.cats();
+      const taken = new Set(rows.map((row) => String(row?.name ?? '')));
+      for (let i = 0; i < 50 && !name; i += 1) {
+        rescueCatSeq += 1;
+        const candidate = `${rescueCatPrefix}_${rescueCatSeq}`;
+        if (!taken.has(candidate)) name = candidate;
+      }
+    } catch (error) {
+      record('error', `代读猫：猫群清单读取失败（${error?.message ?? error}）`);
+      return null;
     }
-    const candidates = rows.filter((row) => {
-      const id = String(row?.id ?? '');
-      if (!id || exclude.has(id)) return false;
-      if (row?.runState && String(row.runState) !== 'idle') return false;
-      if (Number(row?.pending ?? 0) > 0) return false;
-      return true;
-    });
-    if (candidates.length === 0) return null;
-    const clean = (row) => Number(row?.contextCount ?? 0);
-    const major = candidates.find((row) => String(row.id) === 'majordomo');
-    if (major) {
-      return { key: 'majordomo', name: String(major.name || 'majordomo'), contextCount: clean(major), reason: 'majordomo 优先' };
+    if (!name) {
+      record('error', `代读猫：前缀 ${rescueCatPrefix} 下 50 个名字都被占用——换个前缀（navigator.rescueCat）`);
+      return null;
     }
-    const best = candidates.slice().sort((a, b) => clean(a) - clean(b))[0];
-    return {
-      key: String(best.id),
-      name: String(best.name || best.id),
-      contextCount: clean(best),
-      reason: `空闲且前文最干净（${clean(best)} 条）`
-    };
+    try {
+      await ch4.command(`cat.new ${name}`, ch4.mainPort);
+    } catch (error) {
+      record('error', `代读猫 ${name}：新建失败（${error?.message ?? error}）`);
+      return null;
+    }
+    let key = '';
+    for (let i = 0; i < 20 && !key; i += 1) {
+      const list = await ch4.cats().catch(() => []);
+      const hit = list.find((row) => String(row?.name ?? '') === name);
+      if (hit?.id) key = String(hit.id);
+      else await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    if (!key) {
+      record('error', `代读猫 ${name}：新建后未出现在猫群清单（10 秒）——不启动，直接放弃`);
+      return null;
+    }
+    try {
+      await ch4.command(`cat.start ${key}`, ch4.mainPort);
+    } catch (error) {
+      record('error', `代读猫 ${name}（${key}）：启动失败（${error?.message ?? error}）——销毁后中止`);
+      await dropRescueCat({ key, name });
+      return null;
+    }
+    let ready = false;
+    for (let i = 0; i < 30 && !ready; i += 1) {
+      try {
+        const info = await ch4.keyinfo(key, 3000);
+        ready = !!info && info.ok !== false;
+      } catch {
+        // 起猫过程中读不到属正常——继续等
+      }
+      if (!ready) await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    if (!ready) record('error', `代读猫 ${name}（${key}）：30 秒未见就绪——仍按当前状态投递`);
+    return { key, name, contextCount: 0, reason: '本次临时新建' };
+  }
+
+  /**
+   * 销毁临时代读猫——先归档再删（CH4 删猫链：`cat.new-session` → 等档落盘 → `cat.delete`）。
+   *
+   * 失败不阻断主流程（报告已取到、材料已落盘），但必须出声——留下的猫要人工删。
+   *
+   * @param {object} rescuer 代读猫（createRescueCat 的返回值）
+   * @returns {Promise<void>} 完成
+   */
+  async function dropRescueCat(rescuer) {
+    const key = String(rescuer?.key || '');
+    if (!key) return;
+    const name = String(rescuer?.name || key);
+    try {
+      await ch4.command(`cat.new-session ${key}`, ch4.mainPort);
+    } catch (error) {
+      record('error', `代读猫 ${name}：销毁前归档请求失败（${error?.message ?? error}）`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    try {
+      await ch4.command(`cat.delete ${key}`, ch4.mainPort);
+      record('reset', `代读猫 ${name}：临时代读猫已销毁`);
+    } catch (error) {
+      record('error', `代读猫 ${name}（${key}）：销毁失败（${error?.message ?? error}）——需人工删`);
+    }
   }
 
   /**
@@ -2342,34 +2389,24 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @returns {Promise<object>} { ok, summary, rescuer, source } 或 { ok:false, error }
    */
   async function rescueSummary({ resolved, name }) {
-    const rescuer = await pickRescueCat({ excludeKey: resolved });
+    // 临时代读猫（Rushiera 2026-11-09）——每次重建新建一只，不复用常驻猫；四个出口各自销毁。
+    const rescuer = await createRescueCat();
     if (!rescuer) {
-      record('error', `${name}：代读失败——${rescueCatKey ? `固定代读猫 ${rescueCatKey} 未就绪（不存在或就是目标猫本身）` : '没有空闲且未参与内容的猫可用'}`);
-      return { ok: false, error: rescueCatKey ? `固定代读猫 ${rescueCatKey} 未就绪` : '没有空闲且未参与内容的猫可用作代读' };
+      record('error', `${name}：代读失败——临时代读猫创建失败（前缀 ${rescueCatPrefix}）`);
+      return { ok: false, error: '临时代读猫创建失败（CH4 猫群不可用或新建被拒）' };
     }
-    record('reset', `${name}：代读猫 = ${rescuer.name}（${rescuer.reason}，前文 ${rescuer.contextCount} 条）`);
-
-    // ⓪ 开工先清代读猫自己的前文（Rushiera 2026-10-30）——上一场抢救的原文已用完；
-    //    它自己这次流程结束后**不清**，等下一次重建前才清（清的是"上一次抢救的内容"）。
-    try {
-      const before = await ch4.keyinfo(rescuer.key, 5);
-      const beforeCount = Number(before?.count ?? 0);
-      await ch4.command(`cat.new-session ${rescuer.key}`, ch4.mainPort);
-      const ready = await waitSessionReady(rescuer.key, { beforeCount });
-      record('reset', `${name}：代读猫 ${rescuer.name} 已开新会话（清上一次抢救内容，清前 ${beforeCount} 条${ready ? '' : '·就绪等待超时，仍按当前状态投递'}）`);
-    } catch (error) {
-      record('error', `${name}：代读猫 ${rescuer.name} 新会话失败（${error?.message ?? error}）`);
-      return { ok: false, error: '代读猫新会话失败' };
-    }
+    record('reset', `${name}：代读猫 = ${rescuer.name}（${rescuer.reason}）`);
     let source;
     try {
       source = await grabCatSource(resolved);
     } catch (error) {
       record('error', `${name}：完整前文抓取失败（${error?.message ?? error}）`);
+      await dropRescueCat(rescuer);
       return { ok: false, error: '完整前文抓取失败' };
     }
     if (!source.text) {
       record('error', `${name}：完整前文为空——无可代读内容`);
+      await dropRescueCat(rescuer);
       return { ok: false, error: '完整前文为空' };
     }
     record('reset', `${name}：完整前文已抓取（${source.count} 条 / ${group(source.chars)} 字符${source.truncated ? '·超限截断' : ''}）→ 投给 ${rescuer.name} 代读`);
@@ -2398,37 +2435,106 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     const summary = await collectReport(rescuer.key, { since: askAt - 2000, name: rescuer.name });
     if (!summary) {
       record('error', `${name}：交接报告未取到（代读猫 ${rescuer.name}），整理中止`);
+      await dropRescueCat(rescuer);
       return { ok: false, error: '交接报告未取到', rescuer };
     }
     record('reset', `${name}：交接报告已取到（${rescuer.name} 代读，${summary.length} 字符）`);
+    await dropRescueCat(rescuer);
     return { ok: true, summary, rescuer, source };
   }
 
+  /** 整理在途表（目标猫 key → { at, chat, from }）——同 key 串行，不同 key 并发。 */
+  const resetPending = new Map();
+
   /**
-   * 前文整理重启——代读（固定猫先清自己的前文）→ 抓原文轨迹（仅落盘）→ 新会话 → 注入交接报告 → 自动继续。
+   * 来源描述——这次整理是谁发起的（记账用，进日志与交接材料）。
+   *
+   * 为什么记（Rushiera 2026-11-09）：2026-11-09 那次双跑，日志只写「前文整理重启开始」，
+   * 完全查不出两次请求来自哪里，根因只能靠排除法。来源落日志后，同类问题一眼可判。
+   *
+   * @param {object} [headers] 请求头（`POST /api/v1/command` 上游透传的 req.headers）
+   * @param {object} [body] 请求体（业务面会带 `source`）
+   * @returns {string} 来源描述
+   */
+  function describeSource(headers = {}, body = {}) {
+    const ua = String(headers?.['user-agent'] ?? '');
+    const referer = String(headers?.referer ?? '');
+    const who = String(body?.source || '')
+      || (/electron/i.test(ua) ? 'panel:electron'
+        : (/node|undici|axios/i.test(ua) ? 'business:fetch'
+          : (ua ? `http:${ua.slice(0, 40)}` : 'http:unknown')));
+    return referer ? `${who} ← ${referer.slice(0, 60)}` : who;
+  }
+
+  /**
+   * 前文整理重启（入口）——**同目标猫串行，不同猫并发**（Rushiera 2026-11-09）。
+   *
+   * 为什么要闸：2026-11-09 11:37 实测两次请求间隔 779 ms 并行进来，各跑一套完整流程——
+   * 两次 `cat.new-session` 把对方刚注入的交接报告清掉，同一只猫收到两份交接材料。闸的判据是
+   * **目标猫**：同一只猫的第二次请求直接回 busy（不重复执行）；不同猫互不阻塞，各建各的代读猫。
+   *
+   * 别名归一：先按原始写法占位，解析到会话 id 后再补登一次——同一只猫用显示名与 id 各叫一次也互斥。
+   *
+   * @param {object} options 选项
+   * @param {string} options.key 目标猫
+   * @param {string|number} [options.chat] 回报群
+   * @param {string} [options.text] 用户原话——新会话就绪后作为第一条指令投递（可选）
+   * @param {boolean} [options.rescue] **已退役**（2026-10-30）——保留接收不报错
+   * @param {string} [options.from] 来源描述（谁发起的这次整理——记账用）
+   * @returns {Promise<object>} 结果；重复请求返回 `{ ok:true, busy:true, hint }`
+   */
+  async function resetSession({ key, chat = null, text = '', rescue = true, from = '' }) {
+    const rawKey = String(key || 'majordomo').trim() || 'majordomo';
+    const running = resetPending.get(rawKey);
+    if (running) {
+      record('reset', `${rawKey}：已在整理中（${running.from || '来源未知'} · ${new Date(running.at).toLocaleTimeString('zh-CN', { hour12: false })} 起）——本次请求忽略`);
+      return { ok: true, busy: true, key: rawKey, since: running.at, hint: '该猫已在整理中，本次请求未重复执行' };
+    }
+    const entry = { at: Date.now(), chat: chat ?? null, from: String(from || '') };
+    resetPending.set(rawKey, entry);
+    let alias = '';
+    try {
+      alias = await ch4.resolveKey(rawKey);
+      if (alias && alias !== rawKey) {
+        const other = resetPending.get(alias);
+        if (other && other !== entry) {
+          record('reset', `${rawKey}：同一只猫（${alias}）已有整理在途——本次请求忽略`);
+          return { ok: true, busy: true, key: alias, since: other.at, hint: '该猫已在整理中（id / 显示名不同写法），本次请求未重复执行' };
+        }
+        resetPending.set(alias, entry);
+      }
+      return await runResetSession({ key: rawKey, chat, text, rescue, from });
+    } finally {
+      resetPending.delete(rawKey);
+      if (alias && alias !== rawKey) resetPending.delete(alias);
+    }
+  }
+
+  /**
+   * 前文整理重启（实体）——代读（**本次临时新建的代读猫**）→ 抓原文轨迹（仅落盘）→ 新会话 → 注入交接报告 → 自动继续。
    *
    * 延续性优先（Rushiera 2026-10-11）：交接材料的主体 = 代读猫产出的**交接报告**，
    * 口径为「接手方能无疑问地继续」；长报告分多次输出、由领航员逐轮收全（Rushiera 2026-10-15）。
-   * 代读口径（Rushiera 2026-10-30）：不再由目标猫自己收工自述，一律交固定代读猫（`navigator.rescueCat`）。
+   * 代读口径（Rushiera 2026-11-09）：每次重建**临时新建一只代读猫**（用完销毁），不复用常驻猫。
    * 原文轨迹另抓一份**只落盘、不注入**——它属「不再提及就不需要」的信息，混进前文只稀释有效信息。
    *
    * @param {object} options 选项
    * @param {string} options.key 目标猫
    * @param {string|number} [options.chat] 回报群
    * @param {string} [options.text] 用户原话——新会话就绪后作为第一条指令投递（可选）
-   * @param {boolean} [options.rescue] **已退役**（2026-10-30）——保留接收不报错；传不传都走固定代读猫
+   * @param {boolean} [options.rescue] **已退役**（2026-10-30）——保留接收不报错
    * @returns {Promise<object>} 结果
    */
-  async function resetSession({ key, chat = null, text = '', rescue = true }) {
+  async function runResetSession({ key, chat = null, text = '', rescue = true, from = '' }) {
     const userText = String(text || '').trim();
     const resolved = await ch4.resolveKey(key);
     const name = await catNameOf(resolved);
     const target = resolveChat(chat);
-    // 会话重建口径（Rushiera 2026-10-30）：不再让目标猫自己收工自述——一律由代读猫
-    // （`navigator.rescueCat`，默认 nav_rescue）先清自己的前文、代读目标猫完整前文、产出交接报告。
-    // 原「抢救模式」参数退役：保留接收不报错，传不传都走同一条路（不再要求用户在群里点名抢救）。
+    // 会话重建口径（Rushiera 2026-11-09 改）：不再让目标猫自己收工自述——每次**临时新建**一只代读猫
+    // （`navigator.rescueCat` 作名前缀，默认 nav_rescue），代读完即销毁；并发重建各建各的，互不抢前文。
+    // 原「抢救模式」参数退役：保留接收不报错，传不传都走同一条路。
     void rescue;
-    record('reset', `${name}：前文整理重启开始——由代读猫 ${rescueCatKey || '（自动挑选）'} 代读`);
+    record('reset', `${name}：前文整理重启开始——本次临时新建代读猫（前缀 ${rescueCatPrefix}）`);
 
     const salvaged = await rescueSummary({ resolved, name });
     if (!salvaged.ok) return { ok: false, error: salvaged.error };
@@ -2451,6 +2557,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     // ①c 交接材料存盘（可事后核对——失败必须可见）
     const material = [
       `# 交接材料 · ${name}（${new Date().toLocaleString('zh-CN', { hour12: false })}）`,
+      '',
+      `来源：${from || '未知'}`,
       '',
       `## 交接报告（${summaryFrom}）`,
       '',
@@ -2962,6 +3070,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       artifacts: artifacts.slice(-20).map((item) => ({ ...item })),
       activity: activity.map((item) => ({ ...item })),
       busy: cats.filter((row) => hasSession(row)).map((row) => row.id),
+      // 整理在途（目标猫 key → 起于何时 / 谁发起）——面板据此把按钮置灰并显示「整理中」，
+      // 不必只靠 HTTP 往返那一瞬（后台整理几分钟，只防连点等于没防）
+      resetting: [...resetPending.entries()].map(([key, item]) => ({ key, at: item.at, from: item.from })),
       cats,
       ingress: ingress.status(),
       persona: persona.snapshot(),
@@ -3187,15 +3298,24 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     'POST /api/nav/new-session': async ({ body }) => ({
       body: await newSession({ keys: body?.keys ?? body?.key ?? [], chat: body?.chat ?? null })
     }),
-    'POST /api/nav/reset': async ({ body }) => {
+    'POST /api/nav/reset': async ({ body, headers }) => {
       const key = body?.key || 'majordomo';
       const text = String(body?.text || '').trim();
       const rescue = body?.rescue === true;
+      // 来源记账（Rushiera 2026-11-09）——下次双跑能一眼判是谁发的，不再靠排除法
+      const from = describeSource(headers, body);
       // 干跑（自测用）——只回显参数，不启动后台执行（避免自测真去投递 / 打扰真猫）
-      if (body?.dryRun === true) return { body: { ok: true, dryRun: true, key, text, rescue } };
-      resetSession({ key, chat: body?.chat ?? null, text, rescue })
+      if (body?.dryRun === true) return { body: { ok: true, dryRun: true, key, text, rescue, from } };
+      // 在途回执（友好口径；权威闸在 resetSession 内——这里只是不把已有任务再报一次「已开始」）
+      const running = resetPending.get(String(key).trim());
+      if (running) {
+        record('reset', `收到整理请求（来源 ${from}）：${key} 已在整理中——忽略本次`);
+        return { body: { ok: true, busy: true, key, since: running.at, from, hint: '该猫已在整理中，本次请求未重复执行' } };
+      }
+      record('reset', `收到整理请求：key=${key} chat=${body?.chat ?? '-'} 来源=${from}${text ? ` 原话 ${text.length} 字符` : ''}`);
+      resetSession({ key, chat: body?.chat ?? null, text, rescue, from })
         .catch((error) => record('error', `整理重启失败（${key}）：${error?.message ?? error}`));
-      return { body: { ok: true, accepted: true, key, text, rescue, hint: rescue ? '抢救模式整理已在后台执行——进度看活动流' : '整理重启已在后台执行——进度看活动流' } };
+      return { body: { ok: true, accepted: true, key, text, rescue, from, hint: '整理重启已在后台执行——进度看活动流' } };
     }
   };
 
@@ -3230,7 +3350,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     state, ch4, watcher, shot,
     health, renderReceipt, apisiteDetail, open, close, send, status, say, sayAt, sayImage, sayRecord,
     armCat, armAll, disarmAll, ensureWatching, resetSession, newSession, waitForReply,
-    pickRescueCat, grabCatSource,
+    createRescueCat, dropRescueCat, grabCatSource,
     scheduleAnalysis, runAnalysis, analyzeOnce, collectThink, thinkText,
     pullCatView, digestFromView, digestFromSession, composeActivity, composeBrief,
     armLightWatch, cancelLightWatch, clearLightWatches, lightWatches,

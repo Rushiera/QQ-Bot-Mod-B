@@ -175,7 +175,7 @@ export function createWebServer({ port, uiDir, api, log }) {
 
     try {
       const body = methodHasBody(req.method) ? await readBody(req) : {};
-      const result = await handler({ query: url.searchParams, body });
+      const result = await handler({ query: url.searchParams, body, headers: req.headers });
       // 二进制资产（产物图 / 音频）——接口层返回 `{ raw: { file } }` 时流式出送
       if (result?.raw?.file) {
         sendFile(res, result.raw.file, result.raw.type);

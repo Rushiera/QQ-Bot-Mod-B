@@ -6,6 +6,7 @@
 // 结果持久化在 config.modelVision["providerId|||model"]，运行时用它门控看图工具。
 import { getConfig, updateConfig } from './config.js';
 import { builtinVisionResults } from './model-vision-docs.js';
+import { selfTagHeaders } from './self-tag.js';
 
 // 1×1 像素 PNG（70 字节），足够让视觉模型"看到点什么"，也不会浪费 token。
 const TINY_PNG =
@@ -15,8 +16,9 @@ function joinUrl(base, path) {
   return `${String(base).replace(/\/+$/, '')}${path}`;
 }
 
-function authHeaders(apiKey, baseUrl = '') {
+function authHeaders(apiKey, baseUrl = '', channel = 'vision') {
   const h = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
+  Object.assign(h, selfTagHeaders(baseUrl, channel));
   // 与 llm.js 一致：OpenCode Go 需要 x-opencode-session 路由头
   if (/opencode\.ai/i.test(String(baseUrl))) {
     h['x-opencode-session'] = `qqagent-vision-${process.pid}`;

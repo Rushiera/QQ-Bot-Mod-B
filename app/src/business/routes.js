@@ -791,7 +791,7 @@ export function createRoutes(deps) {
       handler: async ({ res, json }) => {
         const startedAt = Date.now();
         try {
-          const r = await chatCompletion({ messages: [{ role: 'user', content: '请只回复两个字符：pong' }], tools: null, temperature: 0 });
+          const r = await chatCompletion({ messages: [{ role: 'user', content: '请只回复两个字符：pong' }], tools: null, temperature: 0, channel: 'probe' });
           const reply = typeof r.message.content === 'string' ? r.message.content.slice(0, 100) : '';
           return json(res, 200, { ok: true, model: r.model, reply, latencyMs: Date.now() - startedAt });
         } catch (error) {

@@ -13,6 +13,7 @@ import { vendorOfConfig } from './model-prices.js';
 import { randInt, todayKey } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, buildPastState, resolveContextTier, roleSectionText } from './prompt.js';   // buildPastState：B22 压缩判据
 import { chatCompletion, chatCompletionWithRetry, addUsage, isRetryableError, resolveApiKey, estimateCost } from './llm.js';   // estimateCost：日成本信号
+import { withSelfContext } from './self-tag.js';   // 来源自报语境（chatKey / 会话世代）
 import { buildToolDefs, toOpenAiTools, executeTool } from './tools.js';
 // 猫工具链：浏览器实例回收 + timeback 回卷 —— [qqagent-cattools-patch:orchestrator-import]
 import { browserService } from './cdp-browser.js';
@@ -1342,7 +1343,11 @@ export class Orchestrator {
       // 网络抖动/5xx/429 会自动重试（同一轮请求，messages 不变，幂等不重复发言）。
       // abortSignal：会话级中止时在途请求立即断开 —— isRetryableError 把
       // "中止"判为不可重试，chatCompletionWithRetry 不再打下一发，直接上抛。
-      const response = await chatCompletionWithRetry({ messages, tools: openAiTools, skillContext, signal: abortSignal });
+      // 来源自报语境：chatKey 让本机中转站把这次调用归到具体 QQ 会话；会话世代取自当前会话起点
+      const response = await withSelfContext(
+        { chatKey, sessionStartedAt: getSessionState(chatKey).startedAt, chatKind: kind, chatName },
+        () => chatCompletionWithRetry({ messages, tools: openAiTools, skillContext, signal: abortSignal, channel: 'chat' })
+      );
       session.model = response.model || session.model;
       // 渠道与模型必须同源：fallback 可以配另一个 provider，只更新 model 会把
       // 这次调用记到主渠道名下，导致按渠道拆分的成本报表误导用户。
@@ -1843,17 +1848,18 @@ export class Orchestrator {
     try {
       const api = cfg.api || {};
       const r = summaryModel
-        ? await chatCompletion({
+        ? await withSelfContext({ chatKey, sessionStartedAt: getSessionState(chatKey).startedAt, chatKind: kind, chatName }, () => chatCompletion({
           messages,
           temperature: 0.2,
           maxTokens: summaryMaxTokens,
+          channel: 'summary',
           overrides: {
             ...api,
             apiKey: resolveApiKey(cfg),
             model: summaryModel,
             timeoutMs: Math.max(60000, Number(api.timeoutMs) || 90000)
           }
-        })
+        }))
         : await this.#memoryChat(messages, { maxTokens: summaryMaxTokens });
       const content = String(r && r.message && r.message.content || '').trim();
       if (!content) {
@@ -2813,7 +2819,7 @@ export class Orchestrator {
     const cfg = getConfig();
     const mem = cfg.memory || {};
     if (mem.useChatModel !== false) {
-      return chatCompletion({ messages, temperature: 0.2, maxTokens });
+      return chatCompletion({ messages, temperature: 0.2, maxTokens, channel: 'memory' });
     }    const providers = currentProviders();
     const p = providers.find((x) => x.id === mem.provider);
     if (!p?.baseURL || !p?.apiKey || !mem.model) {
@@ -2823,6 +2829,7 @@ export class Orchestrator {
       messages,
       temperature: 0.2,
       maxTokens,
+      channel: 'memory',
       overrides: { baseUrl: p.baseURL, apiKey: p.apiKey, model: mem.model, timeoutMs: 180000 }
     });
   }

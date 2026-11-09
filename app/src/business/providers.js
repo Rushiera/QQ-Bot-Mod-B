@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 import { getConfig, updateConfig } from './config.js';
+import { selfTagHeaders } from './self-tag.js';
 
 // DSH 未写 baseURL 的提供商，按官方默认端点补全（可在 UI 修改）。
 // 来源：
@@ -193,7 +194,7 @@ export async function fetchModelsFrom(baseUrl, apiKey, timeoutMs = 15000) {
   const base = normalizeBaseUrl(baseUrl);
   if (!base) throw new Error('请先填写 Base URL');
   const res = await fetch(`${base}/models`, {
-    headers: { ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}), ...opencodeHeaders(base) },
+    headers: { ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}), ...opencodeHeaders(base), ...selfTagHeaders(base, 'models') },
     signal: AbortSignal.timeout(timeoutMs)
   });
   if (!res.ok) throw new Error(`获取模型列表失败：HTTP ${res.status}`);
@@ -216,7 +217,8 @@ export async function testModelChat({ baseUrl, apiKey, model }) {
       headers: {
         'content-type': 'application/json',
         ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
-        ...opencodeHeaders(base, model)
+        ...opencodeHeaders(base, model),
+        ...selfTagHeaders(base, 'probe')
       },
       body: JSON.stringify({
         model: String(model).trim(),

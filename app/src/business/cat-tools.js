@@ -363,7 +363,8 @@ export function registerCatTools() {
               { type: 'image_url', image_url: { url: got.dataUrl } }
             ]
           }],
-          temperature: 0.2
+          temperature: 0.2,
+          channel: 'vision'
         });
         const text = String(r?.message?.content ?? '').trim();
         if (!text) return err('视觉模型返回空内容（可能当前模型不支持图片输入——设置页可指定「图片输入专用模型」）');

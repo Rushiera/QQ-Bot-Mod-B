@@ -1,6 +1,7 @@
 // OpenAI 兼容 Chat Completions 客户端（非流式）。
 // 支持工具调用、usage 统计、可自选模型 —— 这是与 DSH 解耦后的"大脑"接口。
 import { getConfig } from './config.js';
+import { selfTagHeaders } from './self-tag.js';
 import { resolveModelPrice, priceAt } from './model-prices.js';
 import { skillManager } from './skills/manager.js';
 import {
@@ -12,22 +13,12 @@ function joinUrl(base, path) {
   return `${String(base).replace(/\/+$/, '')}${path}`;
 }
 
-// 本机中转站（壳）识别用——只对回环地址自报家门，直连外部端点一律不带：
-// 这个头的唯一用途是让本地壳把「哪路客户端」记进来源台账；
-// 一旦透到上游就成了可指认的客户端指纹（Rushiera 口径：出网形态不带这些特征）。
-const QQBOTB_CLIENT_ID = 'qqbotb/1.27';
+// 来源自报（客户端 / 猫身份 / 项目 / 会话 / 通道）统一收在 self-tag.js：
+// 只在回环端点附加，直连外部端点一律不带（出网形态不带客户端指纹）。
 
-/** 端点是否本机回环（127.0.0.1 / localhost / [::1]）——只有这类才自报客户端身份。 */
-function isLoopbackBase(baseUrl) {
-  return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])([:/]|$)/i.test(String(baseUrl || ''));
-}
-
-function authHeaders(apiKey, baseUrl = '', model = '') {
+function authHeaders(apiKey, baseUrl = '', model = '', channel = 'chat') {
   const h = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
-  // 客户端自报（仅回环端点）：壳据此在来源台账里记 tag=qqbotb/…，不必靠 system 头猜
-  if (isLoopbackBase(baseUrl)) {
-    h['x-client-id'] = QQBOTB_CLIENT_ID;
-  }
+  Object.assign(h, selfTagHeaders(baseUrl, channel));
   // OpenCode Go 强制要求会话头做路由（缺了直接 400）。注意不能只认域名：
   // 走中转站转发时 baseUrl 不是 opencode.ai，只能靠模型 id 的 opencode-go/ 前缀识别。
   if (/opencode\.ai/i.test(String(baseUrl)) || /^opencode-go\//i.test(String(model || ''))) {
@@ -279,7 +270,7 @@ export async function chatCompletionWithRetry(args, retries = 2) {
  *    否则会出现"Skill 悄悄多打一次 API"这种既难发现又烧钱的问题。
  *    所以 Skill 只能给函数（改 body / 给建议），重试动作由本函数执行。
  */
-export async function chatCompletion({ messages, tools = null, toolChoice = 'auto', temperature = null, signal = null, overrides = null, skillContext = null, maxTokens = 0 }) {
+export async function chatCompletion({ messages, tools = null, toolChoice = 'auto', temperature = null, signal = null, overrides = null, skillContext = null, maxTokens = 0, channel = 'chat' }) {
   const baseApi = overrides || effectiveApi();
   // 主调用路径才切"图片/视频专用模型"（见 specializedModelFor 注释）
   let api = baseApi;
@@ -386,7 +377,7 @@ export async function chatCompletion({ messages, tools = null, toolChoice = 'aut
   const post = async (body) => {
     const res = await fetch(joinUrl(api.baseUrl, '/chat/completions'), {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...authHeaders(api.apiKey, api.baseUrl, api.model) },
+      headers: { 'content-type': 'application/json', ...authHeaders(api.apiKey, api.baseUrl, api.model, channel) },
       body: JSON.stringify(body),
       signal: controller.signal
     });
@@ -600,7 +591,7 @@ async function withoutRejectedParams(body, errorText, ctx, status = 400) {
 export async function listModels() {
   const cfg = effectiveApi();
   const res = await fetch(joinUrl(cfg.baseUrl, '/models'), {
-    headers: authHeaders(cfg.apiKey, cfg.baseUrl),
+    headers: authHeaders(cfg.apiKey, cfg.baseUrl, '', 'models'),
     signal: AbortSignal.timeout(15000)
   });
   if (!res.ok) throw new Error(`获取模型列表失败：HTTP ${res.status}`);

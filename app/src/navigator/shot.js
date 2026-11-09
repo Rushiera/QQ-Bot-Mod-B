@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { mdToHtml } from './md.js';
+import { selfTagHeaders } from '../business/self-tag.js';
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -240,7 +241,7 @@ ${CARD_CSS}
       const dataUrl = `data:image/png;base64,${fs.readFileSync(pngPath).toString('base64')}`;
       const response = await fetch(`${vision.baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${vision.apiKey}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${vision.apiKey}`, ...selfTagHeaders(vision.baseUrl, 'vision') },
         body: JSON.stringify({
           model: vision.model,
           max_tokens: 500,
@@ -292,7 +293,7 @@ ${CARD_CSS}
     try {
       const response = await fetch(`${vision.baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${vision.apiKey}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${vision.apiKey}`, ...selfTagHeaders(vision.baseUrl, 'summary') },
         body: JSON.stringify({
           model,
           max_tokens: maxTokens,

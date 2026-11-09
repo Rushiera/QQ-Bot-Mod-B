@@ -45,9 +45,6 @@ function switchView(name) {
     const frame = $('#webui-frame');
     if (!webuiLoaded || !frame?.getAttribute('src')) loadWebui();
   }
-  if (name === 'nav') {
-    refreshNav();
-  }
 }
 
 /**
@@ -249,53 +246,8 @@ async function loadConfig() {
   } catch { /* 配置拉取失败不阻塞界面 */ }
 }
 
-/**
- * 刷新领航员面板（会话态 + 猫群 + 健康检查 + 指令流水）。
- *
- * @returns {Promise<void>} 完成
- */
-async function refreshNav() {
-  const status = await api('/api/nav/status').catch(() => null);
-  if (status) {
-    const toggle = $('#btn-nav-toggle');
-    const on = status.enabled === true;
-    toggle.textContent = on ? '关闭领航员' : '开启领航员';
-    toggle.dataset.on = on ? '1' : '0';
-    $('#nav-hint').textContent = on
-      ? `已开启（${status.openedBy === 'qq' ? '群内 @' : '应用内'}）`
-      : (status.closedReason === 'idle' ? '已暂关（空闲）' : '未开启');
-    $('#nav-chat').textContent = status.activeChat ?? '-';
-    $('#nav-target').textContent = status.lastTarget || '-';
-    $('#nav-last').textContent = status.lastCommandAt
-      ? new Date(status.lastCommandAt).toLocaleString('zh-CN', { hour12: false })
-      : '-';
-    $('#nav-idle').textContent = status.idleMs
-      ? `${Math.round(status.idleMs / 60000)} 分钟 / 阈值 ${Math.round((status.idleCloseMs || 0) / 60000)} 分钟`
-      : '-';
-    $('#nav-by').textContent = status.openedBy || '-';
-    const rows = (status.cats || []).map((c) => `${c.runState === 'idle' ? '·' : '▶'} ${c.name}（${c.port}）${c.runState}`);
-    $('#nav-cats').textContent = rows.length
-      ? rows.join('\n')
-      : (status.ch4Error ? `CH4 未连接：${status.ch4Error}` : '（无猫）');
-    const flow = (status.commandLog || []).slice().reverse().map((e) => {
-      const time = new Date(e.at).toLocaleTimeString('zh-CN', { hour12: false });
-      return `[${time}] [群 ${e.chat || '-'}] → ${e.target || '-'}：${e.text}（${e.result}）`;
-    });
-    $('#nav-log').textContent = flow.length ? flow.join('\n') : '（暂无指令）';
-    const acts = (status.activity || []).slice().reverse().map((a) => {
-      const time = new Date(a.at).toLocaleTimeString('zh-CN', { hour12: false });
-      return `[${time}] ${a.kind}｜${a.text}`;
-    });
-    $('#nav-activity').textContent = acts.length ? acts.join('\n') : '（暂无活动）';
-  }
-  const health = await api('/api/nav/health').catch(() => null);
-  if (health) {
-    const lines = [`应用指令层 ${health.app?.ok ? '--OK' : '--异常'}`];
-    for (const svc of health.services || []) lines.push(`${svc.name}   ${svc.detail}`);
-    lines.push(health.ch4?.ok ? 'Mau链接状态 --OK' : `Mau链接状态 --异常（${health.ch4?.error || '未连接'}）`);
-    $('#nav-health').textContent = lines.join('\n');
-  }
-}
+// 领航员页（`#view-nav`）2026-11-09 起由 `views/navigator.js` 整页接管——
+// 本文件不再持有该页的 DOM 引用与刷新逻辑（见 `_shell.js` 的 MANAGED）。
 
 /**
  * 绑定界面事件。
@@ -307,19 +259,7 @@ function bindEvents() {
     tab.addEventListener('click', () => switchView(tab.dataset.view));
   }
 
-  $('#btn-nav-toggle').addEventListener('click', async (event) => {
-    const button = event.currentTarget;
-    const on = button.dataset.on === '1';
-    button.disabled = true;
-    button.textContent = on ? '关闭中…' : '开启中…';
-    try {
-      await api(on ? '/api/nav/close' : '/api/nav/open', { method: 'POST', body: { by: 'app' } });
-    } catch { /* 结果由刷新反映 */ }
-    button.disabled = false;
-    await refreshNav();
-  });
-
-  $('#btn-nav-refresh').addEventListener('click', () => refreshNav());
+  // 领航员页的开关与刷新按钮已随页面归 `views/navigator.js`——本文件不再绑定。
 
   $('#btn-napcat-toggle').addEventListener('click', async (event) => {
     const button = event.currentTarget;
@@ -393,14 +333,9 @@ function bindEvents() {
 
 bindEvents();
 refreshStatus();
-refreshNav();
 loadLogs();
 loadConfig();
 refreshLogin();
 subscribeEvents();
 setInterval(refreshStatus, 3000);
 setInterval(refreshLogin, 15000);
-setInterval(() => {
-  const view = document.getElementById('view-nav');
-  if (view && view.classList.contains('active')) refreshNav();
-}, 30000);

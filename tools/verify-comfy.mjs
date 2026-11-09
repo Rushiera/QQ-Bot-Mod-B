@@ -79,7 +79,10 @@ function makeNav(conf, cacheFile = '') {
   const nav = createNavigator({
     log,
     dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-comfy-')),
-    config: { navigator: { mainPort: 8080, vipUser: VIP, services: [], comfy: conf } },
+    // 🔴 `ingress.viaHub: false`——自测环境没有分发中心，必须让领航员自订阅 OneBot 事件，
+    // 否则 `fire()` 灌的 VIP 消息没人接（R3-4 改 hub 扇出后本自测一度全绿但实际测不到闸门，
+    // 2026-11-09 修：判据见 log §一百二十一）。
+    config: { navigator: { mainPort: 8080, vipUser: VIP, services: [], comfy: conf, ingress: { viaHub: false } } },
     onebot
   });
   /** 灌一条 VIP 群消息（模拟真人在群里 @ 本 bot）。 */

@@ -381,6 +381,7 @@ function sleep(ms) {
  * @param {Function} options.sendRecord 发语音函数 (chat, file, caption) => Promise
  * @param {Function} options.record 活动流记录 (kind, text) => void
  * @param {Function} options.translate 翻译函数 (text, target, options) => Promise<string>
+ * @param {Function} [options.onArtifact] 产物登记回调（面板产物区用）(entry) => void
  * @returns {object} 服务接口（mossDraw / ttsSpeak / wdTag / online / isBusy）
  */
 export function createMediaService({
@@ -393,7 +394,8 @@ export function createMediaService({
   sendRecord,
   record,
   translate,
-  jpPronounsOf
+  jpPronounsOf,
+  onArtifact = null
 }) {
   const endpoint = String(conf.endpoint || '').replace(/\/+$/, '');
   const mossConf = conf.moss ?? {};
@@ -656,9 +658,10 @@ export function createMediaService({
    * @param {string} options.prompt 提示词（中文自动翻英文）
    * @param {string} [options.size] 尺寸（如 1024x1024）
    * @param {string|number} [options.seed] 种子
+   * @param {boolean} [options.deliver] 是否发群（默认 true；false = 面板口径——只出图登记）
    * @returns {Promise<object>} { ok, prompt?, message?, error? }
    */
-  async function mossDraw({ chat, prompt, size = '', seed = null }) {
+  async function mossDraw({ chat, prompt, size = '', seed = null, deliver = true }) {
     if (mossBusy) return { ok: false, error: '已有一张图在跑——等它出图再提交下一张' };
     if (!String(prompt ?? '').trim()) return { ok: false, error: '提示词是空的——生图要一句画面描述' };
     mossBusy = true;
@@ -702,7 +705,7 @@ export function createMediaService({
       if (gen?.ok !== true) return { ok: false, error: `MOSS 未受理：${gen?.message ?? '未知原因'}` };
       accepted = true;
       record('moss', `生图已提交：${english.slice(0, 60)}`);
-      waitMoss({ chat, prompt: english }).catch((error) => record('error', `生图收尾异常：${error?.message ?? error}`));
+      waitMoss({ chat, prompt: english, deliver }).catch((error) => record('error', `生图收尾异常：${error?.message ?? error}`));
       return { ok: true, prompt: english, message: gen.message };
     } finally {
       // 提交失败时立刻释放；成功时由 waitMoss 释放
@@ -714,13 +717,16 @@ export function createMediaService({
    * 轮询 MOSS 任务到收口——出图发群 / 失败发原因 / 超时出声。
    *
    * @param {object} options 选项
-   * @param {string|number} options.chat 回报群
+   * @param {string|number} options.chat 回报群（`deliver=false` 时可为空）
    * @param {string} options.prompt 英文提示词（进回执标题）
+   * @param {boolean} [options.deliver] 是否发群（默认 true；false = 面板口径——只落本地并登记产物）
    * @returns {Promise<void>} 完成
    */
-  async function waitMoss({ chat, prompt }) {
+  async function waitMoss({ chat, prompt, deliver = true }) {
     const deadline = Date.now() + mossWaitMs;
     const stamp = Date.now();
+    // 面板口径（2026-11-09）：deliver=false 时不发群——chat 可能为空
+    const canSend = deliver === true && Boolean(chat);
     try {
       while (Date.now() < deadline) {
         await sleep(mossPollMs);
@@ -735,7 +741,7 @@ export function createMediaService({
         if (job.state === 'done') {
           const names = Array.isArray(job.images) ? job.images : [];
           if (!names.length) {
-            await sendText(chat, '生图完成了，但产物清单为空——去 ComfyDock 面板看落点。');
+            if (canSend) await sendText(chat, '生图完成了，但产物清单为空——去 ComfyDock 面板看落点。');
             record('error', '生图完成但产物清单为空');
             return;
           }
@@ -751,6 +757,13 @@ export function createMediaService({
             const caption = names.length > 1
               ? `画好了 · ${i + 1}/${names.length} · ${prompt.slice(0, 50)}`
               : `画好了 · ${prompt.slice(0, 80)}`;
+            if (typeof onArtifact === 'function') {
+              onArtifact({ kind: 'image', file, caption, source: 'moss' });
+            }
+            if (!canSend) {
+              record('moss', `生图已出（未发群）：${path.basename(file)}`);
+              continue;
+            }
             const sent = await sendImage(chat, file, caption);
             record(sent.ok ? 'moss' : 'error', sent.ok
               ? `生图已发群（${path.basename(file)}）`
@@ -760,17 +773,17 @@ export function createMediaService({
         }
         if (job.state === 'error') {
           const reason = String(job.message || '未知原因');
-          await sendText(chat, `生图失败：${reason}`);
+          if (canSend) await sendText(chat, `生图失败：${reason}`);
           record('error', `生图失败：${reason}`);
           return;
         }
         if (job.state === 'idle') {
-          await sendText(chat, '生图被中断（ComfyDock 侧已停）——要重画就再发一次。');
+          if (canSend) await sendText(chat, '生图被中断（ComfyDock 侧已停）——要重画就再发一次。');
           record('error', '生图被中断（ComfyDock 侧已停）');
           return;
         }
       }
-      await sendText(chat, '生图超时未收口——去 ComfyDock 面板看任务状态。');
+      if (canSend) await sendText(chat, '生图超时未收口——去 ComfyDock 面板看任务状态。');
       record('error', `生图轮询超时（${Math.round(mossWaitMs / 60000)} 分钟）`);
     } finally {
       mossBusy = false;
@@ -792,9 +805,10 @@ export function createMediaService({
    * @param {boolean} [options.queue] 排队口径（群语音伴随）——忙时不回绝，入队串行念完
    * @param {boolean} [options.wait] 结果回传口径（2026-11-08 · 语音先行）——等这一句**真发到群**才返回，
    *   回执带 `sent`（音频到群=true）；业务面靠它把「先语音后文字」的次序做实。仅与 queue 同用
+   * @param {boolean} [options.deliver] 是否发群（默认 true；false = 面板口径——合成完只登记音频文件）
    * @returns {Promise<object>} { ok, text?, message?, error?, queued?, waited?, sent? }
    */
-  async function ttsSpeak({ chat, text, caption = '', auto = false, runMode = '', queue = false, wait = false, pronouns = null, japanese = '' }) {
+  async function ttsSpeak({ chat, text, caption = '', auto = false, runMode = '', queue = false, wait = false, pronouns = null, japanese = '', deliver = true }) {
     if (!String(text ?? '').trim()) return { ok: false, error: '文本是空的——语音要一句台词' };
     // 档位默认（Rushiera 2026-10-25）：**手工念**（群里点名 / 界面按钮）用 Large int8——音质优先；
     // **群语音伴随**（每句发言都念一遍）用 small——省时省显存。显式 runMode 优先于本默认。
@@ -805,7 +819,7 @@ export function createMediaService({
       // 结果回传（2026-11-08 · 语音先行）：`wait=true` 的入队项带一个 done 承诺——drain 把它念完
       // （音频真发到群 / 或失败）时兑现；业务面靠它决定那句文字什么时候发。不带 wait 的调用
       // 行为一字不变（入队即回执）。
-      const job = { chat, text, caption, auto, runMode: mode, pronouns, japanese };
+      const job = { chat, text, caption, auto, runMode: mode, pronouns, japanese, deliver };
       if (wait) job.done = new Promise((resolve) => { job.settle = resolve; });
       ttsQueue.push(job);
       // 积压上限：留最近 12 句（旧的丢，出声）——语音是伴随产物，宁可漏念也不越念越旧
@@ -831,7 +845,7 @@ export function createMediaService({
       };
     }
     if (ttsBusy) return { ok: false, error: '上一句还在跑——先等它出来，或等它自然结束' };
-    return runTtsJob({ chat, text, caption, auto, runMode: mode, awaitDone: false, pronouns, japanese });
+    return runTtsJob({ chat, text, caption, auto, runMode: mode, awaitDone: false, pronouns, japanese, deliver });
   }
 
   /**
@@ -847,7 +861,7 @@ export function createMediaService({
    * @param {boolean} [options.awaitDone] 等收口（排队口径用——念完才轮到下一句）
    * @returns {Promise<object>} { ok, text?, message?, error? }
    */
-  async function runTtsJob({ chat, text, caption = '', auto = false, runMode = '', awaitDone = false, pronouns = null, japanese = '' }) {
+  async function runTtsJob({ chat, text, caption = '', auto = false, runMode = '', awaitDone = false, pronouns = null, japanese = '', deliver = true }) {
     ttsBusy = true;
     let accepted = false;
     try {
@@ -924,7 +938,7 @@ export function createMediaService({
       // 结果回传（2026-11-08）：排队口径把 waitTts 的收口结果带出来——`sent` 才是
       // 「音频真发到群」的判据，`ok` 只代表合成受理。
       if (awaitDone) {
-        const settled = await waitTts({ chat, source: String(text ?? '').trim(), auto });
+        const settled = await waitTts({ chat, source: String(text ?? '').trim(), auto, deliver });
         return {
           ok: true,
           text: japanese,
@@ -933,7 +947,7 @@ export function createMediaService({
           error: settled?.ok === true ? undefined : String(settled?.error ?? '未知原因')
         };
       }
-      waitTts({ chat, source: String(text ?? '').trim(), auto }).catch((error) => record('error', `语音收尾异常：${error?.message ?? error}`));
+      waitTts({ chat, source: String(text ?? '').trim(), auto, deliver }).catch((error) => record('error', `语音收尾异常：${error?.message ?? error}`));
       return { ok: true, text: japanese, message: gen.message };
     } finally {
       if (!accepted) ttsBusy = false;
@@ -947,10 +961,13 @@ export function createMediaService({
    * @param {string|number} options.chat 回报群
    * @param {string} options.source 用户原话（进回执标题）
    * @param {boolean} [options.auto] 伴随模式——文字已发过，只发音频
+   * @param {boolean} [options.deliver] 是否发群（默认 true；false = 面板口径——只落盘登记音频）
    * @returns {Promise<{ok:boolean, error?:string, file?:string}>} 收口结果（ok=true 才代表音频真发到了群）
    */
-  async function waitTts({ chat, source, auto = false }) {
+  async function waitTts({ chat, source, auto = false, deliver = true }) {
     const deadline = Date.now() + ttsWaitMs;
+    // 面板口径（2026-11-09）：deliver=false 时不发群——chat 可能为空
+    const canSend = deliver === true && Boolean(chat);
     try {
       while (Date.now() < deadline) {
         await sleep(ttsPollMs);
@@ -965,7 +982,7 @@ export function createMediaService({
         if (job.state === 'done') {
           const name = String(job.file || '');
           if (!name) {
-            await sendText(chat, '语音合成完成了，但产物文件名为空——去 ComfyDock 面板看落点。');
+            if (canSend) await sendText(chat, '语音合成完成了，但产物文件名为空——去 ComfyDock 面板看落点。');
             record('error', '语音完成但产物文件名为空');
             return { ok: false, error: '产物文件名为空' };
           }
@@ -973,9 +990,16 @@ export function createMediaService({
           try {
             await download(`/api/tts/audio?name=${encodeURIComponent(name)}`, file);
           } catch (error) {
-            await sendText(chat, `语音产物下载失败：${error?.message ?? error}`);
+            if (canSend) await sendText(chat, `语音产物下载失败：${error?.message ?? error}`);
             record('error', `语音产物下载失败：${error?.message ?? error}`);
             return { ok: false, error: `产物下载失败：${error?.message ?? error}` };
+          }
+          if (typeof onArtifact === 'function') {
+            onArtifact({ kind: 'audio', file, caption: `语音 · ${String(source || '').slice(0, 40)}`, source: 'tts' });
+          }
+          if (!canSend) {
+            record('tts', `语音已合成（未发群）：${path.basename(file)}`);
+            return { ok: true, file: path.basename(file), delivered: false };
           }
           // 语音配文（Rushiera 2026-10-19 定）：语音发回前先把「说话内容」原文发一条文字——两条一起到。
           // 判例：17:52「念一下你是谁」只发了语音、文字一条没有（session mvf2sfsh · sent=[]）。
@@ -993,17 +1017,17 @@ export function createMediaService({
         }
         if (job.state === 'error') {
           const reason = String(job.message || '未知原因');
-          await sendText(chat, `语音合成失败：${reason}`);
+          if (canSend) await sendText(chat, `语音合成失败：${reason}`);
           record('error', `语音合成失败：${reason}`);
           return { ok: false, error: reason };
         }
         if (job.state === 'idle') {
-          await sendText(chat, '语音合成被中断（ComfyDock 侧已停）——要重来就再发一次。');
+          if (canSend) await sendText(chat, '语音合成被中断（ComfyDock 侧已停）——要重来就再发一次。');
           record('error', '语音合成被中断（ComfyDock 侧已停）');
           return { ok: false, error: '合成被中断（ComfyDock 侧已停）' };
         }
       }
-      await sendText(chat, '语音合成超时未收口——去 ComfyDock 面板看任务状态。');
+      if (canSend) await sendText(chat, '语音合成超时未收口——去 ComfyDock 面板看任务状态。');
       record('error', `语音轮询超时（${Math.round(ttsWaitMs / 60000)} 分钟）`);
       return { ok: false, error: `轮询超时（${Math.round(ttsWaitMs / 60000)} 分钟）` };
     } finally {
@@ -1019,9 +1043,10 @@ export function createMediaService({
    * @param {string} [options.image] 本地图片路径
    * @param {string} [options.file] OneBot 消息段的 file 名
    * @param {string} [options.url] 图片直链
+   * @param {boolean} [options.deliver] 是否发群（默认 true；false = 面板口径——标签只登记到产物区）
    * @returns {Promise<object>} { ok, image?, message?, error? }
    */
-  async function wdTag({ chat, image = '', file = '', url = '' }) {
+  async function wdTag({ chat, image = '', file = '', url = '', deliver = true }) {
     if (taggerBusy) return { ok: false, error: '上一张还在打标——先等它出来' };
     if (!String(image || file || url || '').trim()) return { ok: false, error: '没有拿到图片——消息里没有图，也没有给路径' };
     taggerBusy = true;
@@ -1053,7 +1078,7 @@ export function createMediaService({
       if (gen?.ok !== true) return { ok: false, error: `Tagger 未受理：${gen?.message ?? '未知原因'}` };
       accepted = true;
       record('tagger', `反推已提交：${path.basename(local)}`);
-      waitTagger({ chat, file: local }).catch((error) => record('error', `反推收尾异常：${error?.message ?? error}`));
+      waitTagger({ chat, file: local, deliver }).catch((error) => record('error', `反推收尾异常：${error?.message ?? error}`));
       return { ok: true, image: local, message: gen.message };
     } finally {
       if (!accepted) taggerBusy = false;
@@ -1064,12 +1089,15 @@ export function createMediaService({
    * 轮询 Tagger 任务到收口——标签文本发群 / 失败发原因 / 超时出声。
    *
    * @param {object} options 选项
-   * @param {string|number} options.chat 回报群
+   * @param {string|number} options.chat 回报群（`deliver=false` 时可为空）
    * @param {string} options.file 图片路径（进回执标题）
+   * @param {boolean} [options.deliver] 是否发群（默认 true；false = 面板口径——标签只登记产物区）
    * @returns {Promise<void>} 完成
    */
-  async function waitTagger({ chat, file }) {
+  async function waitTagger({ chat, file, deliver = true }) {
     const deadline = Date.now() + taggerWaitMs;
+    // 面板口径（2026-11-09）：deliver=false 时不发群——chat 可能为空
+    const canSend = deliver === true && Boolean(chat);
     try {
       while (Date.now() < deadline) {
         await sleep(taggerPollMs);
@@ -1084,7 +1112,7 @@ export function createMediaService({
         if (job.state === 'done') {
           const item = (Array.isArray(job.items) ? job.items : [])[0] ?? null;
           if (!item) {
-            await sendText(chat, '反推完成了，但结果清单为空——去 ComfyDock 面板看落点。');
+            if (canSend) await sendText(chat, '反推完成了，但结果清单为空——去 ComfyDock 面板看落点。');
             record('error', '反推完成但结果清单为空');
             return;
           }
@@ -1097,23 +1125,30 @@ export function createMediaService({
           if (chars.length) lines.push(`角色标签：${chars.join(', ')}`);
           let text = lines.join('\n');
           if (text.length > 3500) text = `${text.slice(0, 3500)}…`;
+          if (typeof onArtifact === 'function') {
+            onArtifact({ kind: 'text', text, caption: `反推提示词 · ${path.basename(file)}`, source: 'tagger' });
+          }
+          if (!canSend) {
+            record('tagger', `反推结果已出（未发群）：${path.basename(file)}`);
+            return;
+          }
           await sendText(chat, text);
           record('tagger', `反推结果已发群（${path.basename(file)}）`);
           return;
         }
         if (job.state === 'error') {
           const reason = String(job.message || '未知原因');
-          await sendText(chat, `反推失败：${reason}`);
+          if (canSend) await sendText(chat, `反推失败：${reason}`);
           record('error', `反推失败：${reason}`);
           return;
         }
         if (job.state === 'idle') {
-          await sendText(chat, '反推被中断（ComfyDock 侧已停）——要重来就再发一次。');
+          if (canSend) await sendText(chat, '反推被中断（ComfyDock 侧已停）——要重来就再发一次。');
           record('error', '反推被中断（ComfyDock 侧已停）');
           return;
         }
       }
-      await sendText(chat, '反推超时未收口——去 ComfyDock 面板看任务状态。');
+      if (canSend) await sendText(chat, '反推超时未收口——去 ComfyDock 面板看任务状态。');
       record('error', `反推轮询超时（${Math.round(taggerWaitMs / 60000)} 分钟）`);
     } finally {
       taggerBusy = false;

@@ -40,7 +40,7 @@ const UI = path.join(ROOT, 'app', 'ui');
 const VIEWS = path.join(UI, 'views');
 const JSON_OUT = process.argv.includes('--json');
 
-/** 在盘八件（七块 + 外壳；`settings-sections.js` 属 L8 同线，不是独立视图块）。 */
+/** 在盘九件（八块 + 外壳；`settings-sections.js` 属 L8 同线，不是独立视图块）。 */
 const BLOCKS = [
   '_shell.js',
   'sessions.js',
@@ -49,25 +49,27 @@ const BLOCKS = [
   'usage.js',
   'skills.js',
   'settings.js',
-  'settings-sections.js'
+  'settings-sections.js',
+  'navigator.js'
 ];
 
 /** 已退役块——断言「不存在」（Rushiera 硬约束：不得重建）。 */
 const RETIRED_BLOCKS = ['plugins.js'];
 
-/** 六个视图块（`<script>` 里除外壳与分节库之外的六件）。 */
-const VIEW_BLOCKS = ['sessions', 'chats', 'memory', 'usage', 'skills', 'settings'];
+/** 七个视图块（`<script>` 里除外壳与分节库之外的七件）。 */
+const VIEW_BLOCKS = ['sessions', 'chats', 'memory', 'usage', 'skills', 'settings', 'navigator'];
 
 /** `window.__ui` 契约成员（`_index.md` §3.1，11 个，一个不能少）。 */
 const UI_MEMBERS = ['api', '$', '$$', 'el', 'esc', 'fmtTime', 'fmtNum', 'fmtBytes', 'empty', 'fail', 'registerView'];
 
 /**
  * index.html 期望值（口径见 `log §九十二` + 2026-11-02 页签合并：
- * 原 13 页签 − 插件页 − 群名单页签 = 11 → 本次「日志」并入概览、「本地设置」
- * 并入业务设置 = 9；9 视图脚本不变；含 app.js 共 9 个 script）。
+ * 原 13 页签 − 插件页 − 群名单页签 = 11 → 「日志」并入概览、「本地设置」
+ * 并入业务设置 = 9 页签；2026-11-09 领航员页改由 `views/navigator.js` 接管
+ * （原手写 HTML 段清空）→ 视图脚本 9 个，含 app.js 共 10 个 script）。
  * 🔴 改界面结构时同步本值——三条断言就是页面结构的守门。
  */
-const EXPECT = { tabs: 9, viewScripts: 8, scripts: 9 };
+const EXPECT = { tabs: 9, viewScripts: 9, scripts: 10 };
 
 const GROUPS = {
   files: '① 文件在盘',

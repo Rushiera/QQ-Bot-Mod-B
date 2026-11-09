@@ -24,11 +24,19 @@
   /** 视图块缺失时的占位文案——「未安装」与「暂无数据」是两件事，不混用。 */
   const NOT_INSTALLED = '此页未安装（视图块缺失）';
 
-  /** 外壳接管导航的页签名——与 index.html 的 `.tab[data-view]` 一一对应；其余既有页签归 app.js。 */
-  const MANAGED = ['sessions', 'chats', 'memory', 'usage', 'skills', 'bizsettings'];
+  /**
+   * 外壳接管导航的页签名——与 index.html 的 `.tab[data-view]` 一一对应；其余既有页签归 app.js。
+   *
+   * `nav`（领航员）2026-11-09 由手写 HTML + app.js 改为本机制接管——整页操作台归
+   * `views/navigator.js`，app.js 不再持有该页任何 DOM 引用。
+   */
+  const MANAGED = ['sessions', 'chats', 'memory', 'usage', 'skills', 'bizsettings', 'nav'];
 
-  /** 页签名 → 视图块全局名（`bizsettings` 页签挂的块叫 `settings`，见 `_index.md` §3.1）。 */
-  const VIEW_KEY = { bizsettings: 'settings' };
+  /**
+   * 页签名 → 视图块全局名（`bizsettings` 页签挂的块叫 `settings`，`nav` 页签挂 `navigator`；
+   * 见 `_index.md` §3.1）。
+   */
+  const VIEW_KEY = { bizsettings: 'settings', nav: 'navigator' };
 
   /** 视图登记表：name → { title, mount, refresh }。块自注册，外壳只读。 */
   const views = (window.__views = window.__views || {});

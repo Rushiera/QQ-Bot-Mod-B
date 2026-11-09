@@ -16,6 +16,13 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.wav': 'audio/wav',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
   '.ico': 'image/x-icon'
 };
 
@@ -101,6 +108,28 @@ export function createWebServer({ port, uiDir, api, log }) {
   }
 
   /**
+   * 出送本地文件（产物资产：截图 / 生成图片 / 音频）。
+   *
+   * 能取哪些路径由接口层判定（领航员 `assetAllowed`）——本函数只负责把文件流出去，
+   * 不做路径校验，避免两处白名单漂移。
+   *
+   * @param {object} res 响应对象
+   * @param {string} file 绝对路径
+   * @param {string} [type] MIME（缺省按扩展名）
+   * @returns {void}
+   */
+  function sendFile(res, file, type) {
+    const contentType = type || MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+    try {
+      const stat = fs.statSync(file);
+      res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': stat.size, 'Cache-Control': 'no-cache' });
+      fs.createReadStream(file).pipe(res);
+    } catch (error) {
+      sendJson(res, 404, { ok: false, error: `文件不可读：${error?.message ?? error}` });
+    }
+  }
+
+  /**
    * 处理请求。
    *
    * @param {object} req 请求对象
@@ -147,6 +176,11 @@ export function createWebServer({ port, uiDir, api, log }) {
     try {
       const body = methodHasBody(req.method) ? await readBody(req) : {};
       const result = await handler({ query: url.searchParams, body });
+      // 二进制资产（产物图 / 音频）——接口层返回 `{ raw: { file } }` 时流式出送
+      if (result?.raw?.file) {
+        sendFile(res, result.raw.file, result.raw.type);
+        return;
+      }
       sendJson(res, result?.status ?? 200, result?.body ?? result ?? { ok: true });
     } catch (error) {
       log.error('web', `接口 ${key} 异常：${error?.message ?? error}`);

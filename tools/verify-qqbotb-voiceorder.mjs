@@ -91,11 +91,11 @@ ok('5c drain 兑现 settle（sent 判据）', /job\?\.settle\?\.\(\{ sent: resul
 ok('5d 被丢弃的排队项也回执', /dropped\?\.settle\?\.\(\{ sent: false/.test(media));
 ok('5e wait 口径返回 waited / sent', /waited: true,\s*\n\s*sent: arrived,/.test(media));
 ok('5f waitTts 回 ok（音频真发到群）', /return \{ ok: sent\.ok === true/.test(media));
-ok('5g 排队口径把收口结果带出 runTtsJob', /const settled = await waitTts\(\{ chat, source: String\(text \?\? ''\)\.trim\(\), auto \}\);/.test(media));
+ok('5g 排队口径把收口结果带出 runTtsJob', /const settled = await waitTts\(\{ chat, source: String\(text \?\? ''\)\.trim\(\), auto, deliver \}\);/.test(media));
 
 // ── 6 路由透传 ──────────────────────────────────────────────────────────────
 ok('6a 路由把 wait 传给 ttsSpeak', /wait: body\?\.wait === true,/.test(navIndex));
-ok('6b 包装层透传 wait', /media\.ttsSpeak\(\{ chat: gate\.chat, text, caption, auto, runMode, queue, wait, pronouns \}\)/.test(navIndex));
+ok('6b 包装层透传 wait', /media\.ttsSpeak\(\{ chat: gate\.chat, text, caption, auto, runMode, queue, wait, pronouns, deliver \}\)/.test(navIndex));
 
 // ── 7 语音源（甲案 · 日语先行 · 2026-11-08）────────────────────────────────
 // 模型给的日语原句（send_message 的 jp）经 sender → voice-reply → 路由 → 单体，

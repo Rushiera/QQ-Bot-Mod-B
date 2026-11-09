@@ -248,7 +248,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     onebot,
     sendImage: (chat, file, caption) => sayImage(chat, file, caption),
     sendText: (chat, text) => say(chat, text),
-    record
+    record,
+    onArtifact: (entry) => noteArtifact({ ...entry, source: entry?.source || 'comfy' })
   });
   // 群内生成能力（design-qqbotb-navigator.md §二十）——MOSS 生图 / IrodoriTTS 语音 / WD Tagger 反推提示词
   const mediaConf = navConfig.media ?? {};
@@ -323,7 +324,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     sendRecord: (chat, file, caption) => sayRecord(chat, file, caption),
     record,
     translate: translateForMedia,
-    jpPronounsOf: jpPronounsForChat
+    jpPronounsOf: jpPronounsForChat,
+    onArtifact: noteArtifact
   });
   let watchTimer = null;
   let ticking = false;
@@ -443,6 +445,61 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     activity.push({ at: Date.now(), kind, text: line });
     if (activity.length > 40) activity.splice(0, activity.length - 40);
     log.info('navigator', `[${kind}] ${line}`);
+  }
+
+  /** 面板产物区（2026-11-09）——生成类产出登记在此，界面据此显示图片 / 音频 / 标签文本。 */
+  const artifacts = [];
+
+  /**
+   * 登记一条产物（面板产物区）。
+   *
+   * 群内触发的产物同样登记——页面是「所有交互的第二个看台」，不因产物已发群而不显示
+   * （Rushiera 2026-11-09：「所有回复和交互在领航员页面也实现一份」）。
+   *
+   * @param {object} entry 产物描述 `{ kind, file?, text?, caption?, source? }`
+   * @returns {void}
+   */
+  function noteArtifact(entry) {
+    if (!entry || typeof entry !== 'object') return;
+    const kind = String(entry.kind ?? '').trim() || 'file';
+    const file = entry.file ? String(entry.file) : '';
+    const text = entry.text ? String(entry.text) : '';
+    if (!file && !text) return;
+    artifacts.push({
+      id: `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      at: Date.now(),
+      kind,
+      file,
+      text,
+      caption: String(entry.caption ?? ''),
+      source: String(entry.source ?? '')
+    });
+    if (artifacts.length > 60) artifacts.splice(0, artifacts.length - 60);
+    record(kind === 'audio' ? 'tts' : 'shot', `产物就绪：${entry.caption || (file ? path.basename(file) : kind)}`);
+  }
+
+  /**
+   * 产物文件是否可出送（面板显示图 / 音频用）。
+   *
+   * 白名单两源：① 本应用数据目录下的截图与生成产物；② 已登记在产物区的文件路径
+   * （图像编辑产物落在 ComfyDock 的 outDir，不在本应用数据目录内——按登记放行）。
+   * 不做任意路径转发：面板只能取「本应用产出的东西」。
+   *
+   * @param {string} target 绝对路径
+   * @returns {boolean} 是否放行
+   */
+  function assetAllowed(target) {
+    const file = path.resolve(String(target || ''));
+    try {
+      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return false;
+    } catch {
+      return false;
+    }
+    const ext = path.extname(file).toLowerCase();
+    if (!['.png', '.jpg', '.jpeg', '.webp', '.gif', '.wav', '.mp3', '.ogg'].includes(ext)) return false;
+    const root = path.resolve(dataDir);
+    if (file === root || file.startsWith(`${root}${path.sep}`)) return true;
+    return artifacts.some((item) => item.file && path.resolve(item.file) === file);
   }
 
   /**
@@ -2748,11 +2805,13 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string} [options.url] 图片直链（协议端缓存取不到时的兜底）
    * @returns {Promise<object>} { ok, taskId?, image?, error?, offMode?, vipOnly? }
    */
-  async function editImage({ by = 'app', chat = null, prompt = '', image = '', file = '', url = '' } = {}) {
+  async function editImage({ by = 'app', chat = null, prompt = '', image = '', file = '', url = '', deliver = true } = {}) {
     const text = String(prompt ?? '').trim();
     if (!text) return { ok: false, error: '提示词是空的——改图要一句要求' };
     const target = resolveChat(chat);
-    if (!target) return { ok: false, error: '没有回消息群——先在下指令的那个群里说一句' };
+    // 面板口径（deliver=false）：产出不发群，不要求回消息群
+    const panelOnly = deliver === false && by !== 'qq';
+    if (!target && !panelOnly) return { ok: false, error: '没有回消息群——先在下指令的那个群里说一句' };
     if (state.snapshot().enabled !== true) {
       record('error', `图像编辑不受理（领航员未开启）：${text.slice(0, 40)}`);
       return { ok: false, error: '领航员未开启——图像编辑只在领航员模式下受理', offMode: true };
@@ -2772,7 +2831,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         vipOnly: true
       };
     }
-    const result = await comfy.edit({ chat: target, prompt: text, image, file, url });
+    const result = await comfy.edit({ chat: target, prompt: text, image, file, url, deliver });
     if (result.ok) {
       state.noteCommand({ chat: target, target: '', text: `（图像编辑）${text.slice(0, 60)}`, result: '已提交' });
     }
@@ -2791,9 +2850,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string} options.feature 功能名（回执用）
    * @returns {{ok:boolean, chat?:string, error?:string, vipOnly?:boolean}} 闸门结果
    */
-  function mediaGate({ by = 'app', chat = null, feature = '生成能力' } = {}) {
+  function mediaGate({ by = 'app', chat = null, feature = '生成能力', deliver = true } = {}) {
     const target = resolveChat(chat);
-    if (!target) return { ok: false, error: '没有回消息群——先在群里 @ 我说一句' };
+    // 面板口径（deliver=false，2026-11-09）：产出不发群，故不要求有回消息群——chat 可空。
+    // 群内口径（by='qq'）与发群口径（deliver=true）仍必须有群：产物要落到一个地方。
+    const panelOnly = deliver === false && by !== 'qq';
+    if (!target && !panelOnly) return { ok: false, error: '没有回消息群——先在群里 @ 我说一句' };
     if (!mediaEnabled) return { ok: false, error: `${feature}未启用（配置 navigator.media.enabled=false）` };
     if (by === 'qq' && mediaRequireVip && !(vipFresh() && String(vip.chat) === String(target))) {
       record('error', `${feature}不受理（非 ${vipUser || 'VIP'} 触发 / 非同群）`);
@@ -2817,10 +2879,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string|number} [options.seed] 种子
    * @returns {Promise<object>} { ok, prompt?, message?, error?, vipOnly? }
    */
-  async function mossDraw({ by = 'app', chat = null, prompt = '', size = '', seed = null } = {}) {
-    const gate = mediaGate({ by, chat, feature: '生图' });
+  async function mossDraw({ by = 'app', chat = null, prompt = '', size = '', seed = null, deliver = true } = {}) {
+    const gate = mediaGate({ by, chat, feature: '生图', deliver });
     if (!gate.ok) return gate;
-    const result = await media.mossDraw({ chat: gate.chat, prompt, size, seed });
+    const result = await media.mossDraw({ chat: gate.chat, prompt, size, seed, deliver });
     if (result.ok) {
       state.noteCommand({ chat: gate.chat, target: '', text: `（生图）${String(prompt).slice(0, 60)}`, result: '已提交' });
     }
@@ -2841,12 +2903,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string} [options.runMode] 强制档位（small = 依田芳乃 · v4.1-Small）
    * @returns {Promise<object>} { ok, text?, message?, error?, vipOnly?, queued?, waited?, sent? }
    */
-  async function ttsSpeak({ by = 'app', chat = null, text = '', caption = '', auto = false, runMode = '', queue = false, wait = false, pronouns = null } = {}) {
-    const gate = mediaGate({ by, chat, feature: auto ? '群自动语音' : '语音生成' });
+  async function ttsSpeak({ by = 'app', chat = null, text = '', caption = '', auto = false, runMode = '', queue = false, wait = false, pronouns = null, deliver = true } = {}) {
+    const gate = mediaGate({ by, chat, feature: auto ? '群自动语音' : '语音生成', deliver });
     if (!gate.ok) return gate;
     // 🔴 pronouns 必须一路带到 media —— 少了这一层，「人称口径」在 media 侧永远是 null，
     // 只能走单体的自解析兜底（那里拿不到业务面配置就回落 わたし / きみ）。判例 2026-11-07。
-    const result = await media.ttsSpeak({ chat: gate.chat, text, caption, auto, runMode, queue, wait, pronouns });
+    const result = await media.ttsSpeak({ chat: gate.chat, text, caption, auto, runMode, queue, wait, pronouns, deliver });
     if (result.ok) {
       const label = auto ? '（自动语音）' : '（语音）';
       state.noteCommand({ chat: gate.chat, target: '', text: `${label}${String(text).slice(0, 60)}`, result: result.queued ? `排队第 ${result.queued} 句` : '已提交' });
@@ -2865,10 +2927,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string} [options.url] 图片直链
    * @returns {Promise<object>} { ok, image?, message?, error?, vipOnly? }
    */
-  async function wdTag({ by = 'app', chat = null, image = '', file = '', url = '' } = {}) {
-    const gate = mediaGate({ by, chat, feature: '反推提示词' });
+  async function wdTag({ by = 'app', chat = null, image = '', file = '', url = '', deliver = true } = {}) {
+    const gate = mediaGate({ by, chat, feature: '反推提示词', deliver });
     if (!gate.ok) return gate;
-    const result = await media.wdTag({ chat: gate.chat, image, file, url });
+    const result = await media.wdTag({ chat: gate.chat, image, file, url, deliver });
     if (result.ok) {
       state.noteCommand({ chat: gate.chat, target: '', text: `（反推提示词）${String(image || file || url).slice(0, 60)}`, result: '已提交' });
     }
@@ -2897,6 +2959,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       watching: watcher.list(),
       lightWatches: [...lightWatches.keys()],
       mediaBusy: media.isBusy(),
+      artifacts: artifacts.slice(-20).map((item) => ({ ...item })),
       activity: activity.map((item) => ({ ...item })),
       busy: cats.filter((row) => hasSession(row)).map((row) => row.id),
       cats,
@@ -3000,7 +3063,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         prompt: body?.prompt ?? '',
         image: body?.image ?? '',
         file: body?.file ?? '',
-        url: body?.url ?? ''
+        url: body?.url ?? '',
+        // 面板口径（2026-11-09）：deliver=false 表示「只回面板、不发群」
+        deliver: body?.deliver !== false
       })
     }),
     'POST /api/nav/moss': async ({ body }) => ({
@@ -3009,7 +3074,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         chat: body?.chat ?? null,
         prompt: body?.prompt ?? '',
         size: body?.size ?? '',
-        seed: body?.seed ?? null
+        seed: body?.seed ?? null,
+        deliver: body?.deliver !== false
       })
     }),
     'POST /api/nav/tts': async ({ body }) => ({
@@ -3028,7 +3094,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         // 语音先行（2026-11-08）：业务面等「这一句真发到群」的回执再发对应的文字
         wait: body?.wait === true,
         // 人称口径由调用方（业务面）带来；没带则 media 侧按群号自解析
-        pronouns: body?.pronouns && typeof body.pronouns === 'object' ? body.pronouns : null
+        pronouns: body?.pronouns && typeof body.pronouns === 'object' ? body.pronouns : null,
+        deliver: body?.deliver !== false
       })
     }),
     'POST /api/nav/tagger': async ({ body }) => ({
@@ -3037,7 +3104,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         chat: body?.chat ?? null,
         image: body?.image ?? '',
         file: body?.file ?? '',
-        url: body?.url ?? ''
+        url: body?.url ?? '',
+        deliver: body?.deliver !== false
       })
     }),
     'POST /api/nav/analyze': async ({ body }) => ({
@@ -3057,6 +3125,27 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       })
     }),
     'GET /api/nav/detail': async ({ query }) => ({ body: await ch4.detail(query.get('key') || 'majordomo') }),
+    // 回消息群切换（面板操作台，2026-11-09）——切了之后所有「发群」动作落到这个群；
+    // 传空串 = 清成「未定」（面板只走不发群的路径时用不上回消息群）
+    'POST /api/nav/chat': async ({ body }) => ({
+      body: { ok: true, ...state.setActiveChat(body?.chat ?? null) }
+    }),
+    // 面板产物区——生成类产物（图 / 音频 / 标签文本）最近 60 条，最近的在最前
+    'GET /api/nav/artifacts': async () => ({ body: { ok: true, artifacts: artifacts.slice().reverse() } }),
+    // 清空产物区（只清列表，不删文件——文件在数据目录里，需要时按路径找）
+    'POST /api/nav/artifacts/clear': async () => {
+      const count = artifacts.length;
+      artifacts.length = 0;
+      record('event', `面板产物区已清空（${count} 条）`);
+      return { body: { ok: true, cleared: count } };
+    },
+    // 产物文件出送（面板显示图 / 音频）——白名单见 assetAllowed，不放行任意路径
+    'GET /api/nav/asset': async ({ query }) => {
+      const target = String(query.get('path') || '').trim();
+      if (!target) return { status: 400, body: { ok: false, error: '缺 path' } };
+      if (!assetAllowed(target)) return { status: 403, body: { ok: false, error: '不在产物白名单内' } };
+      return { raw: { file: target } };
+    },
     // 影子判断器（N6 第一刀）——只判不发：产 {kind, action, target, via, reason}。
     // 业务面仍走自己的判断，本路由供影子双跑比对；删掉本行即完全回退。
     'POST /api/nav/intent': async ({ body }) => {

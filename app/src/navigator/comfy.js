@@ -32,9 +32,10 @@ const DEFAULT_WORKSPACE = 'gen';
  * @param {Function} options.sendImage 发图函数 (chat, file, caption) => Promise
  * @param {Function} options.sendText 发文字函数 (chat, text) => Promise
  * @param {Function} options.record 活动流记录 (kind, text) => void
+ * @param {Function} [options.onArtifact] 产物登记回调（面板产物区用）(entry) => void
  * @returns {object} 服务接口（edit / online / summary / isBusy）
  */
-export function createComfyService({ log, dataDir, conf = {}, onebot, sendImage, sendText, record }) {
+export function createComfyService({ log, dataDir, conf = {}, onebot, sendImage, sendText, record, onArtifact = null }) {
   const endpoint = String(conf.endpoint || '').replace(/\/+$/, '');
   const workspaceId = String(conf.workspaceId || DEFAULT_WORKSPACE);
   const pollMs = Number(conf.pollMs) > 0 ? Number(conf.pollMs) : DEFAULT_POLL_MS;
@@ -182,8 +183,10 @@ export function createComfyService({ log, dataDir, conf = {}, onebot, sendImage,
    * @param {string} options.prompt 提示词（进回执标题）
    * @returns {Promise<void>} 完成
    */
-  async function waitForArtifact({ id, chat, prompt }) {
+  async function waitForArtifact({ id, chat, prompt, deliver = true }) {
     const deadline = Date.now() + waitMs;
+    // 面板口径（2026-11-09）：deliver=false 时不发群——chat 可能为空，只登记产物 + 落活动流
+    const canSend = deliver === true && Boolean(chat);
     try {
       while (Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, pollMs));
@@ -204,8 +207,15 @@ export function createComfyService({ log, dataDir, conf = {}, onebot, sendImage,
           const names = Array.isArray(view.task?.artifacts) ? view.task.artifacts : [];
           const file = names.map((name) => artifactPath(view.outDir, view.workspaceId, name)).find(Boolean) ?? '';
           if (!file) {
-            await sendText(chat, `图像编辑出图了，但产物文件没找到（任务 ${view.task?.taskId ?? '?'}）——去 ComfyDock 面板看落点。`);
+            if (canSend) await sendText(chat, `图像编辑出图了，但产物文件没找到（任务 ${view.task?.taskId ?? '?'}）——去 ComfyDock 面板看落点。`);
             record('error', '图像编辑出图但产物路径未命中');
+            return;
+          }
+          if (typeof onArtifact === 'function') {
+            onArtifact({ kind: 'image', file, caption: `图像编辑完成 · ${String(prompt).slice(0, 60)}`, source: 'comfy' });
+          }
+          if (!canSend) {
+            record('comfy', `图像编辑出图（未发群）：${path.basename(file)}`);
             return;
           }
           const sent = await sendImage(chat, file, `图像编辑完成 · ${String(prompt).slice(0, 60)}`);
@@ -216,12 +226,12 @@ export function createComfyService({ log, dataDir, conf = {}, onebot, sendImage,
         }
         if (status === 'FAILED') {
           const reason = String(view.task?.error || '未知原因');
-          await sendText(chat, `图像编辑失败：${reason}`);
+          if (canSend) await sendText(chat, `图像编辑失败：${reason}`);
           record('error', `图像编辑失败：${reason}`);
           return;
         }
       }
-      await sendText(chat, '图像编辑超时未收口——去 ComfyDock 面板看任务状态。');
+      if (canSend) await sendText(chat, '图像编辑超时未收口——去 ComfyDock 面板看任务状态。');
       record('error', `图像编辑轮询超时（${Math.round(waitMs / 60000)} 分钟）`);
     } finally {
       busy = false;
@@ -237,9 +247,10 @@ export function createComfyService({ log, dataDir, conf = {}, onebot, sendImage,
    * @param {string} [options.image] 本地图片路径
    * @param {string} [options.file] OneBot 消息段的 file 名
    * @param {string} [options.url] 图片直链
+   * @param {boolean} [options.deliver] 是否发群（默认 true；false = 面板口径——只出图登记，不发群）
    * @returns {Promise<object>} { ok, taskId?, image?, error? }
    */
-  async function edit({ chat, prompt, image = '', file = '', url = '' }) {
+  async function edit({ chat, prompt, image = '', file = '', url = '', deliver = true }) {
     const text = String(prompt ?? '').trim();
     if (!text) return { ok: false, error: '提示词是空的——改图要一句要求' };
     if (busy) return { ok: false, error: '已有一张图在跑——等它出图再提交下一张' };
@@ -265,7 +276,7 @@ export function createComfyService({ log, dataDir, conf = {}, onebot, sendImage,
     }
     busy = true;
     record('comfy', `图像编辑已提交（任务 ${submitted.taskId}）：${text.slice(0, 40)}`);
-    waitForArtifact({ id: submitted.id, chat, prompt: text })
+    waitForArtifact({ id: submitted.id, chat, prompt: text, deliver })
       .catch((error) => record('error', `图像编辑收尾异常：${error?.message ?? error}`));
     return { ok: true, taskId: submitted.taskId, image: local, account: submitted.account, message: submitted.message };
   }

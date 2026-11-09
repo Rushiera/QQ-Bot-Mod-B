@@ -119,6 +119,76 @@ function normalizeImpressions(value, now) {
   return out;
 }
 
+// ── 对话中产出的印象块（`【记】QQ号|内容`）——收工轮统一整理 ──
+// 动机（2026-11-09）：后台逐人小请求整理 363 次/日、占全天费用约 45%，且每次重写整套
+// 印象、细节被压平。改为「对话里顺手写结构化行 → 发送前剥离 → 收工轮一次批量整理」，
+// 请求数降到收工轮次数（约 13 次/日）。
+// 分工：剥离在 sender（发群前抽走），落盘在这里（memory 目录的唯一写面），
+// 整理在 orchestrator 的收工轮（读 pending + 本会话活跃群友 → 一次调用 → 落盘 → 清空）。
+const PENDING_FILE = '_pending.jsonl';
+
+/** 待整理池路径（按 chatKey 分目录，与成员档同址）。 */
+export function pendingImpressionsFile(chatKey) {
+  return path.join(chatDir(chatKey), PENDING_FILE);
+}
+
+/**
+ * 追加一条待整理记忆（对话中 `【记】` 块抽出的一条）。
+ * target 两态：纯数字 = 群友 QQ 号（人档）；`group:lore|rule|relation|project|topic` = 群记条目。
+ * 形态非法或内容为空返回 false——调用方据此决定该行是否按正文发出去（不静默丢）。
+ */
+export function appendPendingImpression(chatKey, target, content) {
+  const t = String(target ?? '').trim();
+  const text = String(content ?? '').trim();
+  if (!text) return false;
+  const isGroup = /^group:[a-z]+$/i.test(t);
+  const uid = /^\d{1,15}$/.test(t) ? t : '';
+  if (!isGroup && !uid) return false;
+  try {
+    fs.mkdirSync(chatDir(chatKey), { recursive: true });
+    const row = uid
+      ? { ts: Date.now(), userId: uid, content: text.slice(0, IMPRESSION_MAX_CHARS) }
+      : { ts: Date.now(), groupKind: t.split(':')[1].toLowerCase(), content: text.slice(0, IMPRESSION_MAX_CHARS) };
+    fs.appendFileSync(pendingImpressionsFile(chatKey), JSON.stringify(row) + '\n', 'utf8');
+    return true;
+  } catch (error) {
+    console.warn('[memory] 待整理印象落盘失败:', error?.message ?? error);
+    return false;
+  }
+}
+
+/** 读全部待整理条目（不清空——整理成功落盘后由调用方显式清空，失败保留重试）。 */
+export function readPendingImpressions(chatKey) {
+  const out = [];
+  let text = '';
+  try { text = fs.readFileSync(pendingImpressionsFile(chatKey), 'utf8'); } catch { return out; }
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      const o = JSON.parse(t);
+      const content = String(o?.content ?? '').trim();
+      const uid = String(o?.userId ?? '');
+      const groupKind = String(o?.groupKind ?? '').trim().toLowerCase();
+      if (!content) continue;
+      if (/^\d{1,15}$/.test(uid)) out.push({ ts: Number(o.ts) || 0, userId: uid, content });
+      else if (groupKind) out.push({ ts: Number(o.ts) || 0, groupKind, content });
+    } catch { continue; }
+  }
+  return out;
+}
+
+/** 清空待整理池——只在整理结果已落盘之后调用。 */
+export function clearPendingImpressions(chatKey) {
+  try {
+    fs.rmSync(pendingImpressionsFile(chatKey), { force: true });
+    return true;
+  } catch (error) {
+    console.warn('[memory] 清空待整理印象失败:', error?.message ?? error);
+    return false;
+  }
+}
+
 export class MemoryStore {
   constructor() {
     this.cache = new Map(); // chatKey -> Map(userId|_n_xx, member)

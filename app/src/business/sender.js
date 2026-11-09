@@ -17,6 +17,17 @@ import { record as recordEngage } from './engage-metrics.js';
 import { paramsFor } from './engage-level.js';
 // 群语音伴随（本号每句发言先用 TTS 念一遍，再发文字）——[qqbotb-voicereply:sender-import]
 import { voiceReply } from './voice-reply.js';
+// 对话中的印象块（`【记】QQ号|内容`）→ 抽取落 pending，收工轮统一整理
+// [qqbotb-memconsolidate:sender-import]
+import { appendPendingImpression } from './memory.js';
+
+/**
+ * 印象块标记：行首 `【记】` / `[记]` + 目标 + 分隔符（半角或全角竖线）+ 内容。
+ * 目标两态：纯数字 = 群友 QQ 号；`group:lore|rule|relation|project|topic` = 群记条目。
+ * 判据比图片包裹更严（目标必须合法、必须有分隔符）——写坏的行按正文发出去，
+ * 群里能看到、下一轮模型能自己纠，不静默丢。
+ */
+const PENDING_MARK_RE = /^[【\[]记[】\]]\s*(\d{1,15}|group:[a-z]+)\s*[|｜]\s*(.+)$/i;
 
 /** 假名语气词 ↔ 中文音译对照（与角色卡 §17.1 同源）——本表用于**反向**归一：中文音译 → 假名。 */
 const JP_INTERJECTIONS = [
@@ -504,13 +515,26 @@ export class SendQueue {
     const texts = [];
     const voiced = [];   // 与 texts 逐条对齐的日语原句（'' = 这条没带，走翻译回退）
     const blockImages = [];
+    let pendingSaved = 0;   // 本批抽出的印象块条数（只写 pending，不发群）
     for (let li = 0; li < list.length; li += 1) {
       const m = list[li];
       const lines = String(m ?? '').split(/\r?\n/);
       const rest = [];
       let cursor = 0;
       while (cursor < lines.length) {
-        if (lines[cursor].trim() !== '[image-open]') { rest.push(lines[cursor]); cursor += 1; continue; }
+        const lineText = lines[cursor].trim();
+        if (lineText !== '[image-open]') {
+          // 印象块：抽出落 pending，正文照发；号码/格式不合格 → 该行按正文走（不静默丢）
+          const mark = PENDING_MARK_RE.exec(lineText);
+          if (mark && appendPendingImpression(chatKey, mark[1], mark[2])) {
+            pendingSaved += 1;
+            cursor += 1;
+            continue;
+          }
+          rest.push(lines[cursor]);
+          cursor += 1;
+          continue;
+        }
         const imgs = [];
         let i = cursor + 1;
         let ok = true;
@@ -558,6 +582,8 @@ export class SendQueue {
         partVoice.push(spoken);
       }
     }
+    // 整条消息只有印象块（没有正文）→ 不算错误：块已落 pending，群里本就不该有内容
+    if (!parts.length && pendingSaved > 0) return { sent: [], failed: [] };
     if (!parts.length) throw new Error('消息内容为空');
 
     const chain = this.#chain(chatKey);

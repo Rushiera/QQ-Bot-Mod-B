@@ -42,8 +42,10 @@ import { setMemoryFloor } from './session-state.js';
 import { extractTopicWords } from './topic-words.js';
 // 群记（群级记忆：梗 / 群规 / 关系 / 项目 / 在聊什么）——[qqagent-memory-patch:orchestrator-import]
 import {
-  GROUP_KINDS, listGroupEntries, replaceGroupEntries, setGroupTopics
+  GROUP_KINDS, listGroupEntries, replaceGroupEntries, setGroupTopics, appendGroupEntry
 } from './group-memory.js';
+// 对话中攒下的【记】块（收工轮统一整理）——[qqbotb-memconsolidate:import]
+import { readPendingImpressions, clearPendingImpressions } from './memory.js';
 // 发言热度（话密的群友 / 人机对刷）——提示词参考（[qqagent-engage-patch:orchestrator-chatter-import]）
 import { formatChatterHint } from './chatter.js';
 // 缓存观测采集（每次调用落一行）——[qqbotb-cachemetrics:import]
@@ -74,6 +76,10 @@ import { logger } from './logger.js';
 // 收工轮禁用的发送类工具 —— "不对外发言"靠工具集移除实现（架构级），不靠提示词请求配合。
 // [qqagent-session-patch:orchestrator-consts]
 const ROLLOVER_BLOCKED_TOOLS = new Set(['send_message', 'send_to', 'send_sticker', 'send_poke', 'send_image']);
+// 日常轮禁用的记忆写入工具——2026-11-09 迁移：写入改走正文 `【记】` 块（sender 抽走落 pending），
+// memory_append 只在收工轮 / 整理轮可用（C 方案）。请求数因此从「逐人整理 363 次/日」降到收工轮次数。
+// [qqbotb-memconsolidate:run-blocked]
+const RUN_BLOCKED_TOOLS = new Set(['memory_append']);
 // 限流长轮询不设次数上限：429 是"等一会儿再来"—— 判失败等于把群友的消息丢掉。
 // 退避时长由 rateLimitRetryDelayMs 计算（60s 起指数增长、180s 封顶）。
 // [qqagent-session-patch:orchestrator-429-nolimit]
@@ -903,8 +909,8 @@ export class Orchestrator {
       }
     }
 
-    // 记忆自动整理（后台静默，绝不阻塞/影响聊天主流程）
-    this.#maybeConsolidateMemory(chatKey);
+    // 记忆整理已迁到收工轮（#completeRollover → #consolidateFromPending）：
+    // 日常轮只写正文【记】块，不再产生「逐人一次小请求」的后台整理。[qqbotb-memconsolidate:retire-auto]
   }
 
   /**
@@ -1233,6 +1239,11 @@ export class Orchestrator {
       // [qqagent-session-patch:orchestrator-rollover-tools]
       if (rollover && ROLLOVER_BLOCKED_TOOLS.has(d.id)) {
         availability.set(d.id, { enabled: false, code: 'rollover', reason: '收工轮不对外发言' });
+        return false;
+      }
+      // 日常轮：记忆写入改走正文【记】块，工具不暴露（模型调用不到 = 架构级约束）
+      if (!rollover && RUN_BLOCKED_TOOLS.has(d.id)) {
+        availability.set(d.id, { enabled: false, code: 'daily', reason: '日常轮用正文【记】行，收工轮统一整理' });
         return false;
       }
       const st = getToolAvailability(d.id, {
@@ -1895,6 +1906,14 @@ export class Orchestrator {
       // [qqagent-memory-patch:orchestrator-rollover-topics]
       const topicWords = extractTopicWords(summary);
       if (topicWords.length) setGroupTopics(chatKey, topicWords);
+      // 【记】块汇总（2026-11-09）：本会话攒下的人档/群记条目 → 人档批量整理 + 群记落池。
+      // 放在群记重整之前——本轮新落的群记条目才能被紧接着的重整一起合并。
+      // 失败保留 pending，下次收工重试；不阻断归档。[qqbotb-memconsolidate:rollover]
+      try {
+        await this.#consolidateFromPending(chatKey);
+      } catch (error) {
+        console.warn('[memory] 收工轮待整理块汇总失败（pending 保留）:', error?.message ?? error);
+      }
       // 群记重整（唯一触发点 = 收工轮）——模型本轮刚按 kind 写完群记，趁存档还在，
       // 用本会话全量样本合并 / 改写一遍。失败不影响归档（宁可不换，不可清空）。
       // [qqagent-memory-patch:rollover-group]
@@ -2335,12 +2354,12 @@ export class Orchestrator {
     return muted;
   }
 
-  // ── 群友印象自动整理 ──
-  // 触发条件（二者同时满足）：印象条数超过阈值，且距上次整理超过冷却时间。
-  //
-  // 阈值原为硬编码 8，实测用户群里 5 位成员各 1 条印象（合计 5），5 > 8 恒 false
-  // → 自动整理永远不触发。改为可配置（config.memory.consolidateMinImpressions），
-  // 且默认值下调，避免在"人不多、印象还没攒起来"的群里彻底失灵。
+  // ── 群友印象整理 ──
+  // 触发点（2026-11-09 起两个）：① 收工轮 #consolidateFromPending（读正文【记】块 + 本会话活跃群友，
+  // 一次调用批量整理）② 手动按钮（force=true，记忆页）。
+  // 原「按时间冷却 + 条数阈值」的后台自动整理已退役：它每天打约 363 次逐人小请求、占全天费用
+  // 约 45%，且每次重写整套印象、细节被压平（判据 → ref-cache-hit.md §6.4 复核节）。
+  // 静态阈值保留——手动整理与注入预算仍在用。
   static MEMORY_THRESHOLDS = { memberImpression: 4 };
   static MEMBER_MIN_MESSAGES = 3;         // 整理条件：该群友在聊天记录里至少出现 3 条
   static MEMBER_MIN_IMPRESSIONS = 1;      // 整理条件：至少有 1 条印象（旧数据也可整理）
@@ -2350,35 +2369,6 @@ export class Orchestrator {
   // 2026-10-11：原 20 条 / 3 人 —— 实测 31 人的群只有 3 人有印象，门槛高到几乎不补人。
   static DISCOVER_MIN_MESSAGES = 5;       // 至少发过这么多条才值得分析（原 20）
   static DISCOVER_MAX_MEMBERS = 6;        // 单次最多发现几个人（原 3）
-
-  #maybeConsolidateMemory(chatKey) {
-    try {
-      const cfg = getConfig();
-      if (cfg.memory?.consolidateEnabled === false) return;
-      if (this.paused || this.aborted) return;
-      if (!cfg.api?.model || !cfg.api?.baseUrl) return;   // 没选模型就不整理
-      if (this.consolidating.has(chatKey)) return;
-      const st = this.memory.consolidationState(chatKey);
-      // 阈值可配置：config.memory.consolidateMinImpressions（默认取类常量）
-      // 注意：这里原先误写成裸标识符 T，运行时会抛 ReferenceError 导致自动整理彻底失效。
-      const minImpressions = Math.max(1,
-        Number(cfg.memory?.consolidateMinImpressions) || Orchestrator.MEMORY_THRESHOLDS.memberImpression);
-      // 触发条件二选一：
-      //   A. 全群印象总数超过阈值
-      //   B. 任一成员的印象条数超过上限
-      // 只看总数会在"人少"的群里彻底失灵 —— 比如 3 位成员各 1 条，
-      // 总数 3 永远够不到阈值，自动整理形同虚设。
-      const maxPerMember = Math.max(2, Number(cfg.memory?.maxImpressionsPerMember) || 40);
-      const anyMemberOverloaded = st.members.some((m) => m.count > maxPerMember);
-      if (!(st.counts.memberImpression > minImpressions) && !anyMemberOverloaded) return;
-      const minInterval = Math.max(30 * 60 * 1000, Number(cfg.memory?.consolidateMinIntervalMs) || 6 * 60 * 60 * 1000);
-      if (Date.now() - (st.lastConsolidatedAt || 0) < minInterval) return;
-      this.consolidating.add(chatKey);
-      this.consolidateMemoryForChat(chatKey)
-        .catch((error) => console.error(`[memory] 整理 ${chatKey} 失败:`, error?.message ?? error))
-        .finally(() => this.consolidating.delete(chatKey));
-    } catch { /* 整理是锦上添花，绝不影响聊天主流程 */ }
-  }
 
   /**
    * 整理群友印象 —— 唯一入口。
@@ -2677,6 +2667,145 @@ export class Orchestrator {
       .map((content) => content.slice(0, 120));
 
     return this.memory.replaceMember(chatKey, mem.userId, mem.name, clean);
+  }
+
+  /**
+   * 收工轮：把本会话攒下的【记】块 + 本会话活跃群友的现有印象一次性整理落盘。
+   *
+   * 形态（2026-11-09 Rushiera 定）：日常轮只往 `_pending.jsonl` 追加结构化行
+   * （sender 抽走、不发群），收工轮这里做批量调用——同群目标人按 15 人一批放进同一个
+   * prompt，输出按 userId 回填。相比原「逐人一次调用」，请求数从 N 降到 ceil(N/15)。
+   *
+   * 失败面：调用异常 / 解析失败 → 保留 pending 不清空，下次收工重试（晚一轮 ≠ 丢数据）。
+   * 群记条目（group:<kind>）不进模型——直接落群记池，随后 #consolidateGroupMemory(force) 统一重整。
+   */
+  async #consolidateFromPending(chatKey) {
+    const cfg = getConfig();
+    const pending = readPendingImpressions(chatKey);
+    if (!pending.length) return { ok: true, skipped: 'empty' };
+
+    // ① 群记条目：结构化直落，不需要模型
+    let groupAdded = 0;
+    let groupFailed = 0;
+    const memberItems = [];
+    for (const it of pending) {
+      if (it.groupKind) {
+        try {
+          if (appendGroupEntry(chatKey, it.groupKind, it.content)) groupAdded += 1;
+          else groupFailed += 1;
+        } catch (error) {
+          groupFailed += 1;
+          console.warn('[memory] 群记条目落池失败:', error?.message || error);
+        }
+      } else if (it.userId) {
+        memberItems.push(it);
+      }
+    }
+
+    // ② 人档：目标 = 本会话发言够多的活跃群友 ∪ pending 里出现的人
+    const winStart = sessionWindowStart(chatKey);
+    const recent = this.store.recent(chatKey, { limit: 2000 }) || [];
+    const active = new Map();   // uid -> 本会话发言条数
+    const nameOf = new Map();
+    for (const m of recent) {
+      if (m.self || !m.senderId) continue;
+      if (winStart && Number(m.ts || 0) < winStart) continue;
+      const uid = String(m.senderId);
+      active.set(uid, (active.get(uid) || 0) + 1);
+      const nm = String(m.senderName || '').trim();
+      if (nm && !nameOf.has(uid)) nameOf.set(uid, nm);
+    }
+    const targetIds = [...active.entries()]
+      .filter(([, n]) => n >= Orchestrator.MEMBER_MIN_MESSAGES)
+      .sort((a, b) => b[1] - a[1])
+      .map(([uid]) => uid);
+    for (const it of memberItems) if (!targetIds.includes(it.userId)) targetIds.push(it.userId);
+
+    if (!targetIds.length) {
+      if (!groupFailed) clearPendingImpressions(chatKey);   // 只有群记条目且全部落池 → 消费完
+      return { ok: groupFailed === 0, groupAdded, groupFailed, members: 0, batches: 0 };
+    }
+
+    const maxKeep = Number(cfg.memory?.maxImpressionsPerMember) || 40;
+    const existing = this.memory.members(chatKey);
+    const existingByUid = new Map(existing.map((m) => [String(m.userId || ''), m]));
+    const BATCH = 15;
+    let changed = 0;
+    let failedBatches = 0;
+    let batches = 0;
+
+    for (let i = 0; i < targetIds.length; i += BATCH) {
+      if (this.aborted) { failedBatches += 1; break; }
+      const slice = targetIds.slice(i, i + BATCH);
+      const blocks = [];
+      for (const uid of slice) {
+        const mem = existingByUid.get(uid);
+        const name = (mem && mem.name) || nameOf.get(uid) || '';
+        const imp = ((mem && mem.impressions) || []).map((e) => `- ${e.content}`);
+        const fresh = memberItems.filter((x) => x.userId === uid).map((x) => `- ${x.content}`);
+        const say = recent
+          .filter((m) => !m.self && String(m.senderId) === uid)
+          .slice(-8)
+          .map((m) => String(m.text || '').slice(0, 160))
+          .filter(Boolean);
+        blocks.push([
+          `### QQ ${uid}${name ? `（${name}）` : ''}`,
+          imp.length ? '现有印象：\n' + imp.join('\n') : '现有印象：（无）',
+          fresh.length ? '本次新记：\n' + fresh.join('\n') : '',
+          say.length ? '最近发言：\n' + say.map((s) => '- ' + s).join('\n') : ''
+        ].filter(Boolean).join('\n'));
+      }
+
+      const system = '你是聊天机器人的记忆整理模块，负责整理对多位群友的长期印象。你可以合并、改写、删除已有印象，也可以从给定素材里补充新的稳定特征；绝不发明材料里没有的事实。输出必须是严格的 JSON 对象，不要 Markdown 代码块，不要任何解释文字。格式：{"members":[{"userId":"…","impressions":["…"]}]}';
+      const user = [
+        '下面是若干位群友的现有印象、本次新记的素材与最近发言，请逐人整理并补全：',
+        '1. 把同义/重复的印象合并成一条，以最新的观感为准。',
+        '2. 明显过时、矛盾、或一次性事件（不会再次影响相处）的印象删掉。',
+        '3. 从素材里补上"以后跟这个人打交道用得上"的稳定特征：说话风格、爱玩的梗、常聊话题、雷点、身份关系。',
+        `4. 每人条数上限 ${maxKeep}，每条不超过 120 字。`,
+        '5. 只为下面列出的 QQ 号输出；没有可保留内容的给空数组；不要新增不在列表里的人。',
+        '',
+        blocks.join('\n\n')
+      ].join('\n');
+
+      batches += 1;
+      try {
+        const res = await this.#memoryChat([
+          { role: 'system', content: system },
+          { role: 'user', content: user }
+        ], { maxTokens: 4000 });
+        const parsed = extractJsonObject(String(res?.message?.content ?? ''));
+        const list = Array.isArray(parsed?.members) ? parsed.members : null;
+        if (!list) { failedBatches += 1; continue; }
+        for (const row of list) {
+          const uid = String(row?.userId ?? '').trim();
+          if (!slice.includes(uid)) continue;   // 编造号码 / 串味：丢弃
+          const mem = existingByUid.get(uid);
+          const before = ((mem && mem.impressions) || []).map((e) => e.content);
+          const clean = (Array.isArray(row?.impressions) ? row.impressions : [])
+            .map((s) => String(s ?? '').trim())
+            .filter(Boolean)
+            .slice(0, maxKeep)
+            .map((s) => s.slice(0, 120));
+          if (!clean.length && before.length) continue;   // 空数组不清空已有印象（宁可不换）
+          const isChanged = clean.length !== before.length || clean.some((c, idx) => c !== before[idx]);
+          this.memory.replaceMember(chatKey, uid, (mem && mem.name) || nameOf.get(uid) || '', clean);
+          if (isChanged) changed += 1;
+        }
+      } catch (error) {
+        failedBatches += 1;
+        console.warn('[memory] 收工整理批次失败（保留 pending 下次重试）:', error?.message || error);
+      }
+    }
+
+    // ③ 全部批次成功且群记全部落池才清 pending；否则留着，下次收工重试
+    if (!failedBatches && !groupFailed) clearPendingImpressions(chatKey);
+    const note = `收工整理：${targetIds.length} 位 / ${batches} 批，更新 ${changed} 位`
+      + (groupAdded ? `，群记 +${groupAdded}` : '')
+      + (groupFailed ? `（${groupFailed} 条群记落池失败）` : '')
+      + (failedBatches ? `（${failedBatches} 批失败，pending 保留）` : '');
+    console.log('[orchestrator] ' + chatKey + ' ' + note);
+    return { ok: failedBatches === 0 && groupFailed === 0, changed, groupAdded, groupFailed, batches, failedBatches };
   }
 
   /**

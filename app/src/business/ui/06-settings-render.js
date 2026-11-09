@@ -374,8 +374,9 @@ function renderMemorySettingsSection(c) {
   const currentDisplay = selP ? `${selP.displayName || selP.id} · ${mem.model || '未选模型'}` : (mem.model || '未选模型');
   return `
     <h3 id="settings-memory">记忆整理</h3>
-    <div class="checkbox-row"><input type="checkbox" id="cfg-mem-consolidate" ${mem.consolidateEnabled !== false ? 'checked' : ''} />
-      <label for="cfg-mem-consolidate">启用记忆自动整理</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-mem-consolidate" ${mem.consolidateEnabled !== false ? 'checked' : ''} disabled />
+      <label for="cfg-mem-consolidate">启用记忆自动整理（已退役）</label></div>
+    <div class="hint">整理时机（2026-11-09 起）：<b>收工轮</b>（上下文轮转时一次批量整理本会话的【记】块 + 活跃群友印象）与<b>记忆页手动按钮</b>。原「按冷却时间在运行结束后后台逐人整理」已退役——它每天约 363 次小请求、占全天费用约 45%，且每次重写整套印象。</div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-mem-usechat" ${useChat ? 'checked' : ''} />
       <label for="cfg-mem-usechat">使用与聊天机器人相同的模型</label></div>
     <div id="mem-model-box" style="${useChat ? 'display:none' : ''}">
@@ -388,8 +389,8 @@ function renderMemorySettingsSection(c) {
         <input type="hidden" id="cfg-mem-model" value="${esc(mem.model || '')}" />
       </div>
     </div>
-    <div class="field"><label>整理冷却时间（毫秒）</label><input type="number" id="cfg-mem-interval" min="1800000" step="600000" value="${esc(mem.consolidateMinIntervalMs ?? 21600000)}" /></div>
-    <div class="hint">条数超过阈值且距上次整理超过该冷却时间后，才会在运行结束后后台整理。默认 6 小时（21600000 毫秒）。</div>`;
+    <div class="field"><label>整理冷却时间（毫秒，已退役）</label><input type="number" id="cfg-mem-interval" min="1800000" step="600000" value="${esc(mem.consolidateMinIntervalMs ?? 21600000)}" disabled /></div>
+    <div class="hint">该冷却时间不再生效：后台自动整理已退役，整理改在收工轮（每次轮转一次批量调用）。</div>`;
 }
 
 function renderPersonaSection(c) {

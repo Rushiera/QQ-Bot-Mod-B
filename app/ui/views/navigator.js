@@ -138,6 +138,19 @@
     );
   }
 
+  /**
+   * 猫列表排序——主干 → 常驻（端口升序 = 建猫序）→ 名字；与并发协议面板同口径。
+   *
+   * @param {Array<object>} list 原始 cats
+   * @returns {Array<object>} 新数组（不改入参）
+   */
+  function sortCats(list) {
+    const rank = (row) => (row.special ? 0 : 1);
+    const port = (row) => Number(row.port) || 99999;
+    return (Array.isArray(list) ? list.slice() : []).sort((a, b) => rank(a) - rank(b) || port(a) - port(b)
+      || String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN', { numeric: true }));
+  }
+
   // ── 1. 骨架（mount：只建 DOM，不发请求） ────────────────────────────────
 
   /**
@@ -158,9 +171,15 @@
     const refreshBtn = el('button', { class: 'navx-mini', text: '刷新' });
     const heroMain = el('div', { class: 'navx-hero-main' },
       dot,
-      el('div', { class: 'navx-grow' }, heroTitle, heroSub),
-      refreshBtn,
-      toggle
+      el('div', { class: 'navx-hero-txt' },
+        el('div', { class: 'navx-hero-line' },
+          heroTitle,
+          el('span', { class: 'navx-grow' }),
+          refreshBtn,
+          toggle
+        ),
+        heroSub
+      )
     );
 
     const chatSelect = el('select', { class: 'navx-stat-select', title: '回消息群——「发到群」的动作落到这里' });
@@ -281,7 +300,7 @@
     const shotsBox = el('div', { class: 'navx-shots' },
       el('p', { class: 'navx-empty', text: '点猫群里某只猫的「截图」出一张会话卡（只读，不给猫发消息）。长会话按段分张。' })
     );
-    const shotCard = el('section', { class: 'navx-card' },
+    const shotCard = el('section', { class: 'navx-card navx-span3' },
       cardHead(el, '会话截图', shotCount),
       el('div', { class: 'navx-card-body' }, shotsBox)
     );
@@ -290,7 +309,7 @@
     const artCount = el('span', { class: 'navx-count', text: '0' });
     const artClear = el('button', { class: 'navx-mini', text: '清空' });
     const artBox = el('div', { class: 'navx-media' });
-    const artCard = el('section', { class: 'navx-card' },
+    const artCard = el('section', { class: 'navx-card navx-span2' },
       el('div', { class: 'navx-card-head' }, el('h3', { text: '产物' }), artCount,
         el('div', { class: 'navx-card-actions' }, artClear)),
       el('div', { class: 'navx-card-body' }, artBox)
@@ -299,7 +318,7 @@
     // ── 活动流卡 ──
     const actCount = el('span', { class: 'navx-count', text: '0' });
     const activityBox = el('div', { class: 'navx-tl' });
-    const activityCard = el('section', { class: 'navx-card' },
+    const activityCard = el('section', { class: 'navx-card navx-span2' },
       cardHead(el, '活动流', actCount),
       el('div', { class: 'navx-card-body' }, activityBox)
     );
@@ -307,7 +326,7 @@
     // ── 线卡（A 方案 · 2026-11-09）──
     const lineCount = el('span', { class: 'navx-count', text: '0' });
     const lineBox = el('div', { class: 'navx-tablewrap' });
-    const lineCard = el('section', { class: 'navx-card' },
+    const lineCard = el('section', { class: 'navx-card navx-span2' },
       cardHead(el, '线', lineCount),
       el('div', { class: 'navx-card-body' }, lineBox)
     );
@@ -315,7 +334,7 @@
     // ── 指令流水卡 ──
     const logCount = el('span', { class: 'navx-count', text: '0' });
     const logBox = el('div', { class: 'navx-tablewrap' });
-    const logCard = el('section', { class: 'navx-card' },
+    const logCard = el('section', { class: 'navx-card navx-span3' },
       cardHead(el, '指令流水', logCount),
       el('div', { class: 'navx-card-body' }, logBox)
     );
@@ -323,7 +342,7 @@
     // ── 组装 ──
     const mainCol = el('div', { class: 'navx-main' }, sendCard, genCard, advCard);
     const sideCol = el('div', { class: 'navx-side' }, catsCard, detailCard);
-    const foot = el('div', { class: 'navx-foot' }, artCard, activityCard, lineCard, logCard, shotCard);
+    const foot = el('div', { class: 'navx-foot' }, lineCard, activityCard, artCard, logCard, shotCard);
 
     host.appendChild(el('div', { class: 'navx' },
       hero,
@@ -332,7 +351,7 @@
     ));
 
     refs = {
-      dot, heroTitle, heroSub, toggle, refreshBtn, chatSelect,
+      dot, heroMain, heroTitle, heroSub, toggle, refreshBtn, chatSelect,
       statIdle, statWatch, statBusy, statVip, statMode,
       catSelect, sendText, sendBtn, sendResult,
       seg, segButtons, genFields, genDeliver, genTarget, genBtn, genResult,
@@ -664,6 +683,7 @@
     const on = s.enabled === true;
 
     refs.dot.className = `navx-dot${on ? ' on' : ''}`;
+    if (refs.heroMain) refs.heroMain.classList.toggle('on', on);
     refs.toggle.textContent = on ? '关闭领航员' : '开启领航员';
     refs.toggle.dataset.on = on ? '1' : '0';
 
@@ -715,8 +735,8 @@
     const allow = s.ingress && Array.isArray(s.ingress.allow) ? s.ingress.allow.length : 0;
     setStat(refs.statMode, mode === 'live' ? 'live 接管' : 'shadow 影子', mode === 'live' ? `已放行 ${allow} 类` : '只采集不动作');
 
-    // 目标猫下拉（猫清单变了才重建）
-    const cats = Array.isArray(s.cats) ? s.cats : [];
+    // 目标猫下拉（猫清单变了才重建）——排序与猫群卡同口径：主干 → 常驻按端口
+    const cats = sortCats(Array.isArray(s.cats) ? s.cats : []);
     const names = cats.map((row) => String(row.id || row.name || '')).filter(Boolean);
     if (!names.includes(state.cat)) state.cat = names[0] || 'majordomo';
     const signature = names.join('|');
@@ -763,7 +783,7 @@
     const el = ui().el;
     if (!el || !refs) return;
     const s = state.status || {};
-    const cats = Array.isArray(s.cats) ? s.cats : [];
+    const cats = sortCats(Array.isArray(s.cats) ? s.cats : []);
     const busy = new Set(Array.isArray(s.busy) ? s.busy : []);
     // 整理在途（服务端在途表）——后台整理几分钟，按钮要在这整段时间里保持置灰
     const resettingKeys = new Set(
@@ -780,18 +800,39 @@
       return;
     }
 
+    const now = Date.now();
     for (const row of cats) {
       const key = String(row.id || row.name || '');
       const runState = String(row.runState || row.phase || '');
-      const working = busy.has(key) || runState === 'running' || runState === 'waiting';
+      const working = busy.has(key) || runState === 'run' || runState === 'running' || runState === 'waiting';
       const resetting = resettingKeys.has(key) || resettingKeys.has(String(row.name || ''));
+      const off = row.running === false;
+      const tone = off ? 'off' : resetting ? 'reset' : working ? 'busy' : 'idle';
+      const label = off ? '未运行' : resetting ? '整理中' : working ? '跑动' : '空闲';
+      // 前文体量按字符算（token 在空会话里恒 0，字符数恒有值）；tip 里给 token 与条数
+      const ctxK = Math.round((Number(row.contextChars) || 0) / 1000)
+        || Math.round((Number(row.context) || 0) / 1000);
+      const calls = Number(row.requests) || 0;
+      const agoMs = row.lastActiveAt ? now - Number(row.lastActiveAt) : 0;
+      const tip = [
+        `${row.name || key}${row.special ? '（主干）' : ''} · 端口 ${row.port || '—'}`,
+        `状态 ${label}${runState ? `（${runState}）` : ''}`,
+        ctxK ? `前文 ${ctxK}k 字符 · 约 ${Math.round((Number(row.context) || 0) / 1000)}k tok · ${row.contextCount || 0} 条` : '',
+        `累计 ${calls} 次调用${row.round ? ` · 第 ${row.round} 轮` : ''}`,
+        agoMs > 0 ? `最近活动 ${span(agoMs)}前` : '',
+        row.pending ? `排队 ${row.pending} 条` : ''
+      ].filter(Boolean).join('\n');
       const line = el('div', {
-        class: `navx-cat${key === state.cat ? ' active' : ''}`,
+        class: `navx-cat ${tone}${key === state.cat ? ' active' : ''}`,
+        title: tip,
         onclick: () => { state.cat = key; refs.catSelect.value = key; renderCats(); }
       },
-        el('span', { class: `navx-dot${working ? ' on' : ''}` }),
+        el('span', { class: 'navx-cat-dot' }),
         el('span', { class: 'navx-cat-name', text: String(row.name || key) }),
-        el('span', { class: 'navx-cat-meta', text: `${row.port || '-'} · ${runState || '未知'}` }),
+        el('span', { class: `navx-pill ${tone}`, text: label }),
+        ctxK ? el('span', { class: 'navx-cat-ctx', text: `${ctxK}k` }) : null,
+        el('span', { class: 'navx-cat-calls', text: `${calls} 次` }),
+        agoMs > 0 ? el('span', { class: 'navx-cat-ago', text: `${span(agoMs)}前` }) : null,
         el('span', { class: 'navx-cat-tools' },
           el('button', { class: 'navx-mini', text: '详情', onclick: (event) => { event.stopPropagation(); showDetail(key); } }),
           el('button', { class: 'navx-mini', text: '截图', onclick: (event) => { event.stopPropagation(); shoot(key); } }),
@@ -913,8 +954,8 @@
       el('td', { class: 'num', text: clock(e.at) }),
       el('td', { class: 'num', text: e.chat || '-' }),
       el('td', { class: 'num', text: e.target || '-' }),
-      el('td', { class: 'ell', title: e.text || '', text: e.text || '' }),
-      el('td', { class: String(e.result || '').includes('失败') ? 'navx-bad' : 'navx-ok', text: e.result || '-' })
+      el('td', {}, el('div', { class: 'ell', title: e.text || '', text: e.text || '' })),
+      el('td', { class: `res ${String(e.result || '').includes('失败') ? 'navx-bad' : 'navx-ok'}`, title: e.result || '', text: e.result || '-' })
     ));
     refs.logBox.appendChild(el('table', { class: 'navx-table' },
       el('thead', {}, head), el('tbody', {}, rows)));
@@ -957,7 +998,7 @@
       el('td', { class: String(item.status) === 'running' ? 'navx-ok' : 'num', text: String(item.status || '') }),
       el('td', { class: 'num', text: clock(item.at) }),
       el('td', { class: 'num', text: String(item.chat || '-') }),
-      el('td', { class: 'ell', title: item.text || '', text: item.text || '' })
+      el('td', {}, el('div', { class: 'ell', title: item.text || '', text: item.text || '' }))
     ));
     const box = el('div', {});
     box.appendChild(el('table', { class: 'navx-table' },

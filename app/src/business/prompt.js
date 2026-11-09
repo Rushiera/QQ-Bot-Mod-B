@@ -167,11 +167,14 @@ function quoteAndAt() {
 function memoryRules() {
   // 口径（2026-10-16 Rushiera 定）：记忆不节流 —— 用得上就记，不怕多；
   // 超量的自动归档、可检索。原口径「偶尔用，别当笔记本」已退役。
-  // [qqagent-memory-patch:no-throttle-memory-rules]
+  // 2026-11-09 改（Rushiera 定）：日常轮不再调 memory_append —— 改为在正文里写结构化
+  // 【记】行，发送前抽走、收工轮统一整理（后台逐人小请求整理退役）。
+  // [qqagent-memory-patch:no-throttle-memory-rules] [qqbotb-memconsolidate:memory-rules]
   return [
     '【记忆：用得上就记，不怕多】',
-    '- 记录记忆（memory_append）：对某位群友的印象（category=member，需 userId）；或本群的事（category=group）——lore 梗/黑话 · rule 群规约定 · relation 关系角色 · project 长期项目 · topic 在聊什么。',
-    '- 判断标准只有一条："下次进这个群还用得上吗"。用得上就记；重复和过时的条目由整理轮合并，写满的旧条目自动归档、不会丢。',
+    '- 顺手记人：在回复正文里另起一行写 `【记】QQ号|一句话`（例：`【记】1234567890|说话爱用省略号，聊 SC2 突变会认真报周数`）。这一行不会发到群里——系统会抽走，到收工轮统一整理成印象。一次可写多条，每行一条。',
+    '- 顺手记群：同格式写 `【记】group:lore|内容`——kind 取值 lore 梗/黑话 · rule 群规约定 · relation 关系角色 · project 长期项目 · topic 在聊什么。',
+    '- 判断标准只有一条："下次进这个群还用得上吗"。用得上就记；重复和过时的条目由收工轮统一合并，写满的旧条目自动归档、不会丢。',
     '- 想翻旧事 / 想确认某人某事：调 查询记忆（memory_query）；【记忆】段里写了"另有 N 条已归档"时，用 检索记忆（memory_search）按关键词搜。',
     '- 每次扫一眼【记忆】，只有自然相关才主动提起；不要为了用记忆而硬聊旧话题。'
   ].join('\n');

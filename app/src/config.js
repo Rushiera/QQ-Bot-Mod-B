@@ -88,6 +88,9 @@ const DEFAULTS = {
     mainPort: 8080,
     vipUser: '569145850',
     idleCloseMs: 180 * 60 * 1000,
+    // CH4 会话根（空 = 启动时从 CH4 受控根表自动解析：`<data>/sessions`）——
+    // 有它才能读会话视图（末条发言者 / 收工态 / 本轮调用数）与 cat.cfg 的上工挂载。
+    sessionsRoot: '',
     // 开场巡检最多截几只猫（0 = 不限——开启时把有会话的猫全部发一遍）
     tourLimit: 0,
     // 「截全」口径：开场巡检 / 手动截图取会话的条数上限（keyinfo max）——取够，不截尾

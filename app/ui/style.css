@@ -227,6 +227,10 @@ main { flex: 1; overflow: hidden; display: flex; }
   align-items: start;
 }
 .navx-main, .navx-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.navx-side { align-self: stretch; }
+.navx-side > .navx-card { flex: 1; min-height: 0; }
+.navx-side > .navx-card > .navx-card-body { flex: 1; min-height: 0; }
+.navx-side > .navx-card .navx-pre { max-height: none; flex: 1; min-height: 120px; }
 .navx-foot {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -341,41 +345,56 @@ main { flex: 1; overflow: hidden; display: flex; }
 .navx-empty { color: var(--muted); font-size: 11.5px; margin: 0; line-height: 1.6; }
 .navx-tip { color: var(--muted); font-size: 11px; margin: 0; line-height: 1.5; }
 
-/* ── 猫群列表（chip 形态 · 对齐并发协议 .cbar-item） ────── */
-.navx-catlist { display: flex; flex-direction: column; max-height: 340px; overflow: auto; margin: -2px; padding: 2px; }
+/* ── 猫实体条（横排 · 对齐并发协议 .catbar / .cbar-item） ── */
+.navx-catbar {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding: 6px 10px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel);
+}
+.navx-catbar-label { font-size: 10.5px; color: var(--muted); letter-spacing: .4px; }
+.navx-catbar-items { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
 .navx-cat {
   display: flex; align-items: center; gap: 6px;
-  padding: 3px 8px; border-radius: 6px;
-  border: 1px solid transparent;
-  cursor: pointer; overflow: hidden;
-  white-space: nowrap;
+  padding: 2px 8px; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--panel-2);
+  cursor: pointer; white-space: nowrap; max-width: 100%; font-size: 11.5px;
 }
-.navx-cat:hover { border-color: var(--accent); background: #16233a; }
-.navx-cat.active { border-color: #2d4a72; background: #16233a; }
+.navx-cat:hover { border-color: var(--accent); }
+.navx-cat.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px rgba(79, 156, 249, .35); }
 .navx-cat.off { opacity: .45; }
 .navx-cat-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
-.navx-cat.idle .navx-cat-dot { background: var(--ok); }
-.navx-cat.busy .navx-cat-dot { background: #d7ba5b; animation: navx-pulse 1.2s ease-in-out infinite; }
-.navx-cat.reset .navx-cat-dot { background: #b07fd0; animation: navx-pulse 1.2s ease-in-out infinite; }
-.navx-cat.reset { border-color: #4a3560; background: #1f1729; }
-.navx-cat-name { font-size: 12.5px; font-weight: 600; }
-.navx-cat-port { font-size: 10px; color: var(--off); font-variant-numeric: tabular-nums; }
-.navx-pill {
-  font-size: 10px; padding: 0 6px; border-radius: 999px;
-  border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
-}
-.navx-pill.idle { color: var(--ok); border-color: #284a37; background: #152a1f; }
-.navx-pill.busy { color: #d7ba5b; border-color: #4a3d20; background: #2a2315; }
-.navx-pill.reset { color: #b07fd0; border-color: #4a3560; background: #241a33; }
+.navx-cat-name { font-weight: 600; font-size: 12px; color: var(--text); }
+.navx-cat-tag { font-size: 10px; color: var(--muted); max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+.navx-cat-act { font-size: 10px; color: #d7ba5b; }
 .navx-cat-ctx { font-size: 10.5px; color: #7f8a99; font-variant-numeric: tabular-nums; }
-.navx-cat-calls { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.navx-cat-ago { font-size: 10px; color: var(--off); font-variant-numeric: tabular-nums; }
-.navx-cat-tools { display: flex; gap: 3px; margin-left: auto; opacity: 0; transition: opacity .12s; }
-.navx-cat-tools .navx-mini { padding: 0 5px; font-size: 10px; }
-.navx-cat:hover .navx-cat-tools,
-.navx-cat.active .navx-cat-tools { opacity: 1; }
-.navx-cat:hover .navx-cat-ago,
-.navx-cat.active .navx-cat-ago { display: none; }
+.navx-cat-calls { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.navx-pill {
+  font-size: 10px; padding: 0 6px; border-radius: 999px; line-height: 1.6;
+  border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+}
+/* 状态色——点与药丸同色（空闲绿 / 跑动琥珀 / 有回复蓝 / 异常橙红 / 收工紫）；三种中间态闪 */
+.navx-cat.ct-idle .navx-cat-dot { background: var(--ok); }
+.navx-cat.ct-idle .navx-pill { color: var(--ok); border-color: #284a37; background: #152a1f; }
+.navx-cat.ct-busy { border-color: #4a3d20; background: #2a2315; }
+.navx-cat.ct-busy .navx-cat-dot { background: #d7ba5b; animation: navx-pulse 1.2s ease-in-out infinite; }
+.navx-cat.ct-busy .navx-pill { color: #d7ba5b; border-color: #4a3d20; background: #1e1a10; }
+.navx-cat.ct-news { border-color: #2f5d80; background: #122738; }
+.navx-cat.ct-news .navx-cat-dot { background: #4aa8dc; box-shadow: 0 0 0 2px rgba(74, 168, 220, .22); }
+.navx-cat.ct-news .navx-pill { color: #4aa8dc; border-color: #2f5d80; background: #122738; }
+.navx-cat.ct-stalled { border-color: #7d4530; background: #2a1c15; }
+.navx-cat.ct-stalled .navx-cat-dot { background: #e0733c; animation: navx-pulse 1.2s ease-in-out infinite; }
+.navx-cat.ct-stalled .navx-pill { color: #e0733c; border-color: #7d4530; background: #2a1c15; }
+.navx-cat.ct-overdoing { border-color: #5a3f77; background: #241a33; }
+.navx-cat.ct-overdoing .navx-cat-dot { background: #b07fd0; animation: navx-pulse 1.2s ease-in-out infinite; }
+.navx-cat.ct-overdoing .navx-pill { color: #b07fd0; border-color: #5a3f77; background: #241a33; }
+.navx-cat.ct-overdone { border-color: #4a3560; background: #1f1729; }
+.navx-cat.ct-overdone .navx-cat-dot { background: #9a6fb5; }
+.navx-cat.ct-overdone .navx-pill { color: #9a6fb5; border-color: #4a3560; background: #1f1729; }
+.navx-cat.ct-overdone .navx-pill.ok { color: var(--ok); }
+.navx-cat.ct-reset { border-color: #5a3f77; background: #241a33; }
+.navx-cat.ct-reset .navx-cat-dot { background: #b07fd0; animation: navx-pulse 1.2s ease-in-out infinite; }
+.navx-cat.ct-reset .navx-pill { color: #b07fd0; border-color: #5a3f77; background: #241a33; }
 @keyframes navx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 .navx-mini {
   padding: 1px 7px;
@@ -503,6 +522,30 @@ main { flex: 1; overflow: hidden; display: flex; }
 .navx-details > summary:hover { color: var(--text); }
 .navx-details .navx-card-body { border-top: 1px solid var(--line); }
 .navx-details[open] > summary { border-bottom: 1px solid var(--line); }
+
+/* ── 猫条右键菜单（对猫的指令：详情 / 截图 / 新会话 / 整理） ── */
+.navx-menu {
+  position: fixed; z-index: 9999; min-width: 134px;
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 7px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .5);
+}
+.navx-menu-head {
+  font-size: 10.5px; color: var(--muted);
+  padding: 2px 8px 5px; margin-bottom: 3px;
+  border-bottom: 1px solid var(--line);
+  max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.navx-menu-item {
+  background: none; border: 0; color: var(--text);
+  text-align: left; font: inherit; font-size: 12px;
+  padding: 4px 10px; border-radius: 4px; cursor: pointer;
+}
+.navx-menu-item:hover { background: #1d2c42; color: var(--accent); }
+.navx-menu-item:disabled { opacity: .45; cursor: default; }
+.navx-menu-item:disabled:hover { background: none; color: var(--text); }
 
 /* ── 窄屏回落 ─────────────────────────────────────────── */
 @media (max-width: 1180px) {

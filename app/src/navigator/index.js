@@ -11,6 +11,9 @@ import path from 'node:path';
 import { createNavigatorState, IDLE_CLOSE_MS } from './state.js';
 import { createLineStore } from './lines.js';
 import { createCh4Client } from './ch4.js';
+// 猫的派生状态（末条发言者 / 收工态 / 上工挂载 / 本轮调用数）——读会话视图与 cat.cfg，
+// 补宿主 /api/v1/cats 不提供的四件事；判据逐条复刻并发协议面板（design-qqbotb_log §一百二十九）。
+import { createCatMeta } from './catmeta.js';
 import { createCatWatcher } from './watch.js';
 import { createShotService } from './shot.js';
 import { createComfyService } from './comfy.js';
@@ -226,6 +229,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   // 交报告后多久自动收线（毫秒）——A 期无验证猫，靠这个把「待收」清出活跃面
   const lineCloseAfterMs = Number(linesConf.closeAfterMs) > 0 ? Number(linesConf.closeAfterMs) : 30 * 60 * 1000;
   const ch4 = createCh4Client({ log, mainPort: Number(navConfig.mainPort) || 8080 });
+  // 派生状态读取器——会话根从 CH4 受控根表（data 根）解析，可被 `navigator.sessionsRoot` 覆盖
+  const catMeta = createCatMeta({
+    log,
+    mainPort: Number(navConfig.mainPort) || 8080,
+    sessionsRoot: String(navConfig.sessionsRoot || '')
+  });
   const watcher = createCatWatcher({ log });
   // think 摘要配置（会话分析「读全」的 think 段——方案 A：交 LLM 总结，不整段倾倒）
   const summaryConf = { ...SUMMARY_DEFAULTS, ...(navConfig.summary ?? {}) };
@@ -3106,6 +3115,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     let error = '';
     try {
       cats = await ch4.cats();
+      // 派生字段（speaker / calls / mount / overwork）——读失败不影响主状态，出声后按宿主字段显示
+      try {
+        cats = await catMeta.enrich(cats);
+      } catch (err) {
+        log?.warn?.(`[nav] 猫派生状态读取失败：${String(err?.message ?? err)}`);
+      }
     } catch (err) {
       error = String(err?.message ?? err);
     }

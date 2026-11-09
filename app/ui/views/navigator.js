@@ -28,6 +28,9 @@
   /** 状态轮询间隔（毫秒）——页面可见时。 */
   const TICK_MS = 5000;
 
+  /** 宿主 runState → 「在跑什么」——chip 里跟着状态药丸显示，避免「跑动」这个词什么也没说。 */
+  const ACTION_TEXT = { link: '连接', think: '思考', tool: '工具', run: '在跑', reply: '回复', wait: '等待' };
+
   /** 生成能力（分段选择一项 = 一张表单）。 */
   const KINDS = [
     { id: 'moss', label: '生图' },
@@ -278,27 +281,28 @@
     );
     const advCard = el('section', { class: 'navx-card' }, advDetails);
 
-    // ── 猫群卡 ──
+    // ── 猫实体条（一整行 · 对齐并发协议 .catbar）——点 = 选中（投递目标 + 详情），不是发消息
     const catCount = el('span', { class: 'navx-count', text: '0' });
-    const catsBox = el('div', { class: 'navx-catlist' });
-    const catsCard = el('section', { class: 'navx-card' },
-      cardHead(el, '猫群', catCount),
-      el('div', { class: 'navx-card-body' }, catsBox)
+    const catsBox = el('div', { class: 'navx-catbar-items' });
+    const catBar = el('div', { class: 'navx-catbar' },
+      el('span', { class: 'navx-catbar-label', text: '猫' }),
+      catCount,
+      catsBox
     );
 
     // ── 详情卡 ──
     const detailTitle = el('h3', { text: '单猫详情' });
-    const detailShotBtn = el('button', { class: 'navx-mini', text: '截图' });
-    const detailBox = el('pre', { class: 'navx-pre navx-tall', text: '点猫群里某只猫的「详情」。' });
+    const detailBox = el('pre', { class: 'navx-pre navx-tall', text: '右键猫条上的任意一只猫 → 详情 / 截图 / 新会话 / 整理。' });
     const detailCard = el('section', { class: 'navx-card' },
-      el('div', { class: 'navx-card-head' }, detailTitle, el('div', { class: 'navx-card-actions' }, detailShotBtn)),
+      el('div', { class: 'navx-card-head' }, detailTitle,
+        el('span', { class: 'navx-tip', text: '右键猫条 · 左侧点选猫 = 切投递目标' })),
       el('div', { class: 'navx-card-body' }, detailBox)
     );
 
     // ── 截图卡 ──
     const shotCount = el('span', { class: 'navx-count', text: '未截' });
     const shotsBox = el('div', { class: 'navx-shots' },
-      el('p', { class: 'navx-empty', text: '点猫群里某只猫的「截图」出一张会话卡（只读，不给猫发消息）。长会话按段分张。' })
+      el('p', { class: 'navx-empty', text: '点猫条里某只猫的「截图」出一张会话卡（只读，不给猫发消息）。长会话按段分张。' })
     );
     const shotCard = el('section', { class: 'navx-card navx-span3' },
       cardHead(el, '会话截图', shotCount),
@@ -341,11 +345,12 @@
 
     // ── 组装 ──
     const mainCol = el('div', { class: 'navx-main' }, sendCard, genCard, advCard);
-    const sideCol = el('div', { class: 'navx-side' }, catsCard, detailCard);
+    const sideCol = el('div', { class: 'navx-side' }, detailCard);
     const foot = el('div', { class: 'navx-foot' }, lineCard, activityCard, artCard, logCard, shotCard);
 
     host.appendChild(el('div', { class: 'navx' },
       hero,
+      catBar,
       el('div', { class: 'navx-body' }, mainCol, sideCol),
       foot
     ));
@@ -356,13 +361,21 @@
       catSelect, sendText, sendBtn, sendResult,
       seg, segButtons, genFields, genDeliver, genTarget, genBtn, genResult,
       advIntentInput, advIntentBtn, advIntentOut, advModeOut, advShadowBtn, advLiveBtn, advPersonaOut, advHubOut, advDetails,
-      catCount, catsBox, detailTitle, detailShotBtn, detailBox, shotCount, shotsBox,
+      catCount, catsBox, catBar, detailTitle, detailBox, shotCount, shotsBox,
       artCount, artClear, artBox, actCount, activityBox, lineCount, lineBox, logCount, logBox
     };
 
     bindEvents();
     renderSeg();
     renderFields();
+
+    if (!state.menuBound) {
+      state.menuBound = true;
+      document.addEventListener('click', closeCatMenu);
+      document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeCatMenu(); });
+      window.addEventListener('blur', closeCatMenu);
+      window.addEventListener('resize', closeCatMenu);
+    }
   }
 
   /**
@@ -433,10 +446,6 @@
       await act('/api/nav/artifacts/clear', {});
       r.artClear.disabled = false;
       await refresh(false);
-    });
-
-    r.detailShotBtn.addEventListener('click', () => {
-      if (state.cat) shoot(state.cat);
     });
 
     r.advDetails.addEventListener('toggle', () => {
@@ -779,13 +788,73 @@
    *
    * @returns {void}
    */
+  /** 当前打开的猫条右键菜单（同一时刻只允许一个）。 */
+  let catMenu = null;
+
+  /**
+   * 关掉右键菜单（点任意处 / Esc / 选中菜单项都走这里）。
+   *
+   * @returns {void}
+   */
+  function closeCatMenu() {
+    if (catMenu && catMenu.parentNode) catMenu.parentNode.removeChild(catMenu);
+    catMenu = null;
+  }
+
+  /**
+   * 打开猫条右键菜单——对猫的四条指令都在这里（详情 / 截图 / 新会话 / 整理）。
+   *
+   * @param {MouseEvent} event 右键事件（取其坐标）
+   * @param {string} key 猫的寻址键
+   * @param {string} label 菜单头显示的名字
+   * @param {boolean} resetting 该猫是否正在整理（整理项置灰）
+   * @returns {void}
+   */
+  function openCatMenu(event, key, label, resetting) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeCatMenu();
+    const el = ui().el;
+    if (!el) return;
+    state.cat = key;
+    if (refs && refs.catSelect) refs.catSelect.value = key;
+    renderCats();
+
+    /**
+     * 建一个菜单项。
+     *
+     * @param {string} text 文案
+     * @param {Function} run 点击动作
+     * @param {boolean} [disabled] 是否置灰
+     * @returns {Element} 菜单项
+     */
+    const item = (text, run, disabled) => el('button', {
+      class: 'navx-menu-item',
+      text,
+      disabled: !!disabled,
+      onclick: () => { closeCatMenu(); run(); }
+    });
+
+    catMenu = el('div', { class: 'navx-menu', style: { left: `${event.clientX}px`, top: `${event.clientY}px` } },
+      el('div', { class: 'navx-menu-head', text: label }),
+      item('详情', () => showDetail(key)),
+      item('截图', () => shoot(key)),
+      item('新会话', () => newSession(key)),
+      item((state.acting.has(`reset:${key}`) || resetting) ? '整理中…' : '整理', () => resetSession(key),
+        state.acting.has(`reset:${key}`) || resetting)
+    );
+    document.body.appendChild(catMenu);
+    // 贴边收口——右下角右键时菜单不冲出视口
+    const box = catMenu.getBoundingClientRect();
+    if (box.right > window.innerWidth - 8) catMenu.style.left = `${Math.max(8, window.innerWidth - box.width - 8)}px`;
+    if (box.bottom > window.innerHeight - 8) catMenu.style.top = `${Math.max(8, window.innerHeight - box.height - 8)}px`;
+  }
+
   function renderCats() {
     const el = ui().el;
     if (!el || !refs) return;
     const s = state.status || {};
     const cats = sortCats(Array.isArray(s.cats) ? s.cats : []);
-    const busy = new Set(Array.isArray(s.busy) ? s.busy : []);
-    // 整理在途（服务端在途表）——后台整理几分钟，按钮要在这整段时间里保持置灰
     const resettingKeys = new Set(
       (Array.isArray(s.resetting) ? s.resetting : []).map((item) => String(item?.key || ''))
     );
@@ -804,57 +873,59 @@
     for (const row of cats) {
       const key = String(row.id || row.name || '');
       const runState = String(row.runState || row.phase || '');
-      const working = busy.has(key) || runState === 'run' || runState === 'running' || runState === 'waiting';
       const resetting = resettingKeys.has(key) || resettingKeys.has(String(row.name || ''));
       const off = row.running === false;
-      const tone = off ? 'off' : resetting ? 'reset' : working ? 'busy' : 'idle';
-      const label = off ? '未运行' : resetting ? '整理中' : working ? '跑动' : '空闲';
-      // 前文体量按字符算（token 在空会话里恒 0，字符数恒有值）；tip 里给 token 与条数
-      const ctxK = Math.round((Number(row.contextChars) || 0) / 1000)
-        || Math.round((Number(row.context) || 0) / 1000);
-      const calls = Number(row.requests) || 0;
+      const calls = Number(row.calls) || 0;
+      const nctx = Number(row.contextCount) || 0;
+      // 与并发协议 catChipHtml 同判据：有回复 = 空闲且末条是猫；异常 = 有前文、空闲、末条不是猫
+      const news = !off && runState === 'idle' && row.speaker === 'cat';
+      const stalled = !off && runState === 'idle' && row.speaker !== 'cat' && nctx > 1;
+      // 档位优先级：整理中（本项目本地态）→ 未运行 → 收工三档 → 有回复 → 异常 → 空闲 → 跑动
+      let st;
+      if (resetting) st = { cls: 'ct-reset', text: '整理中' };
+      else if (off) st = { cls: 'ct-off', text: '未运行' };
+      else if (row.overwork === 'doing') st = { cls: 'ct-overdoing', text: '正在收工' };
+      else if (row.overwork === 'done') st = { cls: 'ct-overdone', text: '已收工核销', ok: true };
+      else if (row.overwork === 'doneOpen') st = { cls: 'ct-overdone', text: '有未尽事宜' };
+      else if (news) st = { cls: 'ct-news', text: '有回复' };
+      else if (stalled) st = { cls: 'ct-stalled', text: '异常' };
+      else if (runState === 'idle') st = { cls: 'ct-idle', text: '空闲' };
+      else st = { cls: 'ct-busy', text: '跑动' };
+      const act = ACTION_TEXT[runState] || '';
+      const tokK = Math.round((Number(row.context) || 0) / 1000);
       const agoMs = row.lastActiveAt ? now - Number(row.lastActiveAt) : 0;
       const tip = [
         `${row.name || key}${row.special ? '（主干）' : ''} · 端口 ${row.port || '—'}`,
-        `状态 ${label}${runState ? `（${runState}）` : ''}`,
-        ctxK ? `前文 ${ctxK}k 字符 · 约 ${Math.round((Number(row.context) || 0) / 1000)}k tok · ${row.contextCount || 0} 条` : '',
-        `累计 ${calls} 次调用${row.round ? ` · 第 ${row.round} 轮` : ''}`,
+        `状态 ${st.text}${runState ? `（${runState}）` : ''}`,
+        row.mount ? `上工 ${row.mount}` : '',
+        row.overwork === 'doing' ? '正在收工：人已说收工 / 报告还没出' : '',
+        row.overwork === 'done' ? `已收工核销${row.overworkHits ? `：${row.overworkHits}` : ''}` : '',
+        row.overwork === 'doneOpen' ? `有未尽事宜：${row.overworkHits || '—'}` : '',
+        news ? '里面有回复：末条是猫说的（人还没接话）' : '',
+        stalled ? `异常：前文 ${nctx} 条，但当前空闲且末条不是猫的回复` : '',
+        tokK ? `前文 ${tokK}k tok · ${nctx} 条` : `前文 ${nctx} 条`,
+        `本轮调用 ${calls} 次 · 累计 ${Number(row.requests) || 0} 次${row.round ? ` · 第 ${row.round} 轮` : ''}`,
         agoMs > 0 ? `最近活动 ${span(agoMs)}前` : '',
         row.pending ? `排队 ${row.pending} 条` : ''
       ].filter(Boolean).join('\n');
-      const line = el('div', {
-        class: `navx-cat ${tone}${key === state.cat ? ' active' : ''}`,
+      refs.catsBox.appendChild(el('div', {
+        class: `navx-cat ${st.cls}${key === state.cat ? ' active' : ''}`,
         title: tip,
-        onclick: () => { state.cat = key; refs.catSelect.value = key; renderCats(); }
+        onclick: () => { state.cat = key; refs.catSelect.value = key; renderCats(); },
+        oncontextmenu: (event) => openCatMenu(event, key, String(row.name || key), resetting)
       },
         el('span', { class: 'navx-cat-dot' }),
         el('span', { class: 'navx-cat-name', text: String(row.name || key) }),
-        el('span', { class: `navx-pill ${tone}`, text: label }),
-        ctxK ? el('span', { class: 'navx-cat-ctx', text: `${ctxK}k` }) : null,
-        el('span', { class: 'navx-cat-calls', text: `${calls} 次` }),
-        agoMs > 0 ? el('span', { class: 'navx-cat-ago', text: `${span(agoMs)}前` }) : null,
-        el('span', { class: 'navx-cat-tools' },
-          el('button', { class: 'navx-mini', text: '详情', onclick: (event) => { event.stopPropagation(); showDetail(key); } }),
-          el('button', { class: 'navx-mini', text: '截图', onclick: (event) => { event.stopPropagation(); shoot(key); } }),
-          el('button', { class: 'navx-mini', text: '新会话', onclick: (event) => { event.stopPropagation(); newSession(key); } }),
-          el('button', {
-            class: 'navx-mini',
-            text: (state.acting.has(`reset:${key}`) || resetting) ? '整理中…' : '整理',
-            title: '前文整理重启（后台执行——同猫串行，不同猫并发）',
-            disabled: state.acting.has(`reset:${key}`) || resetting,
-            onclick: (event) => { event.stopPropagation(); resetSession(key); }
-          })
-        )
-      );
-      refs.catsBox.appendChild(line);
+        row.mount && !String(row.name || '').includes(row.mount)
+          ? el('span', { class: 'navx-cat-tag', text: row.mount }) : null,
+        el('span', { class: `navx-pill${st.ok ? ' ok' : ''}`, text: st.text }),
+        act ? el('span', { class: 'navx-cat-act', text: act }) : null,
+        tokK ? el('span', { class: 'navx-cat-ctx', text: `${tokK}k` }) : null,
+        calls ? el('span', { class: 'navx-cat-calls', text: `${calls} 次` }) : null
+      ));
     }
   }
 
-  /**
-   * 单猫详情（JSON 只读块，超长截断）。
-   *
-   * @returns {void}
-   */
   function renderDetail() {
     if (!refs || !state.detail) return;
     const key = state.detailKey || state.cat;

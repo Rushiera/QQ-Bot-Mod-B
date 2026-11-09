@@ -193,10 +193,17 @@
     // 目标提示「→ 群名」放在标签这一行（上面），不占下拉下面的位置。
     const genTarget = el('span', { class: 'navx-target', text: '→ 未定' });
     const chatSelect = el('select', { class: 'navx-stat-select', title: '回消息群 / 产物落地：不发群消息 · 消息跟随（当前群名） · 具体群' });
+    // 发群类型六个按钮（Rushiera 2026-11-09 · v1.62）——五类各自开关 + 一个「全开 / 全关」总控。
+    // 发不发群由这里定，不再由领航员开关定；开关领航员时整组回落一次
+    // （开 → 五类全开；关 → 只留「我的截图 + 生成产物」）。
+    const kindBar = el('div', { class: 'navx-dkinds' });
+    const kindNote = el('span', { class: 'navx-dkind-note' });
     const statChat = el('div', { class: 'navx-stat wide' },
       el('div', { class: 'navx-stat-line' },
         el('span', { class: 'navx-stat-k', text: '回消息群' }), genTarget),
-      chatSelect
+      chatSelect,
+      kindBar,
+      kindNote
     );
     const statIdle = el('div', { class: 'navx-stat' },
       el('span', { class: 'navx-stat-k', text: '空闲 / 阈值' }),
@@ -362,7 +369,7 @@
     ));
 
     refs = {
-      dot, heroMain, heroTitle, heroSub, toggle, refreshBtn, chatSelect,
+      dot, heroMain, heroTitle, heroSub, toggle, refreshBtn, chatSelect, kindBar, kindNote,
       statIdle, statWatch, statBusy, statVip, statMode,
       catSelect, sendText, sendBtn, sendResult,
       seg, segButtons, genFields, genTarget, genBtn, genResult,
@@ -411,6 +418,29 @@
       r.chatSelect.disabled = false;
       if (result.ok !== true) {
         r.genResult.textContent = `回消息群设置失败：${result.error || '未知原因'}`;
+      }
+      await refresh(false);
+    });
+
+    // 发群类型六个按钮（v1.62）——点一下改一个类型；「全开 / 全关」走 mode 总控。
+    // 服务端落盘后重渲染：按钮状态只认接口回执，不在前端猜。
+    r.kindBar.addEventListener('click', async (event) => {
+      const target = event.target;
+      const btn = target && target.closest ? target.closest('.navx-dkind') : null;
+      if (!btn || btn.disabled) return;
+      const all = btn.dataset.all === '1';
+      const kind = String(btn.dataset.kind || '');
+      if (!all && !kind) return;
+      btn.disabled = true;
+      r.kindNote.textContent = '';
+      const payload = all
+        ? { mode: String(btn.dataset.mode || 'all') }
+        : { kinds: { [kind]: btn.dataset.next === '1' } };
+      const result = await act('/api/nav/deliver', payload);
+      btn.disabled = false;
+      if (result.ok !== true) {
+        r.kindNote.textContent = `设置失败：${result.error || '未知原因'}`;
+        return;
       }
       await refresh(false);
     });
@@ -749,6 +779,40 @@
       : '产物落地：不发群消息（只落产物区）';
     // 目标提示放在标签这一行（上面）
     refs.genTarget.textContent = state.deliverTarget ? `→ ${pickedName}` : '→ 不发群';
+
+    // 发群类型六个按钮（v1.62）——五类各自开关 + 「全开 / 全关」总控。
+    // 状态只从服务端读（手工设置立即落盘；开关领航员的整组回落只发生在 open / close 那一次）。
+    const kinds = (s.deliver && typeof s.deliver === 'object') ? s.deliver : {};
+    const KINDS = [
+      ['reply', '猫回复'],
+      ['progress', '进度播报'],
+      ['shot', '我的截图'],
+      ['media', '生成产物'],
+      ['receipt', '系统回执']
+    ];
+    const onCount = KINDS.filter(([key]) => kinds[key] === true).length;
+    const allOn = onCount === KINDS.length;
+    refs.kindBar.textContent = '';
+    const allBtn = el('button', {
+      class: `navx-dkind all${allOn ? ' on' : ''}`,
+      title: allOn ? '五类都不发群（全关）' : '五类都发群（全开）',
+      text: allOn ? '全关' : '全开'
+    });
+    allBtn.dataset.all = '1';
+    allBtn.dataset.mode = allOn ? 'none' : 'all';
+    refs.kindBar.appendChild(allBtn);
+    for (const [key, label] of KINDS) {
+      const on = kinds[key] === true;
+      const btn = el('button', {
+        class: `navx-dkind${on ? ' on' : ''}`,
+        title: on ? `${label}：现在发群（点一下关掉）` : `${label}：现在不发群（点一下打开）`,
+        text: label
+      });
+      btn.dataset.kind = key;
+      btn.dataset.next = on ? '0' : '1';
+      refs.kindBar.appendChild(btn);
+    }
+    if (refs.kindNote) refs.kindNote.textContent = '';
 
     const setStat = (node, text, note) => {
       node.textContent = '';

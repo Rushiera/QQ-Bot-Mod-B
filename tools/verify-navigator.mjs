@@ -56,6 +56,49 @@ reloaded.close('idle');
 check('状态机·关闭', reloaded.snapshot().enabled === false && reloaded.snapshot().closedReason === 'idle');
 try { fs.unlinkSync(tmpFile); } catch { /* 清理失败不影响结论 */ }
 
+// ── 1b 发群类型开关（Rushiera 2026-11-09 · v1.62）──────────────────────────
+// 判据：五类各自独立 + 全开 / 全关总控；开关领航员时整组回落一次
+//（开 → 全开 · 关 → 只留 shot + media）；发群原语按类型闸，关了就 skipped 且不发群。
+const tmpDeliver = path.join(os.tmpdir(), `nav-deliver-${Date.now()}.json`);
+const dState = createNavigatorState({ file: tmpDeliver, log });
+dState.load();
+const dInit = dState.snapshot().deliver;
+check('发群类型·初值（未开启 = 只留截图与产物）',
+  dInit.reply === false && dInit.progress === false && dInit.shot === true && dInit.media === true && dInit.receipt === false,
+  JSON.stringify(dInit));
+dState.open({ by: 'app' });
+const dOpen = dState.snapshot().deliver;
+check('发群类型·开启回落全开', Object.values(dOpen).every((v) => v === true), JSON.stringify(dOpen));
+dState.setDeliverKinds({ reply: false });
+check('发群类型·单键关闭', dState.snapshot().deliver.reply === false && dState.snapshot().deliver.progress === true);
+dState.setDeliverKinds({}, 'none');
+check('发群类型·全关', Object.values(dState.snapshot().deliver).every((v) => v === false));
+dState.setDeliverKinds({}, 'all');
+check('发群类型·全开', Object.values(dState.snapshot().deliver).every((v) => v === true));
+dState.close('manual');
+const dClose = dState.snapshot().deliver;
+check('发群类型·关闭回落（只留截图与产物）',
+  dClose.reply === false && dClose.progress === false && dClose.shot === true && dClose.media === true && dClose.receipt === false,
+  JSON.stringify(dClose));
+check('发群类型·判据出口 allows', dState.allows('shot') === true && dState.allows('reply') === false && dState.allows('') === true);
+try { fs.unlinkSync(tmpDeliver); } catch { /* 清理失败不影响结论 */ }
+
+const gSent = [];
+const navGate = createNavigator({
+  log,
+  dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'nav-gate-')),
+  config: { navigator: { mainPort: 8080, vipUser: '569145850', services: [] } },
+  onebot: { call: async (action, params) => { gSent.push({ action, params }); return {}; } }
+});
+navGate.state.setDeliverKinds({}, 'none');
+const gSkip = await navGate.say('689942975', '自测', 'reply');
+check('发群原语·开关关闭 → skipped 且未发群', gSkip.skipped === true && gSent.length === 0, JSON.stringify(gSkip));
+navGate.state.setDeliverKinds({}, 'all');
+const gSend = await navGate.say('689942975', '自测', 'reply');
+check('发群原语·开关打开 → 真发群', gSend.ok === true && gSent.length === 1, `发群 ${gSent.length} 次`);
+check('路由·POST /api/nav/deliver 在位', typeof navGate.api['POST /api/nav/deliver'] === 'function', typeof navGate.api['POST /api/nav/deliver']);
+navGate.stop();
+
 // ── 2 CH4 猫面 ──────────────────────────────────────────────────────────────
 const ch4 = createCh4Client({ log });
 let cats = [];
@@ -252,15 +295,20 @@ navLight.handleEvent({
 check('事件入口·由 hub 扇出可投递', navLight.viaHub === true, String(navLight.viaHub));
 const pass = await navLight.send({ key: 'no-such-cat-selftest', text: '自测', by: 'qq' });
 check('轻通道·未开启 + 新鲜 VIP → 放行（非 offMode）', pass.offMode !== true, JSON.stringify(pass).slice(0, 90));
-const rej2 = await navLight.send({ key: 'majordomo', text: '自测' });
-check('轻通道·非 qq 通道不受理', rej2.ok === false && rej2.offMode === true, String(rej2.error ?? ''));
+// v1.62：未开启时「投递受不受理」不再只看 qq 通道 / 落地档——群已定 + 任一发群类型亮着就受理
+// （发不发群交给面板五个按钮：关掉领航员时回落成「只留点截图 + 生成产物」，所以默认仍放行）。
+// 全关 + 落地档空 → 回到不受理。
+const rej2 = await navLight.send({ key: 'no-such-cat-selftest', text: '自测' });
+check('轻通道·未开启 + 群已定 + 类型开关亮 → 放行（v1.62）', rej2.offMode !== true, JSON.stringify(rej2).slice(0, 90));
 // 落地档（Rushiera 2026-11-09 · v1.60）——「回消息群被主动指定」本身即放行口，不看开关
 navLight.state.setDeliverTarget('940257985');
 const viaTarget = await navLight.send({ key: 'no-such-cat-selftest', text: '自测', by: 'app' });
 check('轻通道·未开启但落地档已指定 → 放行（非 offMode）', viaTarget.offMode !== true, JSON.stringify(viaTarget).slice(0, 90));
 navLight.state.setDeliverTarget('');
+navLight.state.setDeliverKinds({}, 'none');
 const rej3 = await navLight.send({ key: 'majordomo', text: '自测', by: 'app' });
-check('轻通道·落地档清空后未开启 → 恢复不受理', rej3.ok === false && rej3.offMode === true, String(rej3.error ?? ''));
+check('轻通道·未开启 + 类型全关 + 落地档空 → 恢复不受理', rej3.ok === false && rej3.offMode === true, String(rej3.error ?? ''));
+navLight.state.setDeliverKinds({}, 'all');
 navLight.stop();
 
 // ── 8 轻通道：回复观测的登记与撤除（Rushiera 2026-10-14）────────────────────
@@ -428,7 +476,7 @@ check('会话截图·分段口径源码在位（shootSegments + 壳层滚动截�
   shotSrcFile.includes('async function shootSegments') && mainSrcFile.includes('window.scrollTo'), '');
 const shotSrc = fs.readFileSync(path.join(HERE, '..', 'app', 'src', 'navigator', 'index.js'), 'utf8');
 check('会话截图·源码段在位（shotSession + 按序发多张分支）',
-  shotSrc.includes('async function shotSession') && shotSrc.includes('sayImage(target, files[i], caption)'), '');
+  shotSrc.includes('async function shotSession') && shotSrc.includes("sayImage(target, files[i], caption, null, 'shot')"), '');
 navShot.stop();
 
 const passed = results.filter((r) => r.ok).length;

@@ -13,6 +13,48 @@ export const IDLE_CLOSE_MS = 180 * 60 * 1000;
 const COMMAND_LOG_LIMIT = 50;
 
 /**
+ * 发群类型开关（Rushiera 2026-11-09 · v1.62）。
+ *
+ * 五类各自独立控制「这类消息发不发群」：
+ * `reply` 猫回复截图 · `progress` 进度播报 · `shot` 我点的截图 / 分析 ·
+ * `media` 生成产物（生图 / 语音 / 反推 / 改图）· `receipt` 系统回执（开场巡检 / 场次小结 / 开关回执）。
+ *
+ * 🔴 它是**唯一判据**：发不发群由这五个开关定，不再由领航员开不开定（开关只决定
+ * 「自动观测跑不跑」）。落点 = `index.js` 四个发群原语（say / sayImage / sayRecord / sayAt），
+ * 所有路径都过那道闸——漏不掉。
+ */
+export const DELIVER_KINDS = ['reply', 'progress', 'shot', 'media', 'receipt'];
+
+/** 开领航员时的回落组——五类全开（原语义：盯着猫群，有回复就发）。 */
+const DELIVER_OPEN = { reply: true, progress: true, shot: true, media: true, receipt: true };
+
+/**
+ * 关领航员时的回落组（Rushiera 2026-11-09 定）。
+ *
+ * 只留「我要的东西」：`shot` + `media` 亮（点一下截图、生成产物照样发得出来）；
+ * 自动播报 `reply` / `progress` 与系统回执 `receipt` 熄——关掉就是不想被刷屏。
+ */
+const DELIVER_CLOSE = { reply: false, progress: false, shot: true, media: true, receipt: false };
+
+/**
+ * 归一发群开关——补缺键、剔非法键、旧状态文件按 enabled 给默认组。
+ *
+ * @param {object|null|undefined} raw 落盘里的 deliver（可能缺）
+ * @param {boolean} enabled 领航员是否开启（缺字段时决定默认组）
+ * @returns {object} 五键齐备的开关对象
+ */
+function normalizeDeliver(raw, enabled) {
+  const base = enabled === true ? DELIVER_OPEN : DELIVER_CLOSE;
+  const out = { ...base };
+  if (raw && typeof raw === 'object') {
+    for (const key of DELIVER_KINDS) {
+      if (raw[key] === true || raw[key] === false) out[key] = raw[key];
+    }
+  }
+  return out;
+}
+
+/**
  * 状态初值。
  *
  * @returns {object} 初值
@@ -28,6 +70,12 @@ function initialState() {
      * 开关领航员时回落一次：开 → `follow`，关 → `''`（之后手工改不受影响）。
      */
     deliverTarget: '',
+    /**
+     * 发群类型开关（Rushiera 2026-11-09 · v1.62）——五键各自独立（见 `DELIVER_KINDS`）。
+     * 初值按「未开启」给（`DELIVER_CLOSE`）：自动播报熄、点截图与生成产物亮。
+     * 开关领航员时整组回落一次：开 → 全开，关 → `DELIVER_CLOSE`。
+     */
+    deliver: normalizeDeliver(null, false),
     lastCommandAt: 0,
     lastActivityAt: 0,
     lastTarget: null,
@@ -59,7 +107,10 @@ export function createNavigatorState({ file, log }) {
     try {
       if (!fs.existsSync(file)) return state;
       const text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
-      state = { ...initialState(), ...JSON.parse(text) };
+      const parsed = JSON.parse(text);
+      state = { ...initialState(), ...parsed };
+      // 旧状态文件没有 deliver 字段——按 enabled 给默认组（不当成「全关」，也不静默吞）
+      state.deliver = normalizeDeliver(parsed?.deliver, state.enabled === true);
     } catch (error) {
       log.warn('navigator', `状态文件读取失败，回落初值：${error?.message ?? error}`);
     }
@@ -96,8 +147,10 @@ export function createNavigatorState({ file, log }) {
     if (chat !== null && chat !== undefined && chat !== '') state.activeChat = String(chat);
     // 开领航员 → 落地档回落一次到「跟随」（Rushiera 2026-11-09）；之后手工改不被覆盖
     state.deliverTarget = 'follow';
+    // 发群类型开关同样回落一次——开启 = 五类全开（Rushiera 2026-11-09 · v1.62）
+    state.deliver = { ...DELIVER_OPEN };
     save();
-    log.info('navigator', `领航员已开启（来源 ${by}，回消息群 ${state.activeChat ?? '未定'}，落地 ${state.deliverTarget}）`);
+    log.info('navigator', `领航员已开启（来源 ${by}，回消息群 ${state.activeChat ?? '未定'}，落地 ${state.deliverTarget}，发群类型 全开）`);
     return snapshot();
   }
 
@@ -113,8 +166,10 @@ export function createNavigatorState({ file, log }) {
     state.closedReason = reason;
     // 关领航员 → 落地档回落一次到「不发群消息」（Rushiera 2026-11-09）；activeChat 保留
     state.deliverTarget = '';
+    // 发群类型开关同样回落一次——只留「点截图 + 生成产物」，自动播报与系统回执熄（v1.62）
+    state.deliver = { ...DELIVER_CLOSE };
     save();
-    log.info('navigator', `领航员已关闭（${reason}，落地档回落不发群）`);
+    log.info('navigator', `领航员已关闭（${reason}，落地档回落不发群，发群类型 只留截图/产物）`);
     return snapshot();
   }
 
@@ -153,6 +208,51 @@ export function createNavigatorState({ file, log }) {
     if (state.deliverTarget !== value) {
       log.info('navigator', `产物落地档：${state.deliverTarget || '(不发群)'} → ${value || '(不发群)'}`);
       state.deliverTarget = value;
+      save();
+    }
+    return snapshot();
+  }
+
+  /**
+   * 某一类消息现在发不发群（唯一判据出口）。
+   *
+   * @param {string} kind 类型键（`DELIVER_KINDS` 之一；空 / 未知键按「放行」——不误伤未分类调用）
+   * @returns {boolean} true = 发
+   */
+  function allows(kind) {
+    const key = String(kind ?? '').trim();
+    if (!key) return true;
+    if (!DELIVER_KINDS.includes(key)) {
+      log.warn('navigator', `未知的发群类型「${key}」——按放行处理`);
+      return true;
+    }
+    return state.deliver?.[key] === true;
+  }
+
+  /**
+   * 设置发群类型开关（Rushiera 2026-11-09 · v1.62）。
+   *
+   * 两种用法：`mode='all'` 全开 / `mode='none'` 全关（面板「全开 / 全关」按钮），
+   * 或传 `patch` 只改其中几键。手工设置立即落盘——开关领航员的整组回落只发生在 open / close 那一次。
+   *
+   * @param {object} [patch] 单键补丁（`{ reply: false }`）
+   * @param {string} [mode] 总控（`all` / `none`；空 = 只按 patch 改）
+   * @returns {object} 状态快照
+   */
+  function setDeliverKinds(patch = {}, mode = '') {
+    const next = normalizeDeliver(state.deliver, state.enabled === true);
+    if (mode === 'all' || mode === 'none') {
+      const value = mode === 'all';
+      for (const key of DELIVER_KINDS) next[key] = value;
+    }
+    const input = patch && typeof patch === 'object' ? patch : {};
+    for (const key of DELIVER_KINDS) {
+      if (Object.prototype.hasOwnProperty.call(input, key)) next[key] = input[key] === true;
+    }
+    const changed = DELIVER_KINDS.filter((key) => (state.deliver?.[key] === true) !== next[key]);
+    if (changed.length > 0) {
+      state.deliver = next;
+      log.info('navigator', `发群类型开关：${DELIVER_KINDS.map((key) => `${key}=${next[key] ? '开' : '关'}`).join(' ')}`);
       save();
     }
     return snapshot();
@@ -211,5 +311,5 @@ export function createNavigatorState({ file, log }) {
     save();
   }
 
-  return { load, save, open, close, setActiveChat, setDeliverTarget, noteCommand, touch, snapshot, file };
+  return { load, save, open, close, setActiveChat, setDeliverTarget, setDeliverKinds, allows, noteCommand, touch, snapshot, file };
 }

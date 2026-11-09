@@ -265,8 +265,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     dataDir,
     conf: comfyConf,
     onebot,
-    sendImage: (chat, file, caption) => sayImage(chat, file, caption),
-    sendText: (chat, text) => say(chat, text),
+    // 生成产物统一归 `media` 类开关（v1.62）——改图 / 生图 / 语音 / 反推的发群都走这一道
+    sendImage: (chat, file, caption) => sayImage(chat, file, caption, null, 'media'),
+    sendText: (chat, text) => say(chat, text, 'media'),
     record,
     onArtifact: (entry) => noteArtifact({ ...entry, source: entry?.source || 'comfy' })
   });
@@ -338,9 +339,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     dataDir,
     conf: mediaConf,
     onebot,
-    sendImage: (chat, file, caption) => sayImage(chat, file, caption),
-    sendText: (chat, text) => say(chat, text),
-    sendRecord: (chat, file, caption) => sayRecord(chat, file, caption),
+    sendImage: (chat, file, caption) => sayImage(chat, file, caption, null, 'media'),
+    sendText: (chat, text) => say(chat, text, 'media'),
+    sendRecord: (chat, file, caption) => sayRecord(chat, file, caption, 'media'),
     record,
     translate: translateForMedia,
     jpPronounsOf: jpPronounsForChat,
@@ -662,14 +663,43 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   // ── 发群（领航员自己的出站——不经业务面闸门）──────────────────────────────
 
   /**
+   * 这一类消息现在发不发群（Rushiera 2026-11-09 · v1.62）。
+   *
+   * 🔴 唯一判据 = 面板「发群类型」开关（`state.allows`）——**与领航员开不开无关**：
+   * 开关领航员只决定自动观测跑不跑；发不发群由这五个按钮定。
+   *
+   * @param {string} kind 类型键（`reply` / `progress` / `shot` / `media` / `receipt`；空 = 不判，放行）
+   * @returns {boolean} true = 发
+   */
+  function allowOutbound(kind) {
+    const key = String(kind ?? '').trim();
+    if (!key) return true;
+    return state.allows(key) === true;
+  }
+
+  /**
+   * 按开关跳过的一次发群——出声（watch 级），语义是「用户关了」，不是失败。
+   *
+   * @param {string} kind 类型键
+   * @returns {object} 统一回执（`skipped:true`）
+   */
+  function skipOutbound(kind) {
+    const key = String(kind ?? '').trim();
+    record('watch', `发群跳过（${key} 类开关已关）`);
+    return { ok: false, skipped: true, error: `开关关闭（${key}）` };
+  }
+
+  /**
    * 发一条群消息。
    *
    * @param {string|number} chat 群号
    * @param {string} text 正文
-   * @returns {Promise<object>} 结果
+   * @param {string} [kind] 发群类型（见 `allowOutbound`；空 = 不判）
+   * @returns {Promise<object>} 结果（`skipped:true` = 该类开关关着，未发）
    */
-  async function say(chat, text) {
+  async function say(chat, text, kind = '') {
     if (chat === null || chat === undefined || chat === '') return { ok: false, error: '未指定群' };
+    if (!allowOutbound(kind)) return skipOutbound(kind);
     const content = String(text ?? '');
     if (!content.trim()) return { ok: false, error: '内容为空' };
     try {
@@ -689,10 +719,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string} file PNG 绝对路径
    * @param {string} [caption] 说明文字
    * @param {string|number|null} [atQq] 需要 @ 的人（QQ 号；空 = 不 @）
-   * @returns {Promise<object>} 结果
+   * @param {string} [kind] 发群类型（见 `allowOutbound`；空 = 不判）
+   * @returns {Promise<object>} 结果（`skipped:true` = 该类开关关着，未发）
    */
-  async function sayImage(chat, file, caption = '', atQq = null) {
+  async function sayImage(chat, file, caption = '', atQq = null, kind = '') {
     if (chat === null || chat === undefined || chat === '') return { ok: false, error: '未指定群' };
+    if (!allowOutbound(kind)) return skipOutbound(kind);
     const message = [];
     if (caption && String(caption).trim()) message.push({ type: 'text', data: { text: String(caption) } });
     message.push({ type: 'image', data: { file: `file:///${String(file).replace(/\\/g, '/')}` } });
@@ -713,10 +745,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string|number} chat 群号
    * @param {string} file WAV 绝对路径
    * @param {string} [caption] 说明文字
-   * @returns {Promise<object>} 结果
+   * @param {string} [kind] 发群类型（见 `allowOutbound`；空 = 不判）
+   * @returns {Promise<object>} 结果（`skipped:true` = 该类开关关着，未发）
    */
-  async function sayRecord(chat, file, caption = '') {
+  async function sayRecord(chat, file, caption = '', kind = '') {
     if (chat === null || chat === undefined || chat === '') return { ok: false, error: '未指定群' };
+    if (!allowOutbound(kind)) return skipOutbound(kind);
     const message = [];
     if (caption && String(caption).trim()) message.push({ type: 'text', data: { text: String(caption) } });
     message.push({ type: 'record', data: { file: `file:///${String(file).replace(/\\/g, '/')}` } });
@@ -736,10 +770,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string|number} chat 群号
    * @param {string} text 正文
    * @param {string|number} [qq] 需要 @ 的人（空 = 不 @）
-   * @returns {Promise<object>} 结果
+   * @param {string} [kind] 发群类型（见 `allowOutbound`；空 = 不判）
+   * @returns {Promise<object>} 结果（`skipped:true` = 该类开关关着，未发）
    */
-  async function sayAt(chat, text, qq = null) {
+  async function sayAt(chat, text, qq = null, kind = '') {
     if (chat === null || chat === undefined || chat === '') return { ok: false, error: '未指定群' };
+    if (!allowOutbound(kind)) return skipOutbound(kind);
     const content = String(text ?? '');
     if (!content.trim()) return { ok: false, error: '内容为空' };
     const message = [{ type: 'text', data: { text: content } }];
@@ -957,8 +993,21 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       return { ok: true, sent: 'none', reason: 'off-line' };
     }
 
+    // 🔴 类型开关（Rushiera 2026-11-09 · v1.62）——「发不发」由面板五个按钮定，**与领航员开关无关**：
+    //    force（用户主动点的截图 / 分析）归 `shot`；自动的回复截图归 `reply`；进度播报归 `progress`。
+    const replyOn = allowOutbound('reply');
+    const progressOn = allowOutbound('progress');
+    if (force && !allowOutbound('shot')) {
+      record('watch', `${catName}：主动截图 / 分析的发群已关（面板开关），静默`);
+      return { ok: true, sent: 'none', reason: 'kind-off' };
+    }
+
     // ① 有新回复 → 截图（只截回复内容）
     if (replyAt > prev.replyAt) {
+      if (!replyOn) {
+        record('watch', `${catName}：猫回复发群已关（面板开关），静默`);
+        return { ok: true, sent: 'none', reason: 'kind-off' };
+      }
       let png = '';
       try {
         png = await shot.shoot({ catName, blocks: replyBlocksOf(rows), at: new Date().toLocaleString('zh-CN', { hour12: false }) });
@@ -970,7 +1019,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         record('error', `出站（${key}）：截图为空，跳过`);
         return { ok: false, sent: 'none', error: 'empty' };
       }
-      const sent = await sayImage(target, png, `${catName} 的回复${label}`);
+      const sent = await sayImage(target, png, `${catName} 的回复${label}`, null, 'reply');
       if (sent.ok) {
         sentLog.set(key, { at: Date.now(), kind: 'reply', replyAt });
         voyageStats.replies += 1;
@@ -990,6 +1039,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     if (trigger !== 'checkpoint') {
       record('watch', `${catName}：无新回复，静默`);
       return { ok: true, sent: 'none' };
+    }
+    if (!progressOn) {
+      record('watch', `${catName}：进度播报发群已关（面板开关），静默`);
+      return { ok: true, sent: 'none', reason: 'kind-off' };
     }
     let resolvedKey = String(key);
     let running = false;
@@ -1057,7 +1110,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     const head = `⏳ ${catName} 还在跑${label}，尚未回复`;
     const body = [head, brief || detail]
       .filter((line) => String(line ?? '').trim()).join('\n');
-    const sent = await sayAt(target, body, vipUser);
+    const sent = await sayAt(target, body, vipUser, 'progress');
     if (sent.ok) {
       sentLog.set(key, { at: Date.now(), kind: 'progress', replyAt: prev.replyAt });
       voyageStats.progress += 1;
@@ -1188,7 +1241,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
           ? `${catName} 的会话`
           : `${catName} 的会话（${i + 1}/${files.length}${i === 0 && dropped > 0 ? `，更早 ${dropped} 段未发` : ''}）`;
         const caption = i === files.length - 1 && insight ? `${head}：\n${insight}` : head;
-        const sent = await sayImage(target, files[i], caption);
+        const sent = await sayImage(target, files[i], caption, null, 'shot');
         if (!sent.ok) {
           sentAll = false;
           result.error = sent.error;
@@ -2085,6 +2138,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   async function runOpeningTour(report) {
     const chat = state.snapshot().activeChat;
     if (!chat) return;
+    if (!allowOutbound('receipt')) {
+      record('watch', '开场巡检跳过（系统回执开关已关）');
+      return;
+    }
     const busy = (report.busy ?? []).slice()
       .sort((a, b) => Number(b.lastActiveAt ?? 0) - Number(a.lastActiveAt ?? 0));
     if (busy.length === 0) return;
@@ -2104,7 +2161,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         });
         const insight = await shot.analyze(png);
         const caption = insight ? `${row.name} 手头这段会话：\n${insight}` : `${row.name} 手头这段会话：`;
-        const sent = await sayImage(chat, png, caption);
+        const sent = await sayImage(chat, png, caption, null, 'receipt');
         if (sent.ok) voyageStats.tours += 1;
         record(sent.ok ? 'send' : 'error', sent.ok ? `开场巡检已发图（${row.name}）` : `开场巡检发图失败：${sent.error}`);
       } catch (error) {
@@ -2547,9 +2604,25 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         text: String(text || '').trim() ? `前文整理：${String(text).trim()}` : '前文整理（清前文 + 注入交接报告 + 继续）',
         by: String(from || 'app')
       });
-      const result = await runResetSession({ key: rawKey, chat, text, rescue, from });
-      if (result && typeof result === 'object') result.line = { id: line.id, status: line.status };
-      return result;
+      try {
+        const result = await runResetSession({ key: rawKey, chat, text, rescue, from });
+        if (result && typeof result === 'object') {
+          result.line = { id: line.id, status: line.status };
+          // 失败关线（2026-11-10）——线只在「已派活等回复」时该开着；流程失败（代读失败 / 中途异常）
+          // 若留着 running，线内/线外判据与群内播报都会把这条死线当成在途任务。
+          if (result.ok === false) {
+            const why = String(result.error || '未知原因').slice(0, 120);
+            lineStore.close(line.id, `failed: ${why}`);
+            record('error', `${rawKey}：前文整理失败，线 ${line.id} 已关（${why}）`);
+          }
+        }
+        return result;
+      } catch (error) {
+        const why = String(error?.message ?? error).slice(0, 120);
+        lineStore.close(line.id, `failed: ${why}`);
+        record('error', `${rawKey}：前文整理异常，线 ${line.id} 已关（${why}）`);
+        throw error;
+      }
     } finally {
       resetPending.delete(rawKey);
       if (alias && alias !== rawKey) resetPending.delete(alias);
@@ -2771,7 +2844,10 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     const target = by === 'qq'
       ? (resolveChat(chat) || before.activeChat)
       : (reason === 'idle' ? before.activeChat : null);
-    if (target) await say(target, voyage.text);
+    // 🔴 退出回执按「关闭前」的系统回执开关判（Rushiera 2026-11-09 · v1.62）——
+    //    上面 state.close() 已把开关整组回落（receipt 熄），若按回落后的值判，这条回执永远发不出。
+    //    口径：退之前 receipt 开着 → 回一句；退之前你自己关掉了 → 安静退出。回落只影响之后。
+    if (target && before.deliver?.receipt === true) await say(target, voyage.text, '');
     // 场次小结进群记——「退出领航员是体面退出」：R喵 要知道自己在这段时间做过什么。
     // 手动退出与空闲自关都走这里（两条关闭路径共用一处沉淀）。
     if (before.activeChat) await sedimentVoyage(before.activeChat, voyage.brief, voyage.stats);
@@ -2814,10 +2890,13 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       return { ok: true, dryRun: true, delivered: false, key: String(key || ''), text: content, chat: chatResolved };
     }
     const enabled = snap0.enabled === true;
-    // 未开启时两条放行口（Rushiera 2026-11-09 · v1.60）：
+    // 未开启时的放行口（Rushiera 2026-11-09 · v1.60 / v1.62）：
     //   ① 轻通道（2026-10-14）——本人（VIP）在群里直接下的指令；
-    //   ② 落地档已指定——「回消息群被主动指定了」就照发，不依赖开关（猫的回复照常截图发群）。
-    const deliverArmed = deliverTarget !== '' && Boolean(chatResolved);
+    //   ② 落地档已指定——「回消息群被主动指定了」就照发，不依赖开关；
+    //   ③ 任一「发群类型」开关亮着且有群（v1.62）——发不发群交给面板五个按钮，投递不再被开关挡住。
+    const kinds = snap0.deliver || {};
+    const anyKindOn = ['reply', 'progress', 'shot', 'media', 'receipt'].some((key) => kinds[key] === true);
+    const deliverArmed = Boolean(chatResolved) && (deliverTarget !== '' || anyKindOn);
     if (!enabled && !(by === 'qq' && vipFresh()) && !deliverArmed) {
       record('error', `领航员未开启——投递不受理（${key}）：${content.slice(0, 40)}`);
       return {
@@ -2934,6 +3013,12 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    */
   async function lightTick(watch) {
     if (watch.done) return;
+    // 猫回复发群关着 = 轻通道没有可交付的东西——直接撤观测，不留「等一个不发的回复」
+    if (!allowOutbound('reply')) {
+      cancelLightWatch(watch.key);
+      record('watch', `轻通道（${watch.key}）：猫回复发群已关（面板开关），撤除观测`);
+      return;
+    }
     if (Date.now() - watch.since > LIGHT_WATCH_MAX_MS) {
       cancelLightWatch(watch.key);
       record('error', `轻通道（${watch.key}）：等回复超时（${Math.round(LIGHT_WATCH_MAX_MS / 60000)} 分钟），撤除`);
@@ -2951,7 +3036,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         record('error', `轻通道（${watch.key}）：截图为空，跳过`);
         return;
       }
-      const sent = await sayImage(watch.chat, png, `${catName} 的回复`);
+      const sent = await sayImage(watch.chat, png, `${catName} 的回复`, null, 'reply');
       record(sent.ok ? 'send' : 'error', sent.ok
         ? `轻通道：回复截图已发群 ${watch.chat}（${catName}）`
         : `轻通道：回复截图发送失败（${sent.error}）`);
@@ -2963,8 +3048,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   /**
    * 受理一次图像编辑——群里的图 → ComfyDock「[生成]」工作区 → 出图发回本群。
    *
-   * 前置两条（Rushiera 2026-10-11 定）：**领航员已开启** + **ComfyDock 在线**——
-   * 缺哪条拒哪条；不受理必须出声，不静默吞（AGENTS §一-4）。
+   * 前置一条（Rushiera 2026-11-09 · v1.62 修订）：**ComfyDock 在线**——
+   * 领航员开不开不再影响受理（发不发群归「生成产物」开关）；不受理必须出声，不静默吞（AGENTS §一-4）。
    *
    * 提交即返回（后台轮询到收口才发群）——云端出图实测 1~3 分钟，工具侧不能阻塞。
    *
@@ -2984,10 +3069,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     // 面板口径（deliver=false）：产出不发群，不要求回消息群
     const panelOnly = deliver === false && by !== 'qq';
     if (!target && !panelOnly) return { ok: false, error: '没有回消息群——先在下指令的那个群里说一句' };
-    if (state.snapshot().enabled !== true) {
-      record('error', `图像编辑不受理（领航员未开启）：${text.slice(0, 40)}`);
-      return { ok: false, error: '领航员未开启——图像编辑只在领航员模式下受理', offMode: true };
-    }
+    // 领航员开关不再是受理前置（Rushiera 2026-11-09 · v1.62）——改图的产物发不发群由
+    // 「生成产物」开关定（`media` 类，落在 sayImage 那道闸）；受理本身与开关无关。
     if (!comfyEnabled) {
       return { ok: false, error: '图像编辑未启用（配置 navigator.comfy.enabled=false）' };
     }
@@ -3329,6 +3412,16 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       if (target && target !== 'follow') state.setActiveChat(target);
       const snap = state.setDeliverTarget(target);
       record('event', `产物落地档 → ${target || '(不发群)'}`);
+      return { body: { ok: true, ...snap } };
+    },
+    // 发群类型开关（Rushiera 2026-11-09 · v1.62）——五类各自独立 + 两个总控。
+    // body: `{ mode: 'all' | 'none' }` 全开 / 全关；或 `{ kinds: { reply: true, ... } }` 只改其中几键。
+    // 手工设置立即落盘；开关领航员的整组回落只发生在 open / close 那一次，之后不再覆盖。
+    'POST /api/nav/deliver': async ({ body }) => {
+      const mode = String(body?.mode || '');
+      const kinds = body?.kinds && typeof body.kinds === 'object' ? body.kinds : {};
+      const snap = state.setDeliverKinds(kinds, mode);
+      record('event', `发群类型：${['reply', 'progress', 'shot', 'media', 'receipt'].map((key) => `${key}=${snap.deliver?.[key] ? '开' : '关'}`).join(' ')}`);
       return { body: { ok: true, ...snap } };
     },
     // 面板产物区——生成类产物（图 / 音频 / 标签文本）最近 60 条，最近的在最前

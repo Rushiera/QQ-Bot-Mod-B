@@ -304,6 +304,14 @@
       el('div', { class: 'navx-card-body' }, activityBox)
     );
 
+    // ── 线卡（A 方案 · 2026-11-09）──
+    const lineCount = el('span', { class: 'navx-count', text: '0' });
+    const lineBox = el('div', { class: 'navx-tablewrap' });
+    const lineCard = el('section', { class: 'navx-card' },
+      cardHead(el, '线', lineCount),
+      el('div', { class: 'navx-card-body' }, lineBox)
+    );
+
     // ── 指令流水卡 ──
     const logCount = el('span', { class: 'navx-count', text: '0' });
     const logBox = el('div', { class: 'navx-tablewrap' });
@@ -315,7 +323,7 @@
     // ── 组装 ──
     const mainCol = el('div', { class: 'navx-main' }, sendCard, genCard, advCard);
     const sideCol = el('div', { class: 'navx-side' }, catsCard, detailCard);
-    const foot = el('div', { class: 'navx-foot' }, artCard, activityCard, logCard, shotCard);
+    const foot = el('div', { class: 'navx-foot' }, artCard, activityCard, lineCard, logCard, shotCard);
 
     host.appendChild(el('div', { class: 'navx' },
       hero,
@@ -330,7 +338,7 @@
       seg, segButtons, genFields, genDeliver, genTarget, genBtn, genResult,
       advIntentInput, advIntentBtn, advIntentOut, advModeOut, advShadowBtn, advLiveBtn, advPersonaOut, advHubOut, advDetails,
       catCount, catsBox, detailTitle, detailShotBtn, detailBox, shotCount, shotsBox,
-      artCount, artClear, artBox, actCount, activityBox, logCount, logBox
+      artCount, artClear, artBox, actCount, activityBox, lineCount, lineBox, logCount, logBox
     };
 
     bindEvents();
@@ -575,6 +583,7 @@
     renderCats();
     renderArtifacts();
     renderActivity();
+    renderLines();
     renderLog();
     if (state.detail) renderDetail();
 
@@ -909,6 +918,63 @@
     ));
     refs.logBox.appendChild(el('table', { class: 'navx-table' },
       el('thead', {}, head), el('tbody', {}, rows)));
+  }
+
+  /**
+   * 线表（一次派活一条线，新的在上）——A 方案：线内首报才发群，线外静默。
+   *
+   * @returns {void}
+   */
+  function renderLines() {
+    const el = ui().el;
+    if (!el || !refs) return;
+    const s = state.status || {};
+    const data = s.lines || {};
+    const active = Array.isArray(data.active) ? data.active.slice().reverse() : [];
+    const recent = Array.isArray(data.recent) ? data.recent.slice().reverse() : [];
+    const counts = data.counts || {};
+    const running = Number(counts.running) || 0;
+    const reported = Number(counts.reported) || 0;
+    const blocked = Number(counts.blocked) || 0;
+    refs.lineCount.textContent = `${active.length} 活跃`;
+    refs.lineBox.textContent = '';
+
+    if (!active.length && !recent.length) {
+      refs.lineBox.appendChild(el('p', {
+        class: 'navx-empty',
+        text: '还没有线——投递一次就开一条（线内首报发群，线外回复静默）。'
+      }));
+      return;
+    }
+
+    const head = el('tr', {},
+      el('th', { text: '线' }), el('th', { text: '猫' }), el('th', { text: '状态' }),
+      el('th', { text: '开于' }), el('th', { text: '群' }), el('th', { text: '指令' })
+    );
+    const rows = active.map((item) => el('tr', {},
+      el('td', { class: 'num', text: String(item.id || '') }),
+      el('td', { class: 'num', text: String(item.name || item.key || '') }),
+      el('td', { class: String(item.status) === 'running' ? 'navx-ok' : 'num', text: String(item.status || '') }),
+      el('td', { class: 'num', text: clock(item.at) }),
+      el('td', { class: 'num', text: String(item.chat || '-') }),
+      el('td', { class: 'ell', title: item.text || '', text: item.text || '' })
+    ));
+    const box = el('div', {});
+    box.appendChild(el('table', { class: 'navx-table' },
+      el('thead', {}, head), el('tbody', {}, rows)));
+    if (recent.length) {
+      box.appendChild(el('div', {
+        class: 'navx-tip',
+        style: { marginTop: '6px' },
+        text: `最近收线：${recent.slice(0, 6).map((item) => `${item.id}（${item.note || '已收'}）`).join(' · ')}`
+      }));
+    }
+    box.appendChild(el('div', {
+      class: 'navx-tip',
+      style: { marginTop: '4px' },
+      text: `在跑 ${running} / 待收 ${reported} / 阻塞 ${blocked}——交报告后超时自动收线`
+    }));
+    refs.lineBox.appendChild(box);
   }
 
   // ── 4. 动作 ──────────────────────────────────────────────────────────────

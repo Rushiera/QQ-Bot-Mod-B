@@ -145,6 +145,14 @@ const DEFAULTS = {
       maxTokens: 1500,
       maxChars: 4000
     },
+    // 线表（A 方案 · 2026-11-09）——一次派活一条线，出站只认线内首报。
+    // 判据依据：并发协议「换相粒度 = 线，不是轮」——线是人的注意力单位，轮是猫的行为单位。
+    lines: {
+      // 线外回复的处置：quiet = 静默（默认，降噪的全部价值）/ shot = 旧行为（每轮都截图发群）
+      offLineOutbound: 'quiet',
+      // 交报告后多久自动收线（毫秒）——A 期无验证猫，靠时间把「待收」清出活跃面
+      closeAfterMs: 30 * 60 * 1000
+    },
     services: [
       { key: 'ApiSiteAnalyzer', name: 'ApiSiteAnalyzer', kind: 'apisite', url: 'http://127.0.0.1:8766/api/sites' },
       { key: 'ComfyDock', name: 'ComfyDock', kind: 'comfydock', url: 'http://127.0.0.1:8971/api/summary' }

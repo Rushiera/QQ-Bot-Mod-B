@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createNavigatorState, IDLE_CLOSE_MS } from './state.js';
+import { createLineStore } from './lines.js';
 import { createCh4Client } from './ch4.js';
 import { createCatWatcher } from './watch.js';
 import { createShotService } from './shot.js';
@@ -216,6 +217,14 @@ function loadBizPort() {
 export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summarize: summarizeOverride }) {
   const navConfig = config?.navigator ?? {};
   const state = createNavigatorState({ file: path.join(dataDir, 'navigator.json'), log });
+  // 线表（并发协议口径 · 2026-11-09 A 方案）——一次派活一条线，出站只认线内首报。
+  // 判据依据：换相粒度 = 线不是轮（WorkSpace:tools/并发协议/README.md §三）。
+  const linesConf = navConfig.lines ?? {};
+  const lineStore = createLineStore({ file: path.join(dataDir, 'nav-lines.json'), log });
+  // 线外回复的处置：quiet（默认——线外静默，降噪的全部价值在这里）/ shot（旧行为，每轮都发）
+  const offLineOutbound = String(linesConf.offLineOutbound ?? 'quiet') === 'shot' ? 'shot' : 'quiet';
+  // 交报告后多久自动收线（毫秒）——A 期无验证猫，靠这个把「待收」清出活跃面
+  const lineCloseAfterMs = Number(linesConf.closeAfterMs) > 0 ? Number(linesConf.closeAfterMs) : 30 * 60 * 1000;
   const ch4 = createCh4Client({ log, mainPort: Number(navConfig.mainPort) || 8080 });
   const watcher = createCatWatcher({ log });
   // think 摘要配置（会话分析「读全」的 think 段——方案 A：交 LLM 总结，不整段倾倒）
@@ -915,7 +924,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string} [options.reason] 标签（进标题与日志）
    * @returns {Promise<object>} { ok, sent }——sent = reply / progress / none
    */
-  async function emitOutbound({ key, chat = null, trigger, items = [], reason = '' }) {
+  async function emitOutbound({ key, chat = null, trigger, items = [], reason = '', force = false }) {
     const target = resolveChat(chat) ?? state.snapshot().activeChat;
     if (!target) {
       record('error', `出站（${key}）：没有回消息群，跳过`);
@@ -927,6 +936,17 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     const lastReply = [...rows].reverse().find((row) => String(row?.role ?? '') === 'reply');
     const replyAt = Number(lastReply?.time ?? 0) || 0;
     const label = reason ? `·${reason}` : '';
+
+    // 🔴 线判据（2026-11-09 A 方案 · 并发协议「换相粒度 = 线，不是轮」）：
+    //    只有「该猫有活跃线」才出站——线外回复默认静默（`navigator.lines.offLineOutbound='shot'` 可回旧行为）。
+    //    理由：领航员开启时对全部猫建立了持久观测，10 只猫 × N 轮 = 刷屏；线才是人的注意力单位。
+    const line = lineStore.activeFor(key);
+    // `force` = 用户主动要的一次回执（群内「看它现在在干什么」/ 面板「分析」）——不按线判据吞掉；
+    // 自动巡检（轮结束 / 投递后定时分析）仍只认线内，不然降噪就白做了。
+    if (!line && offLineOutbound !== 'shot' && !force) {
+      record('watch', `${catName}：线外回复（无活跃线），静默`);
+      return { ok: true, sent: 'none', reason: 'off-line' };
+    }
 
     // ① 有新回复 → 截图（只截回复内容）
     if (replyAt > prev.replyAt) {
@@ -945,6 +965,11 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       if (sent.ok) {
         sentLog.set(key, { at: Date.now(), kind: 'reply', replyAt });
         voyageStats.replies += 1;
+        // 线内首报即「换相」——记一次交报告，之后该线转 reported（再等 N 分钟由 tick 自动收线）
+        if (line) {
+          lineStore.markReported(line.id, { rounds: 1 });
+          record('line', `线 ${line.id} 交报告（${catName}）——收线倒计时 ${Math.round(lineCloseAfterMs / 60000)} 分钟`);
+        }
       }
       record(sent.ok ? 'send' : 'error', sent.ok
         ? `回复截图已发群 ${target}（${catName}）`
@@ -1042,7 +1067,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
    * @param {string} [reason] 标签
    * @returns {Promise<object>} 决策结果
    */
-  async function runAnalysis(key, chat, reason = '') {
+  async function runAnalysis(key, chat, reason = '', options = {}) {
     let items = [];
     try {
       const info = await ch4.keyinfo(key, 20);
@@ -1055,7 +1080,7 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       record('watch', `出站（${key}）：会话为空，跳过`);
       return { ok: true, sent: 'none' };
     }
-    return emitOutbound({ key, chat, trigger: 'checkpoint', items, reason });
+    return emitOutbound({ key, chat, trigger: 'checkpoint', items, reason, force: options.force === true });
   }
 
   /**
@@ -1075,7 +1100,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       scheduleAnalysis(key, chat, { delayMs, reason });
       return { ok: true, scheduled: true, key, delayMs, reason };
     }
-    runAnalysis(key, chat, reason).catch((error) => record('error', `会话分析（${key}）失败：${error?.message ?? error}`));
+    // 用户主动要的一次分析（群内 nav_analyze / 面板「分析」）——force：不按线判据吞回执
+    runAnalysis(key, chat, reason, { force: true }).catch((error) => record('error', `会话分析（${key}）失败：${error?.message ?? error}`));
     return { ok: true, accepted: true, key, reason };
   }
 
@@ -2503,7 +2529,18 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         }
         resetPending.set(alias, entry);
       }
-      return await runResetSession({ key: rawKey, chat, text, rescue, from });
+      // 前文整理同样是一次派活——开线（A 方案）：整理后的「继续」回复才发群，线外默认静默。
+      // 口径依据：线是人的注意力单位，整理结果属于「我要等的那一件事」（并发协议「换相粒度 = 线」）。
+      const line = lineStore.add({
+        chat: chat ?? null,
+        key: alias || rawKey,
+        name: alias || rawKey,
+        text: String(text || '').trim() ? `前文整理：${String(text).trim()}` : '前文整理（清前文 + 注入交接报告 + 继续）',
+        by: String(from || 'app')
+      });
+      const result = await runResetSession({ key: rawKey, chat, text, rescue, from });
+      if (result && typeof result === 'object') result.line = { id: line.id, status: line.status };
+      return result;
     } finally {
       resetPending.delete(rawKey);
       if (alias && alias !== rawKey) resetPending.delete(alias);
@@ -2719,6 +2756,9 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     //   群内退出 → 退出那个群；超时自关 → 最后一次群内指令的群（activeChat，
     //   软件内开启但群内下过指令的场次同样发）；软件内手动退出 / 无群内指令 → 静默整理。
     const voyage = buildVoyageLog(before, reason, by);
+    // 场次结束，线跟着结束（A 方案）——留在 running 的线会跨场次污染「线内/线外」判据
+    const closedLines = lineStore.closeAll('voyage-close');
+    if (closedLines > 0) record('line', `领航员关闭——收线 ${closedLines} 条`);
     const target = by === 'qq'
       ? (resolveChat(chat) || before.activeChat)
       : (reason === 'idle' ? before.activeChat : null);
@@ -2794,6 +2834,16 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     });
     // 观测是持久订阅（开启时对全部猫建立）——投递只负责把回消息群挂到该猫的观测会话上
     if (result.ok) {
+      // 开线（A 方案）：一次派活 = 一条线——线是出站判据的单位（线内首报才发群）
+      const line = lineStore.add({
+        chat: chatResolved,
+        key: result.key,
+        name: result.name || result.key,
+        text: String(text ?? '').trim(),
+        by
+      });
+      result.line = { id: line.id, status: line.status };
+      record('line', `线 ${line.id} 开出 → ${result.key}（群 ${chatResolved ?? '未定'}）：${content.slice(0, 40)}`);
       const session = sessions.get(result.key);
       if (session) session.chat = chatResolved;
       result.watch = session ? { ok: true, persistent: true } : { ok: false, error: '该猫未在观测中' };
@@ -3073,6 +3123,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       // 整理在途（目标猫 key → 起于何时 / 谁发起）——面板据此把按钮置灰并显示「整理中」，
       // 不必只靠 HTTP 往返那一瞬（后台整理几分钟，只防连点等于没防）
       resetting: [...resetPending.entries()].map(([key, item]) => ({ key, at: item.at, from: item.from })),
+      // 线表（A 方案）——面板与 nav_lines 工具读这里：活跃线 + 最近收线
+      lines: lineStore.snapshot(),
       cats,
       ingress: ingress.status(),
       persona: persona.snapshot(),
@@ -3090,6 +3142,11 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     if (!snap.enabled) return;
     // 补订阅（断线自愈）——订阅中断不再等到下次开启才恢复（2026-10-14）
     await ensureWatching();
+    // 线巡检：reported 超时自动收线（A 期无验证猫——靠时间把「待收」清出活跃面）
+    const closedLines = lineStore.sweep({ closeAfterMs: lineCloseAfterMs });
+    if (closedLines > 0) {
+      record('line', `自动收线 ${closedLines} 条（交报告超过 ${Math.round(lineCloseAfterMs / 60000)} 分钟）`);
+    }
     // 计时基准 = 最近一次活动（指令 / 猫的回复）——不是「最后一条指令」（否则刚开工就被判空闲）
     const since = Math.max(
       Number(snap.lastActivityAt) || 0,
@@ -3137,6 +3194,8 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
 
   const api = {
     'GET /api/nav/status': async () => ({ body: await status() }),
+    // 线表只读端点（A 方案）——面板与业务面 nav_lines 工具的取数口
+    'GET /api/nav/lines': async () => ({ body: lineStore.snapshot({ recent: 20 }) }),
     'GET /api/nav/health': async () => ({ body: await health() }),
     'POST /api/nav/open': async ({ body }) => ({
       body: await open({

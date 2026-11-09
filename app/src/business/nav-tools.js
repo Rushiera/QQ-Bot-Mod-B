@@ -254,6 +254,42 @@ export function registerNavTools() {
     }
   });
 
+  // ── nav_lines ───────────────────────────────────────────────────────────
+  regTool({
+    id: 'nav_lines',
+    name: '领航员·线',
+    description: `看领航员的「线」——一次派活 = 一条线（派给谁 / 哪个群 / 在跑还是已交报告 / 收了没）。
+用途：「现在有几条活」「刚才让你做的事到哪了」「谁交报告了」这类问题调本工具；只读，不派活、不收线。
+口径：线内（有活跃线）的猫回复才发群，线外回复静默——这是降噪判据，不是漏发。`,
+    category: 'system',
+    icon: '🧵',
+    parameters: { type: 'object', properties: {}, required: [] },
+    async execute() {
+      try {
+        const data = await call('/api/nav/lines');
+        const active = Array.isArray(data.active) ? data.active : [];
+        const recent = Array.isArray(data.recent) ? data.recent : [];
+        const at = (ts) => (ts ? new Date(ts).toLocaleString('zh-CN', { hour12: false }) : '-');
+        const counts = data.counts || {};
+        const lines = [];
+        lines.push(`活跃线 ${active.length} 条（在跑 ${counts.running ?? 0} / 待收 ${counts.reported ?? 0} / 阻塞 ${counts.blocked ?? 0}）`);
+        for (const item of active) {
+          lines.push(`  ${item.id} · ${item.name || item.key} · ${item.status} · ${at(item.at)} · 群 ${item.chat || '未定'}：${item.text || ''}`);
+        }
+        if (recent.length) {
+          lines.push('最近收线：');
+          for (const item of recent.slice().reverse()) {
+            lines.push(`  ${item.id} · ${item.name || item.key} · ${item.note || '已收'} · ${at(item.closedAt)}`);
+          }
+        }
+        if (!active.length && !recent.length) lines.push('（还没有线——投递一次就开一条）');
+        return ok(lines.join('\n'));
+      } catch (error) {
+        return err(`领航员服务不可达（自研单体没在跑？）：${error?.message ?? error}`);
+      }
+    }
+  });
+
   // ── nav_open ────────────────────────────────────────────────────────────
   regTool({
     id: 'nav_open',
@@ -322,7 +358,7 @@ export function registerNavTools() {
 - text：给猫的**完整指令原文**——照抄用户的指令内容，不要改写、不要加解释、不要加礼貌语、不要带触发标记（如「（@我/提到我）」这类是给判断用的，不是指令内容）。
 🔴 只投递**指令**（要猫干活的）；群里的闲聊不要调本工具。
 🔴 领航员**未开启**时也能投——限本人（569145850）**点名了猫**的指令：投递 + 回复截图照常（**不带投送后分析**）；没点名猫的、或非本人的请求，未开启时不要投。
-投递成功后猫会在 CH4 里干活；猫的回复到达时系统会自动截图发群，你不需要再复述。`,
+投递成功后猫会在 CH4 里干活，这次投递会开一条**线**；该线首次交报告时系统自动截图发群（一条活发一次），之后这轮活没派过的其它轮次不发——降噪判据，不是漏发。你不需要再复述。`,
     category: 'system',
     icon: '📮',
     parameters: {
@@ -345,7 +381,7 @@ export function registerNavTools() {
           body: { key, text, by: 'qq' }
         });
         if (data?.ok !== true) return err(`投递未受理：${JSON.stringify(data?.reply ?? data)}`);
-        return ok(`已投递 → ${key}（端口 ${data.port}）：${text.slice(0, 80)}\n猫的回复到达时会自动截图发群。`);
+        return ok(`已投递 → ${key}（端口 ${data.port}）：${text.slice(0, 80)}\n本次已开线${data.line?.id ? `（${data.line.id}）` : ''}——该线交报告时自动截图发群，其它轮次不发。`);
       } catch (error) {
         return err(`投递失败（自研单体没在跑？）：${error?.message ?? error}`);
       }

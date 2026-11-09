@@ -16,6 +16,7 @@ import { createGroupsApi } from './web/groups-api.js';
 import { createBusinessProxy } from './web/business-proxy.js';
 import { createCompanion } from './companion.js';
 import { createBusinessClient, createBusinessHub } from './business.js';
+import { createHotReload } from './hotreload.js';
 import { createNavigator } from './navigator/index.js';
 import { createLoginWatch } from './incident/login-watch.js';
 
@@ -91,6 +92,16 @@ export async function createApp() {
   // 分发中心快照回挂（观测面：GET /api/nav/hub）——不反向依赖，由装配处注入
   navigator.bindHubStatus(() => businessHub.status());
 
+  // 开发期热重载（app/src/hotreload.js）——改业务面代码自动重启子进程。
+  // 只自动面在业务面：单体侧改动只出声 + 标 appPending（重启 Electron 会断界面与领航观测）。
+  const hotReload = createHotReload({
+    rootDir: APP_DIR,
+    projectDir: PROJECT_DIR,
+    log,
+    hub: businessHub,
+    config: config.hotreload
+  });
+
   const web = createWebServer({
     port: config.app.port,
     uiDir: path.join(APP_DIR, 'ui'),
@@ -148,6 +159,27 @@ export async function createApp() {
       'POST /api/onebot/disconnect': async () => {
         onebot.close();
         return { body: { ok: true } };
+      },
+      // 开发期热重载（hotreload.js）——手动入口与状态读面；自动面由文件监视驱动。
+      // 重载只换业务面子进程：界面与 OneBot 连接不动，重载期间事件进缓冲（不丢，只计溢出）。
+      'POST /api/dev/reload': async ({ query }) => ({
+        body: await hotReload.reloadNow({
+          reason: query.get('reason') || 'api',
+          auto: query.get('auto') === '1' || query.get('auto') === 'true'
+        })
+      }),
+      'GET /api/dev/reload': async () => ({ body: hotReload.status() }),
+      // 单体侧改动生效入口——Electron 自我重启（app.relaunch → app.exit）。
+      // 非 Electron 环境（--run 直跑核心）明示不可用，不假装成功。
+      'POST /api/dev/restart-app': async () => {
+        if (typeof hooks.relaunch !== 'function') {
+          return { body: { ok: false, error: '重启能力未注册（非 Electron 运行环境）' } };
+        }
+        log.info('app', '收到重启请求——应用将在 0.5 秒后自我重启（界面会短暂断开）');
+        setTimeout(() => {
+          try { hooks.relaunch(); } catch (reason) { log.error('app', `自我重启失败：${reason?.message ?? reason}`); }
+        }, 500);
+        return { body: { ok: true, restarting: true } };
       },
       'POST /api/incident/sample': async () => ({ body: { ok: true, sample: await loginWatch.tick() } }),
       'POST /api/debug/screenshot': async ({ query }) => {
@@ -227,6 +259,7 @@ export async function createApp() {
     }
     navigator.start();
     loginWatch.start();
+    hotReload.start();
     return port;
   }
 
@@ -236,7 +269,9 @@ export async function createApp() {
    * @returns {Promise<void>} 完成
    */
   async function stop() {
-    // 先停分发（退订 + 通知子进程优雅退出），再停其它消费者
+    // 先停文件监视：否则停机过程中自己的写盘会触发一次无谓重载
+    hotReload.stop();
+    // 再停分发（退订 + 通知子进程优雅退出），最后停其它消费者
     await businessHub.stop();
     navigator.stop();
     loginWatch.stop();
@@ -246,5 +281,5 @@ export async function createApp() {
     log.info('app', 'QQBot mod B 已停止');
   }
 
-  return { start, stop, status, log, config, layout, hooks, navigator, businessHub, loginWatch, webuiCredential, stopNapcat: () => napcat.stop() };
+  return { start, stop, status, log, config, layout, hooks, navigator, businessHub, hotReload, loginWatch, webuiCredential, stopNapcat: () => napcat.stop() };
 }

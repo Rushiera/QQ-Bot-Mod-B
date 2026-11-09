@@ -225,6 +225,14 @@ app.whenReady().then(async () => {
     // 启动即对齐一次（配置里开着、注册表里没写，或反之）
     core.hooks.shell(core.config.app || {});
 
+    // 壳层能力：应用自我重启（单体侧代码改动生效入口，POST /api/dev/restart-app）。
+    // 顺序不能反：relaunch 只是「排一个退出后重开」的请求，exit(0) 才真退出。
+    core.hooks.relaunch = () => {
+      bootLog('收到自我重启请求——重启应用');
+      app.relaunch();
+      app.exit(0);
+    };
+
     // 壳层能力：截图——开发期验证界面渲染，经 /api/debug/screenshot 触发
     core.hooks.capture = async (tab) => {
       if (!mainWindow) throw new Error('主窗口未就绪');

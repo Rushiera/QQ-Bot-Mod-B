@@ -343,6 +343,12 @@ export function createBusinessHub({
   let sendSeq = 0;
   let healthTimer = null;
   let unsubEvent = null;
+  /** 热重载进行中——`true` 时子进程退出走「立即拉起」，不进退避重试、不消耗崩溃预算。 */
+  let reloading = false;
+  /** 最近一次事件到达时刻（0 = 从未）——热重载判「业务面在不在忙」的空闲窗口依据。 */
+  let lastEventAt = 0;
+  /** 热重载对外账本——失败必须可见（次数 / 时刻 / 原因 / 结果 / 耗时 / 错误）。 */
+  const reloadState = { count: 0, failures: 0, lastAt: 0, lastReason: '', lastOk: null, lastMs: 0, lastError: '' };
 
   /** 消费者表——两个，各自独立队列与失败计数（一个抛错不影响另一个）。 */
   const consumers = [
@@ -452,6 +458,7 @@ export function createBusinessHub({
    */
   function dispatch(event) {
     stats.received += 1;
+    lastEventAt = Date.now();
     const fp = eventFingerprint(event);
     if (fp) {
       const seenAt = dedup.get(fp);
@@ -699,6 +706,12 @@ export function createBusinessHub({
         info(`业务面子进程已退出（停机流程，code=${code}）`);
         return;
       }
+      // 热重载：旧进程正常退出后由 reload() 立即拉起新的——不进退避重试、不吃崩溃预算。
+      // 期间事件照常进 workerBuffer（dispatch 的 !childReady 分支），新进程就绪后 flushBuffer 灌入。
+      if (reloading) {
+        info(`业务面子进程已退出（热重载，code=${code}）——立即拉起新进程`);
+        return;
+      }
       error(`业务面子进程退出：code=${code} signal=${signal ?? '-'}`);
       scheduleRestart();
     });
@@ -738,6 +751,74 @@ export function createBusinessHub({
         healthTimer.unref?.();
       }
       return this.status();
+    },
+
+    /**
+     * 热重载业务面子进程（不停单体、不断界面、不丢事件）。
+     *
+     * 顺序是硬约束：先等旧进程真退出再拉新的——业务面持有数据根单实例锁，并行拉起必然
+     * 按 CONFIG 码退出（worker.js 判据）。故：发 SHUTDOWN → 等 exit（超时 5 秒强杀）→ spawnWorker。
+     * 重载期间 dispatch 的事件进 workerBuffer，新进程就绪后由 flushBuffer 灌入（不丢，只计溢出）。
+     *
+     * @param {{reason?:string, timeoutMs?:number}} [options] 选项
+     * @returns {Promise<{ok:boolean, pid?:number, port?:number, ms?:number, error?:string}>} 结果
+     */
+    async reload({ reason = 'manual', timeoutMs = 20_000 } = {}) {
+      if (stopping) return { ok: false, error: '正在停机，忽略重载' };
+      if (mode !== 'child') return { ok: false, error: `mode=${mode} 没有子进程可重载` };
+      if (reloading) return { ok: false, error: '已有一次重载在进行中（忽略本次）' };
+      const startedAt = Date.now();
+      reloading = true;
+      // 重载是新会话：不吃崩溃预算，也让上次「攒够 restartMax 次」的降级态复位
+      restarts = 0;
+      const businessConsumer = consumerOf('business');
+      if (businessConsumer) businessConsumer.paused = false;
+      try {
+        const proc = child;
+        if (proc) {
+          const exited = new Promise((resolve) => { proc.once('exit', resolve); });
+          try { proc.send({ type: MSG.SHUTDOWN }); } catch { /* 通道已断：走强杀 */ }
+          await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
+          if (child === proc) {
+            try { proc.kill(); } catch { /* 已退出 */ }
+            // 强杀后 exit 回调是异步的：给它一拍，别让新旧进程抢同一个单实例锁
+            await new Promise((resolve) => setTimeout(resolve, 300));
+          }
+        }
+        spawnWorker();
+      } finally {
+        reloading = false;
+      }
+
+      // 等新进程就绪（READY → checkHealth → childReady）
+      const deadline = Date.now() + Math.max(1000, timeoutMs);
+      while (Date.now() < deadline) {
+        if (childReady && childPort) {
+          const ms = Date.now() - startedAt;
+          reloadState.count += 1;
+          reloadState.lastAt = Date.now();
+          reloadState.lastReason = reason;
+          reloadState.lastOk = true;
+          reloadState.lastMs = ms;
+          reloadState.lastError = '';
+          info(`业务面热重载完成（${reason}）：pid=${childPid} port=${childPort} 用时 ${ms}ms`);
+          return { ok: true, pid: childPid, port: childPort, ms };
+        }
+        if (!child) break;   // 新进程已退出——启动失败，不干等到超时
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      const failure = child
+        ? `重载后 ${Math.round((Date.now() - startedAt) / 1000)} 秒内未就绪（pid=${childPid} port=${childPort}）`
+        : `重载后子进程启动失败（lastExitCode=${lastExitCode}，healthFailures=${stats.healthFailures}）`;
+      reloadState.count += 1;
+      reloadState.failures += 1;
+      reloadState.lastAt = Date.now();
+      reloadState.lastReason = reason;
+      reloadState.lastOk = false;
+      reloadState.lastMs = Date.now() - startedAt;
+      reloadState.lastError = failure;
+      error(`业务面热重载失败（${reason}）：${failure}`);
+      return { ok: false, error: failure };
     },
 
     /**
@@ -798,7 +879,11 @@ export function createBusinessHub({
           lastExitCode,
           exits: stats.workerExits,
           healthFailures: stats.healthFailures
-        }
+        },
+        // 热重载观测面：reloading 为真时事件在缓冲（不丢）；lastEventAt 供空闲窗口判定
+        reloading,
+        lastEventAt,
+        reload: { ...reloadState }
       };
     },
 

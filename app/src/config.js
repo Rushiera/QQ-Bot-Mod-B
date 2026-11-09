@@ -65,6 +65,21 @@ const DEFAULTS = {
     // 空 = 它未设令牌，读写免授权（默认态）。
     token: ''
   },
+  // 开发期热重载（app/src/hotreload.js）——改业务面代码自动重启子进程，不再手动重开应用。
+  // 只自动重载业务面：单体侧（main.js / src 下非 business 模块）改动不自动重启，
+  // 重启 Electron 会断界面与领航观测，只出声 + 标 appPending，由人工按一下
+  // （界面「重载」按钮 / POST /api/dev/restart-app）。
+  hotreload: {
+    enabled: true,
+    // 防抖：一次保存常触发多个事件（编辑器临时文件 / 原子重命名）
+    debounceMs: 800,
+    // 空闲窗口：距最近一条群事件这么久才换进程——正在跑一轮对话时不动它（0 = 立刻）
+    idleMs: 8000,
+    // 业务面一直有事件时的强制上限，超过即强切并出声
+    maxWaitMs: 180 * 1000,
+    // 连续失败上限，达到即停自动重载（防「改坏了 → 无限崩溃重启」）
+    failLimit: 2
+  },
   // 领航员模式（design-qqbotb-navigator.md）——QQ 群指挥 CH4 猫群。
   // mainPort / vipUser / idleCloseMs 是行为参数；services 是开启回执的健康检查清单
   // （url 空 = 未接入，回执显示「未接入」）。

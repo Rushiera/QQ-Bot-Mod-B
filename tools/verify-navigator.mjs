@@ -254,6 +254,13 @@ const pass = await navLight.send({ key: 'no-such-cat-selftest', text: '自测', 
 check('轻通道·未开启 + 新鲜 VIP → 放行（非 offMode）', pass.offMode !== true, JSON.stringify(pass).slice(0, 90));
 const rej2 = await navLight.send({ key: 'majordomo', text: '自测' });
 check('轻通道·非 qq 通道不受理', rej2.ok === false && rej2.offMode === true, String(rej2.error ?? ''));
+// 落地档（Rushiera 2026-11-09 · v1.60）——「回消息群被主动指定」本身即放行口，不看开关
+navLight.state.setDeliverTarget('940257985');
+const viaTarget = await navLight.send({ key: 'no-such-cat-selftest', text: '自测', by: 'app' });
+check('轻通道·未开启但落地档已指定 → 放行（非 offMode）', viaTarget.offMode !== true, JSON.stringify(viaTarget).slice(0, 90));
+navLight.state.setDeliverTarget('');
+const rej3 = await navLight.send({ key: 'majordomo', text: '自测', by: 'app' });
+check('轻通道·落地档清空后未开启 → 恢复不受理', rej3.ok === false && rej3.offMode === true, String(rej3.error ?? ''));
 navLight.stop();
 
 // ── 8 轻通道：回复观测的登记与撤除（Rushiera 2026-10-14）────────────────────

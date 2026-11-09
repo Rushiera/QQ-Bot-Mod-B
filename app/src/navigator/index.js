@@ -2800,7 +2800,11 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     const content = sourceTag
       ? `[来自QQ][群@|Rushiera·本人] ${String(text ?? '').trim()}`
       : String(text ?? '').trim();
-    const chatResolved = resolveChat(chat);
+    // 落地档（Rushiera 2026-11-09 · v1.60）——主动指定了群就照这个群发，与领航员开不开无关
+    const snap0 = state.snapshot();
+    const deliverTarget = String(snap0.deliverTarget || '');
+    const targetChat = deliverTarget && deliverTarget !== 'follow' ? deliverTarget : '';
+    const chatResolved = resolveChat(chat) || targetChat || snap0.activeChat || null;
     // 干跑：只做组装与校验，不投递 / 不记账 / 不排分析——自测「投递口径」（加不加来源头、
     // 触发标记有没有被带上）走这条路，不必真投到猫的会话里。
     // 判例：2026-10-11 13:08 R喵喵喵 自测「去来源头」直接 POST 真投递，一条自测消息落进
@@ -2809,15 +2813,16 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
       record('send', `干跑（不投递）→ ${key}：${content.slice(0, 60)}`);
       return { ok: true, dryRun: true, delivered: false, key: String(key || ''), text: content, chat: chatResolved };
     }
-    const enabled = state.snapshot().enabled === true;
-    // 未开启：轻通道（Rushiera 2026-10-14）——本人（VIP）在群里直接下的指令照样投递，
-    // 投递 + 回复截图照常，不做投送后分析；其余（非本人 / 非 QQ 通道）一律不受理——
-    // 不在场就没有「指令」语境，投递只会污染猫的前文。不受理必须出声（AGENTS §一-4）。
-    if (!enabled && !(by === 'qq' && vipFresh())) {
+    const enabled = snap0.enabled === true;
+    // 未开启时两条放行口（Rushiera 2026-11-09 · v1.60）：
+    //   ① 轻通道（2026-10-14）——本人（VIP）在群里直接下的指令；
+    //   ② 落地档已指定——「回消息群被主动指定了」就照发，不依赖开关（猫的回复照常截图发群）。
+    const deliverArmed = deliverTarget !== '' && Boolean(chatResolved);
+    if (!enabled && !(by === 'qq' && vipFresh()) && !deliverArmed) {
       record('error', `领航员未开启——投递不受理（${key}）：${content.slice(0, 40)}`);
       return {
         ok: false,
-        error: `领航员未开启——未开启时只受理本人（${vipUser || 'VIP'}）近期的指定猫指令`,
+        error: `领航员未开启——未开启时只受理本人（${vipUser || 'VIP'}）近期的指定猫指令，或先把「回消息群」指定为一个群`,
         offMode: true,
         key: String(key || ''),
         text: content
@@ -3315,6 +3320,17 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
     'POST /api/nav/chat': async ({ body }) => ({
       body: { ok: true, ...state.setActiveChat(body?.chat ?? null) }
     }),
+    // 产物落地档（Rushiera 2026-11-09 · v1.60）——'' 不发群消息 / 'follow' 跟随当前群 / '<群号>' 主动指定。
+    // 指定具体群时同时切回消息群（面板下拉一改，领航员其余发群动作也跟着这个群）。
+    // 手工设置立即落盘；开关领航员的回落只发生在那一次 open / close，之后不再覆盖。
+    'POST /api/nav/target': async ({ body }) => {
+      const raw = body?.target ?? '';
+      const target = raw === null || raw === undefined ? '' : String(raw).trim();
+      if (target && target !== 'follow') state.setActiveChat(target);
+      const snap = state.setDeliverTarget(target);
+      record('event', `产物落地档 → ${target || '(不发群)'}`);
+      return { body: { ok: true, ...snap } };
+    },
     // 面板产物区——生成类产物（图 / 音频 / 标签文本）最近 60 条，最近的在最前
     'GET /api/nav/artifacts': async () => ({ body: { ok: true, artifacts: artifacts.slice().reverse() } }),
     // 清空产物区（只清列表，不删文件——文件在数据目录里，需要时按路径找）

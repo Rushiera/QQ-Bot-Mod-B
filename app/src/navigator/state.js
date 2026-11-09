@@ -21,6 +21,13 @@ function initialState() {
   return {
     enabled: false,
     activeChat: null,
+    /**
+     * 产物落地档（Rushiera 2026-11-09 · v1.60）——三态：
+     * `''` = 不发群消息（只落产物区）· `'follow'` = 消息跟随当前回消息群 · `'<群号>'` = 主动指定的群。
+     * 与 `activeChat` 分开存：指定群是「主动指定」，不该被回消息群的其它变化顺手覆盖。
+     * 开关领航员时回落一次：开 → `follow`，关 → `''`（之后手工改不受影响）。
+     */
+    deliverTarget: '',
     lastCommandAt: 0,
     lastActivityAt: 0,
     lastTarget: null,
@@ -87,8 +94,10 @@ export function createNavigatorState({ file, log }) {
     state.closedAt = 0;
     state.closedReason = '';
     if (chat !== null && chat !== undefined && chat !== '') state.activeChat = String(chat);
+    // 开领航员 → 落地档回落一次到「跟随」（Rushiera 2026-11-09）；之后手工改不被覆盖
+    state.deliverTarget = 'follow';
     save();
-    log.info('navigator', `领航员已开启（来源 ${by}，回消息群 ${state.activeChat ?? '未定'}）`);
+    log.info('navigator', `领航员已开启（来源 ${by}，回消息群 ${state.activeChat ?? '未定'}，落地 ${state.deliverTarget}）`);
     return snapshot();
   }
 
@@ -102,8 +111,10 @@ export function createNavigatorState({ file, log }) {
     state.enabled = false;
     state.closedAt = Date.now();
     state.closedReason = reason;
+    // 关领航员 → 落地档回落一次到「不发群消息」（Rushiera 2026-11-09）；activeChat 保留
+    state.deliverTarget = '';
     save();
-    log.info('navigator', `领航员已关闭（${reason}）`);
+    log.info('navigator', `领航员已关闭（${reason}，落地档回落不发群）`);
     return snapshot();
   }
 
@@ -119,6 +130,29 @@ export function createNavigatorState({ file, log }) {
     if (state.activeChat !== next) {
       log.info('navigator', `回消息群切换：${state.activeChat ?? '未定'} → ${next}`);
       state.activeChat = next;
+      save();
+    }
+    return snapshot();
+  }
+
+  /**
+   * 设置产物落地档（Rushiera 2026-11-09 · v1.60）。
+   *
+   * 三态：`''` = 不发群消息（只落产物区）· `'follow'` = 消息跟随当前回消息群 · `<群号>` = 主动指定的群。
+   * 手工设置立即落盘——开关领航员的回落只发生在 open / close 那一刻，之后不再覆盖。
+   *
+   * @param {string|number|null} target 落地档
+   * @returns {object} 状态快照
+   */
+  function setDeliverTarget(target) {
+    const value = target === null || target === undefined ? '' : String(target).trim();
+    if (value.length > 64) {
+      log.warn('navigator', `落地档超长，已忽略：${value.slice(0, 40)}…`);
+      return snapshot();
+    }
+    if (state.deliverTarget !== value) {
+      log.info('navigator', `产物落地档：${state.deliverTarget || '(不发群)'} → ${value || '(不发群)'}`);
+      state.deliverTarget = value;
       save();
     }
     return snapshot();
@@ -177,5 +211,5 @@ export function createNavigatorState({ file, log }) {
     save();
   }
 
-  return { load, save, open, close, setActiveChat, noteCommand, touch, snapshot, file };
+  return { load, save, open, close, setActiveChat, setDeliverTarget, noteCommand, touch, snapshot, file };
 }

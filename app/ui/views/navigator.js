@@ -6,11 +6,12 @@
 // 布局（v2 换版，Rushiera 2026-11-09「界面难看 / 排版重调 / 展示全一点」）：
 //   · 状态带 = hero（开关 + 来源 + 一句状态）+ 6 个指标块（可点可读）
 //   · 主栏 = 投递 · 生成能力 · 高级（意图自测 / 接入模式 / hub / 教材）
-//   · 侧栏 = 猫群 · 单猫详情 · 会话截图
+//   · 侧栏 = 猫群 · 单猫详情 · 会话截图；主 / 侧 = 2 : 3 —— 单猫详情占页面 60%
+//   · 回消息群框 = 一个下拉（不发群消息 / 消息跟随（当前群名）/ 各群）+ 标签行右侧「→ 群名」
 //   · 通栏 = 产物（网格）· 活动流（时间线）· 指令流水（表格）
 //
-// 口径：**面板默认不走群**——生成类产物 `deliver=false` 只落产物区；勾「发到群」才按
-//       状态带选中的回消息群发送。群内 @ 路径一字未动。
+// 口径：**面板默认不走群**——生成类产物 `deliver=false` 只落产物区；下拉选「消息跟随（当前群名）」
+//       或具体群才发群（选具体群同时切回消息群）。群内 @ 路径一字未动。
 //
 // 契约：`app/ui/views/_index.md` §三（只读 `window.__ui`；块内不发裸请求）
 // 取数：GET /api/nav/status · /api/nav/health · /api/nav/detail?key= · /api/nav/hub
@@ -66,7 +67,9 @@
     persona: null,
     advancedLoaded: false,
     /** 在途动作（`reset:<key>` 等）——按钮置灰用，防同一次点击发两次请求。 */
-    acting: new Set()
+    acting: new Set(),
+    /** 生成产物落地档（'' = 不发群消息 · 'follow' = 跟随当前回消息群 · '<群id>' = 指定群）。 */
+    deliverTarget: ''
   };
 
   /**
@@ -185,9 +188,16 @@
       )
     );
 
-    const chatSelect = el('select', { class: 'navx-stat-select', title: '回消息群——「发到群」的动作落到这里' });
+    // 回消息群框（Rushiera 2026-11-09 定稿）：**一个下拉框**搞定——
+    // 头两项当「特殊的群」看：不发群消息 / 消息跟随（当前群名），后面是群列表；
+    // 目标提示「→ 群名」放在标签这一行（上面），不占下拉下面的位置。
+    const genTarget = el('span', { class: 'navx-target', text: '→ 未定' });
+    const chatSelect = el('select', { class: 'navx-stat-select', title: '回消息群 / 产物落地：不发群消息 · 消息跟随（当前群名） · 具体群' });
     const statChat = el('div', { class: 'navx-stat wide' },
-      el('span', { class: 'navx-stat-k', text: '回消息群' }), chatSelect);
+      el('div', { class: 'navx-stat-line' },
+        el('span', { class: 'navx-stat-k', text: '回消息群' }), genTarget),
+      chatSelect
+    );
     const statIdle = el('div', { class: 'navx-stat' },
       el('span', { class: 'navx-stat-k', text: '空闲 / 阈值' }),
       el('span', { class: 'navx-stat-v', text: '-' }));
@@ -238,18 +248,14 @@
       seg.appendChild(button);
     }
     const genFields = el('div', { class: 'navx-card-body', style: { padding: '10px 0 0' } });
-    const genDeliver = el('input', { type: 'checkbox' });
-    const genTarget = el('span', { class: 'navx-target', text: '只回面板' });
     const genBtn = el('button', { class: 'btn', text: '提交' });
     const genResult = el('pre', { class: 'navx-pre' });
     const genCard = el('section', { class: 'navx-card' },
-      cardHead(el, '生成能力', el('span', { class: 'navx-count', text: '默认只回面板' })),
+      cardHead(el, '生成能力', el('span', { class: 'navx-count', text: '按回消息群落地' })),
       el('div', { class: 'navx-card-body' },
         seg,
         genFields,
         el('div', { class: 'navx-row' },
-          el('label', { class: 'navx-check' }, genDeliver, el('span', { text: '发到群' })),
-          genTarget,
           el('span', { class: 'navx-grow' }),
           genBtn
         ),
@@ -359,7 +365,7 @@
       dot, heroMain, heroTitle, heroSub, toggle, refreshBtn, chatSelect,
       statIdle, statWatch, statBusy, statVip, statMode,
       catSelect, sendText, sendBtn, sendResult,
-      seg, segButtons, genFields, genDeliver, genTarget, genBtn, genResult,
+      seg, segButtons, genFields, genTarget, genBtn, genResult,
       advIntentInput, advIntentBtn, advIntentOut, advModeOut, advShadowBtn, advLiveBtn, advPersonaOut, advHubOut, advDetails,
       catCount, catsBox, catBar, detailTitle, detailBox, shotCount, shotsBox,
       artCount, artClear, artBox, actCount, activityBox, lineCount, lineBox, logCount, logBox
@@ -398,7 +404,14 @@
     r.refreshBtn.addEventListener('click', () => refresh(true));
 
     r.chatSelect.addEventListener('change', async () => {
-      await act('/api/nav/chat', { chat: r.chatSelect.value || '' });
+      const value = String(r.chatSelect.value || '');
+      // 一个下拉三态：'' = 不发群消息 · 'follow' = 消息跟随当前群 · '<群号>' = 指定群（服务端同切回消息群）
+      r.chatSelect.disabled = true;
+      const result = await act('/api/nav/target', { target: value });
+      r.chatSelect.disabled = false;
+      if (result.ok !== true) {
+        r.genResult.textContent = `回消息群设置失败：${result.error || '未知原因'}`;
+      }
       await refresh(false);
     });
 
@@ -422,10 +435,13 @@
     r.genBtn.addEventListener('click', async () => {
       const payload = collectGen();
       if (payload.error) { r.genResult.textContent = payload.error; return; }
-      const toGroup = r.genDeliver.checked === true;
-      const chat = String((state.status && state.status.activeChat) || '');
+      const target = state.deliverTarget;
+      const toGroup = target !== '';
+      const chat = target === 'follow'
+        ? String((state.status && state.status.activeChat) || '')
+        : String(target || '');
       if (toGroup && !chat) {
-        r.genResult.textContent = '勾了「发到群」但上面没选回消息群——先选一个群，或取消勾选（只回面板）。';
+        r.genResult.textContent = '选了「消息跟随」但还没有回消息群——在下拉里挑一个具体的群，或改回「不发群消息」。';
         return;
       }
       r.genBtn.disabled = true;
@@ -438,8 +454,6 @@
         : `失败：${result.error || '未知原因'}`;
       await refresh(false);
     });
-
-    r.genDeliver.addEventListener('change', () => renderGenTarget());
 
     r.artClear.addEventListener('click', async () => {
       r.artClear.disabled = true;
@@ -707,21 +721,34 @@
       refs.heroSub.textContent = '开启后可投递与截图；生成能力不依赖开关';
     }
 
-    // 回消息群
+    // 回消息群 / 产物落地——一个下拉框（头两项当「特殊的群」：不发群消息 / 消息跟随）
     const current = String(s.activeChat || '');
     const ids = state.groups.map((row) => row.id);
     if (current && !ids.includes(current)) state.groups.unshift({ id: current, name: '（当前回消息群）' });
+    // 落地档从服务端读——手工设置立即落盘，开关领航员的回落也只发生在 open / close 那一次；
+    // 前端不自行改写（否则「手工指定」会被轮询顺手改掉）。
+    state.deliverTarget = String(s.deliverTarget || '');
+    const picked = state.deliverTarget && state.deliverTarget !== 'follow' ? state.deliverTarget : current;
+    if (picked && !state.groups.some((row) => row.id === picked)) {
+      state.groups.push({ id: picked, name: '（已指定群）' });
+    }
+    const pickedRow = state.groups.find((row) => row.id === picked);
+    const pickedName = picked ? (pickedRow ? (pickedRow.name || pickedRow.id) : picked) : '未定';
     refs.chatSelect.textContent = '';
-    refs.chatSelect.appendChild(el('option', { value: '', text: '（未定）' }));
+    refs.chatSelect.appendChild(el('option', { value: '', text: '不发群消息' }));
+    refs.chatSelect.appendChild(el('option', { value: 'follow', text: `消息跟随（${pickedName}）` }));
     for (const row of state.groups) {
       refs.chatSelect.appendChild(el('option', {
         value: row.id,
         text: row.name ? `${row.name}（${row.id}）` : row.id
       }));
     }
-    refs.chatSelect.value = current;
-    const pickedChat = state.groups.find((row) => row.id === current);
-    refs.chatSelect.title = pickedChat ? `${pickedChat.name || ''}（${pickedChat.id}）` : '（未定）';
+    refs.chatSelect.value = state.deliverTarget || '';
+    refs.chatSelect.title = state.deliverTarget
+      ? `产物落地：发到 ${pickedName}`
+      : '产物落地：不发群消息（只落产物区）';
+    // 目标提示放在标签这一行（上面）
+    refs.genTarget.textContent = state.deliverTarget ? `→ ${pickedName}` : '→ 不发群';
 
     const setStat = (node, text, note) => {
       node.textContent = '';
@@ -760,27 +787,6 @@
       if (!cats.length) refs.catSelect.appendChild(el('option', { value: 'majordomo', text: 'majordomo' }));
     }
     refs.catSelect.value = state.cat;
-    renderGenTarget();
-  }
-
-  /**
-   * 「发到群」旁的目标提示——勾了显示具体群名，没勾显示「只回面板」。
-   *
-   * @returns {void}
-   */
-  function renderGenTarget() {
-    if (!refs || !refs.genTarget) return;
-    if (refs.genDeliver.checked !== true) {
-      refs.genTarget.textContent = '只回面板';
-      return;
-    }
-    const chat = String((state.status && state.status.activeChat) || '');
-    if (!chat) {
-      refs.genTarget.textContent = '未选回消息群';
-      return;
-    }
-    const row = state.groups.find((item) => item.id === chat);
-    refs.genTarget.textContent = `→ ${row && row.name ? row.name : chat}`;
   }
 
   /**

@@ -1,4 +1,6 @@
 :root {
+  /* 原生控件（select 弹层 / 滚动条）跟随深色——否则浅色系统主题下弹层白底 + 浅色字，选项看不见 */
+  color-scheme: dark;
   --bg: #0f1115;
   --panel: #171a21;
   --panel-2: #1e222b;
@@ -12,6 +14,9 @@
 }
 
 * { box-sizing: border-box; }
+
+/* 原生下拉弹层兜底——部分 Windows 主题不认 color-scheme，白底 + 继承来的浅色字会看不见 */
+select option { background-color: #1e222b; color: #e6e9ef; }
 
 body {
   margin: 0;
@@ -209,20 +214,31 @@ main { flex: 1; overflow: hidden; display: flex; }
 }
 .navx-stat-v small { font-size: 10.5px; font-weight: 400; color: var(--muted); margin-left: 3px; }
 .navx-stat.wide { grid-column: span 2; }
+.navx-stat .navx-target { font-size: 10.5px; }
+/* 回消息群框两行：标签 + 下拉（第一行右侧给目标群，Rushiera 2026-11-09） */
+.navx-stat-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.navx-stat-line .navx-stat-k { flex: none; }
+.navx-stat-line .navx-stat-select { flex: 1; min-width: 0; }
+.navx-stat-line .navx-target { flex: none; margin-left: auto; max-width: 55%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 回消息群下拉——自带可见边界与背景（浅色系统主题 / 白底下也看得见；2026-11-09） */
 .navx-stat-select {
-  background: transparent;
-  border: none;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
   color: var(--text);
   font-size: 12.5px;
   font-weight: 600;
-  padding: 0;
+  padding: 3px 7px;
   max-width: 100%;
+  width: 100%;
 }
+.navx-stat-select:focus { outline: none; border-color: var(--accent); }
 
 /* ── 主从两栏 + 通栏 ──────────────────────────────────── */
 .navx-body {
   display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(296px, 2fr);
+  /* 主栏 2 : 侧栏 3 —— 单猫详情是侧栏唯一一张卡，占页面 60%（Rushiera 2026-11-09） */
+  grid-template-columns: minmax(0, 2fr) minmax(360px, 3fr);
   gap: 10px;
   align-items: start;
 }

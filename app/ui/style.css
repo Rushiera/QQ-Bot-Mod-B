@@ -256,19 +256,17 @@ main { flex: 1; overflow: hidden; display: flex; }
 .navx-dkind-note { display: block; font-size: 10.5px; color: var(--ok); margin-top: 3px; }
 .navx-dkind-note:empty { display: none; }
 
-/* ── 主从两栏 + 通栏 ──────────────────────────────────── */
-.navx-body {
-  display: grid;
-  /* 主栏 2 : 侧栏 3 —— 单猫详情是侧栏唯一一张卡，占页面 60%（Rushiera 2026-11-09） */
-  grid-template-columns: minmax(0, 2fr) minmax(360px, 3fr);
-  gap: 10px;
-  align-items: start;
+/* ── 单栏纵排（Rushiera 2026-11-10：单猫详情占满整页宽度打头）+ 通栏 ── */
+.navx-stack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.navx-notice {
+  padding: 6px 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11.5px;
 }
-.navx-main, .navx-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.navx-side { align-self: stretch; }
-.navx-side > .navx-card { flex: 1; min-height: 0; }
-.navx-side > .navx-card > .navx-card-body { flex: 1; min-height: 0; }
-.navx-side > .navx-card .navx-pre { max-height: none; flex: 1; min-height: 120px; }
+.navx-notice:empty { display: none; }
 .navx-foot {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -453,8 +451,8 @@ main { flex: 1; overflow: hidden; display: flex; }
 .navx-catframe {
   display: block;
   width: 100%;
-  flex: 1;                 /* 侧栏卡按主栏等高拉伸，iframe 填满剩下的高度 */
-  min-height: 420px;
+  height: min(64vh, 760px);   /* 全宽后自己定高——不再靠侧栏拉伸 */
+  min-height: 480px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #0d1219;

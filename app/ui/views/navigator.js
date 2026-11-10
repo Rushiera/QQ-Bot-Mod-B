@@ -3,13 +3,12 @@
 // 定位：把「群里 @ 领航员能做的事」在面板上做一份等价的显式操作面，并把领航员状态**看全**——
 //       状态带（开关 / 回消息群 / 空闲 / 订阅 / 生成在跑 / VIP / 接入模式）+ 主从两栏 + 通栏。
 //
-// 布局（v2 换版，Rushiera 2026-11-09「界面难看 / 排版重调 / 展示全一点」）：
-//   · 状态带 = hero（开关 + 来源 + 一句状态）+ 6 个指标块（可点可读）
-//   · 主栏 = 领航员输入 · 投递 · 生成能力 · 高级（意图自测 / 接入模式 / hub / 教材）
-//   · 侧栏 = 单猫详情（直接内嵌 mau 的猫对话页，跨源 iframe，同并发协议 .chatframe）；猫群条在开启块下方一整行
-//   · 原「单猫详情 JSON」卡沉到通栏最末（Rushiera 2026-11-10）
+// 布局（Rushiera 2026-11-10 定稿：单栏纵排）：
+//   · 状态带 = hero（开关 + 来源 + 一句状态）+ 6 个指标块（可点可读）· 猫群条紧随其后一整行
+//   · 单栏纵排 = 单猫详情（内嵌 mau 猫对话页，占满整页宽度）→ 领航员输入 → 生成能力 → 高级
+//   · 通栏 = 线 / 活动流 / 产物 / 指令流水 / 会话截图 / 原「单猫详情 JSON」卡（沉在最末）
 //   · 回消息群框 = 一个下拉（不发群消息 / 消息跟随（当前群名）/ 各群）+ 标签行右侧「→ 群名」
-//   · 通栏 = 产物（网格）· 活动流（时间线）· 指令流水（表格）
+//   · 投递卡已撤（2026-11-10）——「给某只猫下一条指令」走猫条右键菜单 / 群内 @ 通道
 //
 // 口径：**面板默认不走群**——生成类产物 `deliver=false` 只落产物区；下拉选「消息跟随（当前群名）」
 //       或具体群才发群（选具体群同时切回消息群）。群内 @ 路径一字未动。
@@ -249,25 +248,9 @@
       )
     );
 
-    // ── 投递卡 ──
-    const catSelect = el('select', { class: 'navx-select' });
-    const sendText = el('textarea', { class: 'navx-textarea', rows: 2, placeholder: '给猫下一条指令——投递到它的会话（面板操作，不走群）' });
-    // 「干跑」「带来源头」两个勾选项已撤（Rushiera 2026-11-09）——投递就是真投递，
-    // 组装口径不再以界面开关承载（后端 `dryRun` / `sourceTag` 参数保留，供自测与群内通道用）。
-    const sendBtn = el('button', { class: 'btn', text: '投递' });
-    const sendResult = el('pre', { class: 'navx-pre' });
-    const sendCard = el('section', { class: 'navx-card' },
-      cardHead(el, '投递', el('span', { class: 'navx-count', text: '指令' })),
-      el('div', { class: 'navx-card-body' },
-        el('label', { class: 'navx-field' }, el('span', { text: '目标猫' }), catSelect),
-        sendText,
-        el('div', { class: 'navx-row' },
-          el('span', { class: 'navx-grow' }),
-          sendBtn
-        ),
-        sendResult
-      )
-    );
+    // 一次性动作回执（整理重启等短回执）——投递卡撤掉后（Rushiera 2026-11-10）由这行承接；
+    // 平时为空（`:empty` 不占版面），写完 6 秒自动清。
+    const noticeBox = el('div', { class: 'navx-notice' });
 
     // ── 生成能力卡 ──
     const seg = el('div', { class: 'navx-seg' });
@@ -390,24 +373,23 @@
     );
 
     // ── 组装 ──
-    // 主栏顺序（Rushiera 2026-11-10）：领航员输入 → 投递 → 生成能力 → 高级；
-    // 侧栏 = 单猫详情（链接卡）；原 JSON 详情卡沉到通栏最末。
-    const mainCol = el('div', { class: 'navx-main' }, leadCard, sendCard, genCard, advCard);
-    const sideCol = el('div', { class: 'navx-side' }, catLinkCard);
+    // 单栏纵排（Rushiera 2026-11-10 定稿）：单猫详情（内嵌猫页）占满整页宽度打头，
+    // 领航员输入 / 生成能力 / 高级依次往下放；原 JSON 详情卡沉在通栏最末。
+    const stack = el('div', { class: 'navx-stack' }, catLinkCard, leadCard, genCard, advCard);
     const foot = el('div', { class: 'navx-foot' }, lineCard, activityCard, artCard, logCard, shotCard, detailCard);
 
     host.appendChild(el('div', { class: 'navx' },
       hero,
       catBar,
-      el('div', { class: 'navx-body' }, mainCol, sideCol),
+      noticeBox,
+      stack,
       foot
     ));
 
     refs = {
       dot, heroMain, heroTitle, heroSub, toggle, refreshBtn, chatSelect, kindBar, kindNote,
       statIdle, statWatch, statBusy, statVip, statMode,
-      leadText, leadBtn, leadResult,
-      catSelect, sendText, sendBtn, sendResult,
+      leadText, leadBtn, leadResult, notice: noticeBox, sendResult: noticeBox,
       seg, segButtons, genFields, genTarget, genBtn, genResult,
       advIntentInput, advIntentBtn, advIntentOut, advModeOut, advShadowBtn, advLiveBtn, advPersonaOut, advHubOut, advDetails,
       catCount, catsBox, catBar, catFrame, catFrameNote,
@@ -497,23 +479,8 @@
       await refresh(false);
     });
 
-    r.catSelect.addEventListener('change', () => { state.cat = r.catSelect.value || 'majordomo'; });
-
-    r.sendBtn.addEventListener('click', async () => {
-      const text = String(r.sendText.value || '').trim();
-      if (!text) { r.sendResult.textContent = '先写一句话。'; return; }
-      r.sendBtn.disabled = true;
-      r.sendResult.textContent = '投递中…';
-      const result = await act('/api/nav/send', {
-        key: state.cat,
-        text,
-        watch: true
-      });
-      r.sendBtn.disabled = false;
-      r.sendResult.textContent = formatSend(result);
-      await refresh(false);
-    });
-
+    // 投递卡已撤（Rushiera 2026-11-10）——「给某只猫下一条指令」走猫条右键菜单 / 群内 @，
+    // 面板上不再有「目标猫 + 指令 + 投递」这套控件。
     r.genBtn.addEventListener('click', async () => {
       const payload = collectGen();
       if (payload.error) { r.genResult.textContent = payload.error; return; }
@@ -665,22 +632,6 @@
     }
     if (!val('navx-image') && !val('navx-file') && !val('navx-url')) return { error: '要给一张图：路径 / file / 直链三选一。' };
     return { body: { image: val('navx-image'), file: val('navx-file'), url: val('navx-url') } };
-  }
-
-  /**
-   * 投递回执 → 一段人话。
-   *
-   * @param {object} result `/api/nav/send` 回执
-   * @returns {string} 文本
-   */
-  function formatSend(result) {
-    if (!result) return '无回执。';
-    if (result.ok !== true) return `未受理：${result.error || '未知原因'}`;
-    if (result.dryRun) return `干跑通过 → ${result.key}：${result.text || ''}`;
-    const reply = result.reply && typeof result.reply === 'object'
-      ? (result.reply.content || result.reply.message || JSON.stringify(result.reply))
-      : '';
-    return `已投递 → ${result.key || '-'}${reply ? `\n回复：${String(reply).slice(0, 400)}` : ''}\n（回复截图与进度看「活动流」）`;
   }
 
   /**
@@ -900,22 +851,11 @@
     const allow = s.ingress && Array.isArray(s.ingress.allow) ? s.ingress.allow.length : 0;
     setStat(refs.statMode, mode === 'live' ? 'live 接管' : 'shadow 影子', mode === 'live' ? `已放行 ${allow} 类` : '只采集不动作');
 
-    // 目标猫下拉（猫清单变了才重建）——排序与猫群卡同口径：主干 → 常驻按端口
+    // 选中猫兜底（投递卡撤掉后没有「目标猫」下拉了，选猫只靠猫条 / 右键菜单）——
+    // 清单里没有就取第一只，否则单猫详情那格会指着已经不存在的猫。
     const cats = sortCats(Array.isArray(s.cats) ? s.cats : []);
     const names = cats.map((row) => String(row.id || row.name || '')).filter(Boolean);
     if (!names.includes(state.cat)) state.cat = names[0] || 'majordomo';
-    const signature = names.join('|');
-    if (refs.catSelect.dataset.signature !== signature) {
-      refs.catSelect.dataset.signature = signature;
-      refs.catSelect.textContent = '';
-      for (const row of cats) {
-        const id = String(row.id || row.name || '');
-        if (!id) continue;
-        refs.catSelect.appendChild(el('option', { value: id, text: row.name ? `${row.name}（${row.port || '-'}）` : id }));
-      }
-      if (!cats.length) refs.catSelect.appendChild(el('option', { value: 'majordomo', text: 'majordomo' }));
-    }
-    refs.catSelect.value = state.cat;
   }
 
   /**
@@ -952,7 +892,6 @@
     const el = ui().el;
     if (!el) return;
     state.cat = key;
-    if (refs && refs.catSelect) refs.catSelect.value = key;
     renderCats();
 
     /**
@@ -1046,7 +985,7 @@
       refs.catsBox.appendChild(el('div', {
         class: `navx-cat ${st.cls}${key === state.cat ? ' active' : ''}`,
         title: tip,
-        onclick: () => { state.cat = key; refs.catSelect.value = key; renderCats(); },
+        onclick: () => { state.cat = key; renderCats(); },
         oncontextmenu: (event) => openCatMenu(event, key, String(row.name || key), resetting)
       },
         el('span', { class: 'navx-cat-dot' }),
@@ -1262,6 +1201,24 @@
 
   // ── 4. 动作 ──────────────────────────────────────────────────────────────
 
+  /** 一次性回执计时器（同一条消息重写时续期）。 */
+  let noticeTimer = null;
+
+  /**
+   * 一次性回执——写进页面顶部那行（6 秒后自动清，空时 `:empty` 不占版面）。
+   *
+   * @param {string} text 文案
+   * @returns {void}
+   */
+  function notify(text) {
+    if (!refs || !refs.notice) return;
+    refs.notice.textContent = String(text ?? '');
+    if (noticeTimer) clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => {
+      if (refs && refs.notice) refs.notice.textContent = '';
+    }, 6000);
+  }
+
   /**
    * 调一个动作接口；失败出声（不静默吞）。
    *
@@ -1290,7 +1247,6 @@
     if (typeof api !== 'function' || !refs) return;
     state.detailKey = key;
     state.cat = key;
-    refs.catSelect.value = key;
     refs.detailTitle.textContent = `单猫详情 · ${key}`;
     refs.detailBox.textContent = '读取中…';
     const result = await api(`/api/nav/detail?key=${encodeURIComponent(key)}`);
@@ -1346,9 +1302,9 @@
   async function newSession(key) {
     const result = await act('/api/nav/new-session', { keys: key });
     if (!refs) return;
-    refs.sendResult.textContent = result.ok === true
+    notify(result.ok === true
       ? `${key}：新会话已请求（只清前文，不交接）`
-      : `${key}：新会话失败——${result.error || '未知原因'}`;
+      : `${key}：新会话失败——${result.error || '未知原因'}`);
   }
 
   /**

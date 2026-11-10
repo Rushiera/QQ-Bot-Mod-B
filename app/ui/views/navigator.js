@@ -6,7 +6,7 @@
 // 布局（v2 换版，Rushiera 2026-11-09「界面难看 / 排版重调 / 展示全一点」）：
 //   · 状态带 = hero（开关 + 来源 + 一句状态）+ 6 个指标块（可点可读）
 //   · 主栏 = 领航员输入 · 投递 · 生成能力 · 高级（意图自测 / 接入模式 / hub / 教材）
-//   · 侧栏 = 单猫详情（链接 mau 实体猫的对话页，同并发协议实体猫）；猫群条在开启块下方一整行
+//   · 侧栏 = 单猫详情（直接内嵌 mau 的猫对话页，跨源 iframe，同并发协议 .chatframe）；猫群条在开启块下方一整行
 //   · 原「单猫详情 JSON」卡沉到通栏最末（Rushiera 2026-11-10）
 //   · 回消息群框 = 一个下拉（不发群消息 / 消息跟随（当前群名）/ 各群）+ 标签行右侧「→ 群名」
 //   · 通栏 = 产物（网格）· 活动流（时间线）· 指令流水（表格）
@@ -326,20 +326,14 @@
       catsBox
     );
 
-    // ── 单猫详情卡（Rushiera 2026-11-10）──
-    // 改成**链接 mau 实体猫的对话页**，与并发协议实体猫同口径（点 = 打开该猫对话页，新标签）。
-    // 侧栏只放这一张：点猫条选中的猫跟着换，不再在本页展开整块 JSON。
-    const catLinkName = el('div', { class: 'navx-catlink-name', text: '未选猫' });
-    const catLinkTip = el('p', { class: 'navx-tip', text: '点猫条上任意一只猫 = 选中；链接打开它在 mau 里的对话页（新标签）。' });
-    const catLinkHref = el('a', { class: 'navx-catlink-a', href: '#', target: '_blank', rel: 'noopener', text: '打开对话页' });
+    // ── 单猫详情卡（Rushiera 2026-11-10 定稿）──
+    // 直接把 mau 的猫对话页**拍在这里**（跨源 iframe，只显示不注入）——与并发协议实体猫同源，
+    // 只是不做弹层、不写标题行：点猫条选中的猫跟着换，页面自己跑。
+    const catFrame = el('iframe', { class: 'navx-catframe', src: 'about:blank', title: '猫对话页' });
+    const catFrameNote = el('span', { class: 'navx-count', text: '' });
     const catLinkCard = el('section', { class: 'navx-card' },
-      el('div', { class: 'navx-card-head' }, el('h3', { text: '单猫详情' }),
-        el('span', { class: 'navx-tip', text: '同并发协议实体猫' })),
-      el('div', { class: 'navx-card-body' },
-        catLinkName,
-        el('div', { class: 'navx-row' }, catLinkHref),
-        catLinkTip
-      )
+      el('div', { class: 'navx-card-head' }, el('h3', { text: '单猫详情' }), catFrameNote),
+      el('div', { class: 'navx-card-body' }, catFrame)
     );
 
     // ── 单猫详情原始数据（原卡 · Rushiera 2026-11-10 沉到页面最下面）──
@@ -416,7 +410,7 @@
       catSelect, sendText, sendBtn, sendResult,
       seg, segButtons, genFields, genTarget, genBtn, genResult,
       advIntentInput, advIntentBtn, advIntentOut, advModeOut, advShadowBtn, advLiveBtn, advPersonaOut, advHubOut, advDetails,
-      catCount, catsBox, catBar, catLinkName, catLinkHref, catLinkTip,
+      catCount, catsBox, catBar, catFrame, catFrameNote,
       detailTitle, detailBox, shotCount, shotsBox,
       artCount, artClear, artBox, actCount, activityBox, lineCount, lineBox, logCount, logBox
     };
@@ -723,7 +717,7 @@
 
     renderHero();
     renderCats();
-    renderCatLink();
+    renderCatFrame();
     renderArtifacts();
     renderActivity();
     renderLines();
@@ -1065,7 +1059,7 @@
         calls ? el('span', { class: 'navx-cat-calls', text: `${calls} 次` }) : null
       ));
     }
-    renderCatLink();
+    renderCatFrame();
   }
 
   /**
@@ -1081,32 +1075,26 @@
   }
 
   /**
-   * 单猫详情链接卡——把选中的猫链到它在 mau 里的对话页（同并发协议实体猫，新标签打开）。
+   * 单猫详情卡——把选中的猫的 mau 对话页直接内嵌（同并发协议实体猫的 `chatframe`）。
    *
    * @returns {void}
    */
-  function renderCatLink() {
+  function renderCatFrame() {
     if (!refs) return;
     const key = String(state.cat || '');
     const cats = sortCats(Array.isArray(state.status && state.status.cats) ? state.status.cats : []);
     const row = cats.find((item) => String(item.id || '') === key || String(item.name || '') === key);
-    const name = row ? String(row.name || key) : key;
     const port = row ? Number(row.port) || 0 : 0;
     const live = Boolean(row && row.running !== false && port);
-    refs.catLinkName.textContent = row
-      ? `${name}${row.special ? '（主干）' : ''} · 端口 ${port || '—'}`
-      : `${key || '（未选猫）'}（清单里没有这只）`;
-    if (live) {
-      refs.catLinkHref.href = catUrlOf(port);
-      refs.catLinkHref.classList.remove('off');
-      refs.catLinkHref.textContent = `打开 ${name} 的对话页`;
-      refs.catLinkTip.textContent = '跟并发协议的实体猫一样——点开是该猫在 mau 里的对话页（新标签，只看不投递）。';
-    } else {
-      refs.catLinkHref.href = '#';
-      refs.catLinkHref.classList.add('off');
-      refs.catLinkHref.textContent = '对话页连不上';
-      refs.catLinkTip.textContent = '这只猫没在运行（没有端口）——先让它起来，链接才有地址。';
+    const url = live ? catUrlOf(port) : 'about:blank';
+    // 🔴 只在地址变化时赋值——每 5 秒轮询重设 src 会把猫页面整个刷掉（滚动 / 输入全丢）。
+    if (refs.catFrame.dataset.url !== url) {
+      refs.catFrame.dataset.url = url;
+      refs.catFrame.src = url;
     }
+    refs.catFrame.title = row ? `${row.name || key} 对话页` : '猫对话页';
+    // 失败必须可见：没在跑的猫给一片空白会让人以为页面坏了——卡头右侧挂一句短的。
+    refs.catFrameNote.textContent = live ? '' : (row ? '未运行' : '没有这只猫');
   }
 
   function renderDetail() {

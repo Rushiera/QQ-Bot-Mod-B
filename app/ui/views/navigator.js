@@ -5,8 +5,9 @@
 //
 // 布局（v2 换版，Rushiera 2026-11-09「界面难看 / 排版重调 / 展示全一点」）：
 //   · 状态带 = hero（开关 + 来源 + 一句状态）+ 6 个指标块（可点可读）
-//   · 主栏 = 投递 · 生成能力 · 高级（意图自测 / 接入模式 / hub / 教材）
-//   · 侧栏 = 猫群 · 单猫详情 · 会话截图；主 / 侧 = 2 : 3 —— 单猫详情占页面 60%
+//   · 主栏 = 领航员输入 · 投递 · 生成能力 · 高级（意图自测 / 接入模式 / hub / 教材）
+//   · 侧栏 = 单猫详情（链接 mau 实体猫的对话页，同并发协议实体猫）；猫群条在开启块下方一整行
+//   · 原「单猫详情 JSON」卡沉到通栏最末（Rushiera 2026-11-10）
 //   · 回消息群框 = 一个下拉（不发群消息 / 消息跟随（当前群名）/ 各群）+ 标签行右侧「→ 群名」
 //   · 通栏 = 产物（网格）· 活动流（时间线）· 指令流水（表格）
 //
@@ -18,6 +19,7 @@
 //       GET /api/nav/persona · /api/nav/ingress · /api/groups/online
 // 动作：POST /api/nav/open|close|chat|send|shot|new-session|reset|comfy|moss|tts|tagger
 //       POST /api/nav/intent · /api/nav/ingress · /api/nav/artifacts/clear
+//       POST /api/biz/nav/lead（领航员输入框——业务面注入一条「本人在群里 @ 它」的消息）
 // 资产：GET /api/nav/asset?path=<绝对路径>（截图 / 产物图 / 音频；白名单在单体侧）
 
 (function () {
@@ -226,6 +228,27 @@
       el('div', { class: 'navx-stats' }, statChat, statIdle, statWatch, statBusy, statVip, statMode)
     );
 
+    // ── 领航员输入框（Rushiera 2026-11-10）──
+    // 与「投递」分开：投递是**指定猫**下一条指令；这里不选猫，一句话交给领航员自己判断。
+    // 落地通道 = 业务面真实入站链（等同本人在群里 @ 它说这句）——白名单 / 存档 / 档位 / 出站五闸照常。
+    const leadText = el('textarea', { class: 'navx-textarea', rows: 2, placeholder: '跟领航员说一句——不指定猫，由它自己判断（等同群里 @ 它说这句）' });
+    const leadBtn = el('button', { class: 'btn', text: '交给领航员' });
+    const leadResult = el('pre', { class: 'navx-pre' });
+    const leadCard = el('section', { class: 'navx-card' },
+      cardHead(el, '领航员输入', el('span', { class: 'navx-count', text: '不选猫' })),
+      el('div', { class: 'navx-card-body' },
+        el('label', { class: 'navx-field' },
+          el('span', { text: '交给群里的领航员' }),
+          el('span', { class: 'navx-tip', text: '落到「回消息群」' })),
+        leadText,
+        el('div', { class: 'navx-row' },
+          el('span', { class: 'navx-grow' }),
+          leadBtn
+        ),
+        leadResult
+      )
+    );
+
     // ── 投递卡 ──
     const catSelect = el('select', { class: 'navx-select' });
     const sendText = el('textarea', { class: 'navx-textarea', rows: 2, placeholder: '给猫下一条指令——投递到它的会话（面板操作，不走群）' });
@@ -303,12 +326,28 @@
       catsBox
     );
 
-    // ── 详情卡 ──
+    // ── 单猫详情卡（Rushiera 2026-11-10）──
+    // 改成**链接 mau 实体猫的对话页**，与并发协议实体猫同口径（点 = 打开该猫对话页，新标签）。
+    // 侧栏只放这一张：点猫条选中的猫跟着换，不再在本页展开整块 JSON。
+    const catLinkName = el('div', { class: 'navx-catlink-name', text: '未选猫' });
+    const catLinkTip = el('p', { class: 'navx-tip', text: '点猫条上任意一只猫 = 选中；链接打开它在 mau 里的对话页（新标签）。' });
+    const catLinkHref = el('a', { class: 'navx-catlink-a', href: '#', target: '_blank', rel: 'noopener', text: '打开对话页' });
+    const catLinkCard = el('section', { class: 'navx-card' },
+      el('div', { class: 'navx-card-head' }, el('h3', { text: '单猫详情' }),
+        el('span', { class: 'navx-tip', text: '同并发协议实体猫' })),
+      el('div', { class: 'navx-card-body' },
+        catLinkName,
+        el('div', { class: 'navx-row' }, catLinkHref),
+        catLinkTip
+      )
+    );
+
+    // ── 单猫详情原始数据（原卡 · Rushiera 2026-11-10 沉到页面最下面）──
     const detailTitle = el('h3', { text: '单猫详情' });
     const detailBox = el('pre', { class: 'navx-pre navx-tall', text: '右键猫条上的任意一只猫 → 详情 / 截图 / 新会话 / 整理。' });
-    const detailCard = el('section', { class: 'navx-card' },
+    const detailCard = el('section', { class: 'navx-card navx-span3' },
       el('div', { class: 'navx-card-head' }, detailTitle,
-        el('span', { class: 'navx-tip', text: '右键猫条 · 左侧点选猫 = 切投递目标' })),
+        el('span', { class: 'navx-tip', text: '原始数据 · 右键猫条「详情」拉取' })),
       el('div', { class: 'navx-card-body' }, detailBox)
     );
 
@@ -357,9 +396,11 @@
     );
 
     // ── 组装 ──
-    const mainCol = el('div', { class: 'navx-main' }, sendCard, genCard, advCard);
-    const sideCol = el('div', { class: 'navx-side' }, detailCard);
-    const foot = el('div', { class: 'navx-foot' }, lineCard, activityCard, artCard, logCard, shotCard);
+    // 主栏顺序（Rushiera 2026-11-10）：领航员输入 → 投递 → 生成能力 → 高级；
+    // 侧栏 = 单猫详情（链接卡）；原 JSON 详情卡沉到通栏最末。
+    const mainCol = el('div', { class: 'navx-main' }, leadCard, sendCard, genCard, advCard);
+    const sideCol = el('div', { class: 'navx-side' }, catLinkCard);
+    const foot = el('div', { class: 'navx-foot' }, lineCard, activityCard, artCard, logCard, shotCard, detailCard);
 
     host.appendChild(el('div', { class: 'navx' },
       hero,
@@ -371,10 +412,12 @@
     refs = {
       dot, heroMain, heroTitle, heroSub, toggle, refreshBtn, chatSelect, kindBar, kindNote,
       statIdle, statWatch, statBusy, statVip, statMode,
+      leadText, leadBtn, leadResult,
       catSelect, sendText, sendBtn, sendResult,
       seg, segButtons, genFields, genTarget, genBtn, genResult,
       advIntentInput, advIntentBtn, advIntentOut, advModeOut, advShadowBtn, advLiveBtn, advPersonaOut, advHubOut, advDetails,
-      catCount, catsBox, catBar, detailTitle, detailBox, shotCount, shotsBox,
+      catCount, catsBox, catBar, catLinkName, catLinkHref, catLinkTip,
+      detailTitle, detailBox, shotCount, shotsBox,
       artCount, artClear, artBox, actCount, activityBox, lineCount, lineBox, logCount, logBox
     };
 
@@ -442,6 +485,21 @@
         r.kindNote.textContent = `设置失败：${result.error || '未知原因'}`;
         return;
       }
+      await refresh(false);
+    });
+
+    // 领航员输入框（2026-11-10）——不选猫，走业务面真实入站链（等同群里本人 @ 它说这句）：
+    // 白名单 → 存档 → 档位 / @ 触发 → 出站五闸，一条链都不跳。
+    // 落群 = 单体的「回消息群」（activeChat）；为空时业务面取允许名单里的第一个群。
+    r.leadBtn.addEventListener('click', async () => {
+      const text = String(r.leadText.value || '').trim();
+      if (!text) { r.leadResult.textContent = '先写一句话。'; return; }
+      const chat = String((state.status && state.status.activeChat) || '');
+      r.leadBtn.disabled = true;
+      r.leadResult.textContent = '交给领航员…（等它跑完一轮，回复看群里 / 活动流）';
+      const result = await act('/api/biz/nav/lead', { text, chat });
+      r.leadBtn.disabled = false;
+      r.leadResult.textContent = formatLead(result);
       await refresh(false);
     });
 
@@ -631,6 +689,18 @@
     return `已投递 → ${result.key || '-'}${reply ? `\n回复：${String(reply).slice(0, 400)}` : ''}\n（回复截图与进度看「活动流」）`;
   }
 
+  /**
+   * 领航员输入回执 → 一段人话。
+   *
+   * @param {object} result `/api/biz/nav/lead` 回执
+   * @returns {string} 文本
+   */
+  function formatLead(result) {
+    if (!result) return '无回执。';
+    if (result.ok !== true) return `未受理：${result.error || '未知原因'}`;
+    return `已交给领航员（群 ${result.chat || '-'}）：${result.text || ''}\n这条按群消息算——回复在群里，进度看活动流。`;
+  }
+
   // ── 2. 取数 ──────────────────────────────────────────────────────────────
 
   /**
@@ -653,6 +723,7 @@
 
     renderHero();
     renderCats();
+    renderCatLink();
     renderArtifacts();
     renderActivity();
     renderLines();
@@ -993,6 +1064,48 @@
         tokK ? el('span', { class: 'navx-cat-ctx', text: `${tokK}k` }) : null,
         calls ? el('span', { class: 'navx-cat-calls', text: `${calls} 次` }) : null
       ));
+    }
+    renderCatLink();
+  }
+
+  /**
+   * 端口 → 该猫在 mau 里的对话页地址（与并发协议 `catUrlOf` 同口径）。
+   *
+   * @param {number} port 猫的端口
+   * @returns {string} URL（无端口返回空串）
+   */
+  function catUrlOf(port) {
+    const n = Number(port);
+    if (!n) return '';
+    return `http://${location.hostname || '127.0.0.1'}:${n}/`;
+  }
+
+  /**
+   * 单猫详情链接卡——把选中的猫链到它在 mau 里的对话页（同并发协议实体猫，新标签打开）。
+   *
+   * @returns {void}
+   */
+  function renderCatLink() {
+    if (!refs) return;
+    const key = String(state.cat || '');
+    const cats = sortCats(Array.isArray(state.status && state.status.cats) ? state.status.cats : []);
+    const row = cats.find((item) => String(item.id || '') === key || String(item.name || '') === key);
+    const name = row ? String(row.name || key) : key;
+    const port = row ? Number(row.port) || 0 : 0;
+    const live = Boolean(row && row.running !== false && port);
+    refs.catLinkName.textContent = row
+      ? `${name}${row.special ? '（主干）' : ''} · 端口 ${port || '—'}`
+      : `${key || '（未选猫）'}（清单里没有这只）`;
+    if (live) {
+      refs.catLinkHref.href = catUrlOf(port);
+      refs.catLinkHref.classList.remove('off');
+      refs.catLinkHref.textContent = `打开 ${name} 的对话页`;
+      refs.catLinkTip.textContent = '跟并发协议的实体猫一样——点开是该猫在 mau 里的对话页（新标签，只看不投递）。';
+    } else {
+      refs.catLinkHref.href = '#';
+      refs.catLinkHref.classList.add('off');
+      refs.catLinkHref.textContent = '对话页连不上';
+      refs.catLinkTip.textContent = '这只猫没在运行（没有端口）——先让它起来，链接才有地址。';
     }
   }
 

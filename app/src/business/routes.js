@@ -62,7 +62,9 @@ export function createRoutes(deps) {
     qqPortableStatus, qqPortableLogs, launchPortableQQ, stopPortableQQ,
     visionScan,
     buildUsageStats, buildUsageBreakdown,
-    reloadSkills
+    reloadSkills,
+    // 面板「领航员输入框」（2026-11-10）——面板一句话按群消息注入，走同一条入站链
+    ingestMessage
   } = deps;
 
   // 小工具：读请求体（容错：没 body 当空对象）。
@@ -1701,6 +1703,55 @@ export function createRoutes(deps) {
     {
       method: 'POST', pattern: /^\/api\/chats\/(group|private)_(\d+)\/wake$/,
       handler: async ({ res, json }) => json(res, 410, { error: '已移除：不触发的消息现在会立即标为已读，无需手动唤醒' })
+    },
+    {
+      // 面板「领航员输入框」（Rushiera 2026-11-10）——把面板里的一句话按「本人在群里 @ 机器人」
+      // 注入**真实入站链**：白名单 → 存档 → 档位 / @ 触发 → 出站五闸，一条都不跳。
+      // 与 `/api/chats/.../test-send` 的分界：那条是机器人**对外说**一句；这条是**人对话进来**，
+      // 触发的是领航员（业务面这只猫）自己跑一轮。
+      method: 'POST', pattern: '/api/nav/lead',
+      handler: async ({ req, res, json }) => {
+        const body = await bodyOf(req);
+        const text = String(body?.text ?? '').trim();
+        if (!text) return json(res, 400, { ok: false, error: '先说一句话' });
+        const cfgNow = getConfig();
+        const denyList = cfgNow.deny?.group ?? cfgNow.deny?.groups ?? [];
+        const allowList = cfgNow.allow?.group ?? cfgNow.allow?.groups ?? [];
+        // 落群：面板带来的「回消息群」优先；没带就取允许名单第一个群
+        const picked = String(body?.chat ?? '').trim() || String(allowList[0] ?? '');
+        if (!picked) return json(res, 400, { ok: false, error: '没有可用的群：先在群名单里加一个群' });
+        if (denyList.map(String).includes(picked)) {
+          return json(res, 403, { ok: false, error: `群 ${picked} 在拒绝名单里，注入会被丢弃` });
+        }
+        const inAllow = allowList.length > 0
+          ? allowList.map(String).includes(picked)
+          : cfgNow.allowAllWhenEmpty === true;
+        if (!inAllow) {
+          return json(res, 403, { ok: false, error: `群 ${picked} 不在允许名单里，注入会被丢弃（先加群名单）` });
+        }
+        const selfId = String(onebot.selfId || '');
+        if (!selfId) return json(res, 503, { ok: false, error: '协议端未就绪：拿不到自己的 QQ 号（先登录）' });
+        const vip = String(cfgNow.engage?.vipChannel?.user || '569145850');
+        const event = {
+          post_type: 'message',
+          message_type: 'group',
+          message_id: `panel-${Date.now()}`,
+          group_id: Number(picked) || picked,
+          time: Math.round(Date.now() / 1000),
+          self_id: selfId,
+          raw_message: text,
+          sender: { user_id: Number(vip) || vip, card: 'Rushiera', nickname: 'Rushiera' },
+          // @ 段是 atMe 的权威依据（档位判定按 QQ 号，不走文本包含匹配）——带上它这条才算「召唤」，
+          // 否则按普通群消息走节拍浏览，面板上点一下就变成"没反应"。
+          message: [
+            { type: 'at', data: { qq: selfId } },
+            { type: 'text', data: { text: ` ${text}` } }
+          ]
+        };
+        await ingestMessage('group', picked, event);
+        log(`[面板] 领航员输入 → 群 ${picked}：${text.slice(0, 60)}`);
+        return json(res, 200, { ok: true, chat: picked, text });
+      }
     },
     {
       method: 'POST', pattern: /^\/api\/chats\/(group|private)_(\d+)\/test-send$/,

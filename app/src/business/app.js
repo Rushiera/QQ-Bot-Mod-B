@@ -1367,7 +1367,9 @@ export function createApp({ log = console.log, eventSource = null } = {}) {
     qqPortableStatus, qqPortableLogs, launchPortableQQ, stopPortableQQ,
     visionScan, isPortOpen,
     buildUsageStats, buildUsageBreakdown,
-    reloadSkills
+    reloadSkills,
+    // 面板「领航员输入框」（2026-11-10）——把面板一句话按群消息注入，走同一条入站链
+    ingestMessage
   });
 
   async function handleHttp(req, res) {

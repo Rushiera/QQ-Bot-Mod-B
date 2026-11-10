@@ -449,6 +449,22 @@ main { flex: 1; overflow: hidden; display: flex; }
 .navx-mini:hover { border-color: var(--accent); color: var(--accent); }
 .navx-mini:disabled { opacity: .45; cursor: default; }
 
+/* ── 单猫详情链接卡（Rushiera 2026-11-10 · 同并发协议实体猫） ── */
+.navx-catlink-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.navx-catlink-a {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+  font-family: inherit;
+}
+.navx-catlink-a:hover { border-color: var(--accent); }
+.navx-catlink-a.off { color: var(--muted); border-style: dashed; pointer-events: none; }
+
 /* ── 产物网格 ─────────────────────────────────────────── */
 .navx-media {
   display: grid;

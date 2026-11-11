@@ -3,10 +3,13 @@
 // 定位：把「群里 @ 领航员能做的事」在面板上做一份等价的显式操作面，并把领航员状态**看全**——
 //       状态带（开关 / 回消息群 / 空闲 / 订阅 / 生成在跑 / VIP / 接入模式）+ 主从两栏 + 通栏。
 //
-// 布局（Rushiera 2026-11-10 定稿：单栏纵排）：
+// 布局（Rushiera 2026-11-11 修订：单栏纵排 + 主区两栏）：
 //   · 状态带 = hero（开关 + 来源 + 一句状态）+ 6 个指标块（可点可读）· 猫群条紧随其后一整行
-//   · 单栏纵排 = 单猫详情（内嵌 mau 猫对话页，占满整页宽度）→ 领航员输入 → 生成能力 → 高级
+//   · 主区两栏 = 猫会话（内嵌 mau 猫对话页，`?embed=1` 只读映射：宿主输入区不显示，保留状态区，左 · 约 85%）
+//                + 右栏上下两块（上 领航员输入 / 下 对猫说话，约 15%）
+//   · 其下依次 = 生成能力 → 高级
 //   · 通栏 = 线 / 活动流 / 产物 / 指令流水 / 会话截图 / 原「单猫详情 JSON」卡（沉在最末）
+//   · 两个「详情」区分：内嵌猫页卡 = 「猫会话」；最末原始 JSON 卡 = 「单猫详情」
 //   · 回消息群框 = 一个下拉（不发群消息 / 消息跟随（当前群名）/ 各群）+ 标签行右侧「→ 群名」
 //   · 投递卡已撤（2026-11-10）——「给某只猫下一条指令」走猫条右键菜单 / 群内 @ 通道
 //
@@ -233,7 +236,7 @@
     const leadText = el('textarea', { class: 'navx-textarea', rows: 2, placeholder: '跟领航员说一句——不指定猫，由它自己判断（等同群里 @ 它说这句）' });
     const leadBtn = el('button', { class: 'btn', text: '交给领航员' });
     const leadResult = el('pre', { class: 'navx-pre' });
-    const leadCard = el('section', { class: 'navx-card' },
+    const leadCard = el('section', { class: 'navx-card navx-lead' },
       cardHead(el, '领航员输入', el('span', { class: 'navx-count', text: '不选猫' })),
       el('div', { class: 'navx-card-body' },
         el('label', { class: 'navx-field' },
@@ -247,6 +250,29 @@
         leadResult
       )
     );
+
+    // ── 对猫说话（Rushiera 2026-11-11 · 右栏下半）──
+    // 猫会话改成只读映射（`?embed=1` 隐藏宿主输入区）之后，「给某只猫说一句」的入口落在这里：
+    // 目标猫 = 猫条 / 右键选中的那只（state.cat），走单体 `POST /api/nav/send`（与群内 @ 同一条投递链）。
+    const talkWho = el('span', { class: 'navx-count', text: '未选猫' });
+    const talkInput = el('input', { class: 'navx-input', placeholder: '对选中的猫说一句…（Enter 发送）' });
+    const talkPause = el('button', { class: 'navx-mini', text: '停止', title: '中止这只猫当前回合（cat.pause——已生成内容保留，前文格式修复）' });
+    const talkContinue = el('button', { class: 'navx-mini', text: '继续', title: '不追加消息，用当前前文再发一次（cat.continue——仅空闲受理，忙时排队）' });
+    const talkBtn = el('button', { class: 'btn', text: '发送' });
+    const talkResult = el('pre', { class: 'navx-pre' });
+    const talkCard = el('section', { class: 'navx-card navx-talk' },
+      el('div', { class: 'navx-card-head' }, el('h3', { text: '对猫说话' }), talkWho),
+      el('div', { class: 'navx-card-body' },
+        talkInput,
+        el('div', { class: 'navx-row' },
+          talkPause, talkContinue,
+          el('span', { class: 'navx-grow' }),
+          talkBtn
+        ),
+        talkResult
+      )
+    );
+    const leadCol = el('div', { class: 'navx-leadcol' }, leadCard, talkCard);
 
     // 一次性动作回执（整理重启等短回执）——投递卡撤掉后（Rushiera 2026-11-10）由这行承接；
     // 平时为空（`:empty` 不占版面），写完 6 秒自动清。
@@ -309,13 +335,14 @@
       catsBox
     );
 
-    // ── 单猫详情卡（Rushiera 2026-11-10 定稿）──
+    // ── 猫会话卡（Rushiera 2026-11-10 定稿 · 11-11 改名「猫会话」并让出右侧约 15% 给领航员输入）──
     // 直接把 mau 的猫对话页**拍在这里**（跨源 iframe，只显示不注入）——与并发协议实体猫同源，
     // 只是不做弹层、不写标题行：点猫条选中的猫跟着换，页面自己跑。
+    // 标题用「猫会话」——与本页最末的「单猫详情」（原始 JSON）区分开。
     const catFrame = el('iframe', { class: 'navx-catframe', src: 'about:blank', title: '猫对话页' });
     const catFrameNote = el('span', { class: 'navx-count', text: '' });
     const catLinkCard = el('section', { class: 'navx-card' },
-      el('div', { class: 'navx-card-head' }, el('h3', { text: '单猫详情' }), catFrameNote),
+      el('div', { class: 'navx-card-head' }, el('h3', { text: '猫会话' }), catFrameNote),
       el('div', { class: 'navx-card-body' }, catFrame)
     );
 
@@ -373,9 +400,10 @@
     );
 
     // ── 组装 ──
-    // 单栏纵排（Rushiera 2026-11-10 定稿）：单猫详情（内嵌猫页）占满整页宽度打头，
-    // 领航员输入 / 生成能力 / 高级依次往下放；原 JSON 详情卡沉在通栏最末。
-    const stack = el('div', { class: 'navx-stack' }, catLinkCard, leadCard, genCard, advCard);
+    // 主区两栏（Rushiera 2026-11-11）：左 = 猫会话（内嵌猫页，降宽让出右侧），右 = 领航员输入（约 15%）；
+    // 生成能力 / 高级依次往下放；原 JSON 详情卡（「单猫详情」）沉在通栏最末。
+    const main = el('div', { class: 'navx-split' }, catLinkCard, leadCol);
+    const stack = el('div', { class: 'navx-stack' }, main, genCard, advCard);
     const foot = el('div', { class: 'navx-foot' }, lineCard, activityCard, artCard, logCard, shotCard, detailCard);
 
     host.appendChild(el('div', { class: 'navx' },
@@ -390,6 +418,8 @@
       dot, heroMain, heroTitle, heroSub, toggle, refreshBtn, chatSelect, kindBar, kindNote,
       statIdle, statWatch, statBusy, statVip, statMode,
       leadText, leadBtn, leadResult, notice: noticeBox, sendResult: noticeBox,
+      talkWho, talkInput, talkBtn, talkResult,
+      talkPause, talkContinue,
       seg, segButtons, genFields, genTarget, genBtn, genResult,
       advIntentInput, advIntentBtn, advIntentOut, advModeOut, advShadowBtn, advLiveBtn, advPersonaOut, advHubOut, advDetails,
       catCount, catsBox, catBar, catFrame, catFrameNote,
@@ -478,6 +508,50 @@
       r.leadResult.textContent = formatLead(result);
       await refresh(false);
     });
+
+    // 对猫说话（2026-11-11）——目标 = 当前选中的猫（state.cat）；未选猫 / 空话直接回执，不静默。
+    async function talkSubmit() {
+      const key = String(state.cat || '');
+      const text = String(r.talkInput.value || '').trim();
+      if (!key) { r.talkResult.textContent = '先点猫条选一只猫。'; return; }
+      if (!text) { r.talkResult.textContent = '先写一句话。'; return; }
+      const name = catNameOf(key);
+      r.talkBtn.disabled = true;
+      r.talkResult.textContent = `投递中 → ${name}…`;
+      const result = await act('/api/nav/send', { key, text });
+      r.talkBtn.disabled = false;
+      if (result.ok !== true) {
+        r.talkResult.textContent = `失败：${result.error || '未知原因'}`;
+      } else {
+        r.talkResult.textContent = `已投给 ${name}（回复按发群类型开关落地）`;
+        r.talkInput.value = '';
+      }
+      await refresh(false);
+    }
+    r.talkBtn.addEventListener('click', talkSubmit);
+    r.talkInput.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      talkSubmit();
+    });
+
+    // 停止 / 继续（2026-11-11）——猫页输入区被 embed 隐藏后，这两个动作搬到面板；
+    // 语义与宿主 `#chatPause` / `#chatContinue` 一致，落点 `POST /api/nav/ctl` → `cat.pause` / `cat.continue`。
+    async function catCtl(action) {
+      const key = String(state.cat || '');
+      if (!key) { r.talkResult.textContent = '先点猫条选一只猫。'; return; }
+      const name = catNameOf(key);
+      const label = action === 'pause' ? '停止' : '继续';
+      r.talkResult.textContent = `${label}中 → ${name}…`;
+      const result = await act('/api/nav/ctl', { action, key });
+      const reason = result.error || (result.reply && (result.reply.error || result.reply.message)) || '';
+      r.talkResult.textContent = result.ok === true
+        ? `${label}已受理 → ${name}`
+        : `${label}未受理 → ${name}${reason ? `：${String(reason).slice(0, 160)}` : ''}`;
+      await refresh(false);
+    }
+    r.talkPause.addEventListener('click', () => catCtl('pause'));
+    r.talkContinue.addEventListener('click', () => catCtl('continue'));
 
     // 投递卡已撤（Rushiera 2026-11-10）——「给某只猫下一条指令」走猫条右键菜单 / 群内 @，
     // 面板上不再有「目标猫 + 指令 + 投递」这套控件。
@@ -940,6 +1014,7 @@
         class: 'navx-empty',
         text: s.ch4Error ? `CH4 未连接：${s.ch4Error}` : '（没有猫——先确认 CH4 在跑）'
       }));
+      refs.talkWho.textContent = '未选猫';
       return;
     }
 
@@ -998,11 +1073,15 @@
         calls ? el('span', { class: 'navx-cat-calls', text: `${calls} 次` }) : null
       ));
     }
+    refs.talkWho.textContent = state.cat ? catNameOf(state.cat) : '未选猫';
     renderCatFrame();
   }
 
   /**
-   * 端口 → 该猫在 mau 里的对话页地址（与并发协议 `catUrlOf` 同口径）。
+   * 端口 → 该猫在 mau 里的对话页地址（与并发协议 `catUrlOf` 同口径 + `?embed=1` 只读映射）。
+   *
+   * `?embed=1` 由宿主 chat 页识别：隐藏输入区（输入框 / 输入·流式切换 / 停止·继续·发送动作列），
+   * 对话区 / 状态区 / 桌宠照常渲染——面板里只「看」，说话走右栏「对猫说话」。
    *
    * @param {number} port 猫的端口
    * @returns {string} URL（无端口返回空串）
@@ -1010,11 +1089,23 @@
   function catUrlOf(port) {
     const n = Number(port);
     if (!n) return '';
-    return `http://${location.hostname || '127.0.0.1'}:${n}/`;
+    return `http://${location.hostname || '127.0.0.1'}:${n}/?embed=1`;
   }
 
   /**
-   * 单猫详情卡——把选中的猫的 mau 对话页直接内嵌（同并发协议实体猫的 `chatframe`）。
+   * 猫 key → 显示名（找不到就回 key 本身）。
+   *
+   * @param {string} key 猫 key
+   * @returns {string} 显示名
+   */
+  function catNameOf(key) {
+    const cats = Array.isArray(state.status && state.status.cats) ? state.status.cats : [];
+    const row = cats.find((item) => String(item.id || '') === String(key) || String(item.name || '') === String(key));
+    return row ? String(row.name || key) : String(key);
+  }
+
+  /**
+   * 猫会话卡——把选中的猫的 mau 对话页直接内嵌（同并发协议实体猫的 `chatframe`）。
    *
    * @returns {void}
    */

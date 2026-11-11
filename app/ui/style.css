@@ -256,8 +256,26 @@ main { flex: 1; overflow: hidden; display: flex; }
 .navx-dkind-note { display: block; font-size: 10.5px; color: var(--ok); margin-top: 3px; }
 .navx-dkind-note:empty { display: none; }
 
-/* ── 单栏纵排（Rushiera 2026-11-10：单猫详情占满整页宽度打头）+ 通栏 ── */
+/* ── 主区两栏 + 其下纵排（Rushiera 2026-11-11）+ 通栏 ── */
 .navx-stack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+/* 主区两栏（Rushiera 2026-11-11：左 猫会话 ≈85% · 右 领航员输入 ≈15%） */
+.navx-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 15%);
+  gap: 10px;
+  align-items: stretch;
+  min-width: 0;
+}
+@media (max-width: 1100px) {
+  .navx-split { grid-template-columns: 1fr; }
+}
+/* 右栏上下两块（Rushiera 2026-11-11）：上 = 领航员输入（吃掉剩余高度）· 下 = 对猫说话（固定高） */
+.navx-leadcol { display: flex; flex-direction: column; gap: 10px; min-height: 0; min-width: 0; }
+.navx-lead { flex: 1 1 auto; }
+.navx-lead .navx-card-body { flex: 1; }
+.navx-lead .navx-textarea { flex: 1 1 auto; min-height: 96px; }
+.navx-talk { flex: none; }
 .navx-notice {
   padding: 6px 11px;
   border: 1px solid var(--line);
@@ -447,7 +465,7 @@ main { flex: 1; overflow: hidden; display: flex; }
 .navx-mini:hover { border-color: var(--accent); color: var(--accent); }
 .navx-mini:disabled { opacity: .45; cursor: default; }
 
-/* ── 单猫详情内嵌猫页（Rushiera 2026-11-10 · 同并发协议 .chatframe） ── */
+/* ── 猫会话内嵌猫页（Rushiera 2026-11-10 · 同并发协议 .chatframe；11-11 起让宽给右侧领航员输入） ── */
 .navx-catframe {
   display: block;
   width: 100%;

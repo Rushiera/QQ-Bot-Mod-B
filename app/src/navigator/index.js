@@ -2778,6 +2778,37 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
   }
 
   /**
+   * 停止 / 继续——作用于指定猫（CH4 管理指令族 `cat.pause` / `cat.continue`）。
+   *
+   * 停止 = 中止本轮（已生成内容保留，前文格式修复）；继续 = 不追加消息、用当前前文再发一次（仅 Idle 受理，忙时排队）。
+   * 主干 `majordomo` 由宿主自锁（`cat.pause` / `cat.continue` 拒绝对主干自查），回执按未受理返回。
+   *
+   * @param {object} options 选项
+   * @param {string} options.action 动作（pause / continue）
+   * @param {string} options.key 目标猫
+   * @returns {Promise<object>} { ok, action, key, reply }
+   */
+  async function catCtl({ action = '', key = '' } = {}) {
+    const act = String(action || '').toLowerCase();
+    if (act !== 'pause' && act !== 'continue') return { ok: false, error: `未知动作：${action || '(空)'}` };
+    const raw = String(key || '').trim();
+    if (!raw) return { ok: false, error: '未指定目标猫' };
+    const target = await ch4.resolveKey(raw);
+    const label = act === 'pause' ? '停止' : '继续';
+    try {
+      const reply = await ch4.command(`cat.${act} ${target}`, ch4.mainPort);
+      const accepted = reply?.ok === true;
+      record(accepted ? 'event' : 'error', accepted
+        ? `${raw}：${label}已受理`
+        : `${raw}：${label}未受理（${JSON.stringify(reply).slice(0, 80)}）`);
+      return { ok: accepted, action: act, key: target, reply };
+    } catch (error) {
+      record('error', `${raw}：${label}失败（${error?.message ?? error}）`);
+      return { ok: false, action: act, key: target, error: String(error?.message ?? error) };
+    }
+  }
+
+  /**
    * 领航记录——本次领航（开启 → 关闭）的终态小结。
    *
    * 超时自关与主动退出都要有（Rushiera 2026-10-11）；落盘归档总是做，发群随「关闭动作的发生地」。
@@ -3326,6 +3357,11 @@ export function createNavigator({ log, dataDir, config, onebot, hooks = {}, summ
         dryRun: body?.dryRun === true,
         by: body?.by === 'qq' ? 'qq' : 'app'
       })
+    }),
+    // 停止 / 继续（Rushiera 2026-11-11）——面板「对猫说话」卡的两个动作按钮，作用于选中的猫。
+    // body: `{ action: 'pause' | 'continue', key }`；通道与群内 / 猫条右键同源（cat.pause / cat.continue）。
+    'POST /api/nav/ctl': async ({ body }) => ({
+      body: await catCtl({ action: body?.action, key: body?.key })
     }),
     'POST /api/nav/say': async ({ body }) => ({ body: await say(body?.chat, body?.text) }),
     'POST /api/nav/comfy': async ({ body }) => ({

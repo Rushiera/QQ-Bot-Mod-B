@@ -3,10 +3,11 @@
 // 定位：把「群里 @ 领航员能做的事」在面板上做一份等价的显式操作面，并把领航员状态**看全**——
 //       状态带（开关 / 回消息群 / 空闲 / 订阅 / 生成在跑 / VIP / 接入模式）+ 主从两栏 + 通栏。
 //
-// 布局（Rushiera 2026-11-11 修订：单栏纵排 + 主区两栏）：
+// 布局（Rushiera 2026-11-11 修订：单栏纵排 + 主区两栏 + 可拖分隔条）：
 //   · 状态带 = hero（开关 + 来源 + 一句状态）+ 6 个指标块（可点可读）· 猫群条紧随其后一整行
-//   · 主区两栏 = 猫会话（内嵌 mau 猫对话页，`?embed=1` 只读映射：宿主输入区不显示，保留状态区，左 · 约 85%）
-//                + 右栏上下两块（上 领航员输入 / 下 对猫说话，约 15%）
+//   · 主区两栏 = 猫会话（内嵌 mau 猫对话页，`?embed=1` 只读映射：宿主输入区不显示，保留状态区，左）
+//                + 右栏上下两块（上 领航员回复 · 产出位，暂空 / 下 对猫说话）
+//   · 两栏之间的分隔条可拖动调左右宽度（比例落 localStorage，双击复位；<1100px 单列回落时隐藏）
 //   · 其下依次 = 生成能力 → 高级
 //   · 通栏 = 线 / 活动流 / 产物 / 指令流水 / 会话截图 / 原「单猫详情 JSON」卡（沉在最末）
 //   · 两个「详情」区分：内嵌猫页卡 = 「猫会话」；最末原始 JSON 卡 = 「单猫详情」
@@ -21,7 +22,7 @@
 //       GET /api/nav/persona · /api/nav/ingress · /api/groups/online
 // 动作：POST /api/nav/open|close|chat|send|shot|new-session|reset|comfy|moss|tts|tagger
 //       POST /api/nav/intent · /api/nav/ingress · /api/nav/artifacts/clear
-//       POST /api/biz/nav/lead（领航员输入框——业务面注入一条「本人在群里 @ 它」的消息）
+//       （后端 POST /api/biz/nav/lead 保留，前端输入面已撤——领航员输入框改「领航员回复」产出位）
 // 资产：GET /api/nav/asset?path=<绝对路径>（截图 / 产物图 / 音频；白名单在单体侧）
 
 (function () {
@@ -230,32 +231,21 @@
       el('div', { class: 'navx-stats' }, statChat, statIdle, statWatch, statBusy, statVip, statMode)
     );
 
-    // ── 领航员输入框（Rushiera 2026-11-10）──
-    // 与「投递」分开：投递是**指定猫**下一条指令；这里不选猫，一句话交给领航员自己判断。
-    // 落地通道 = 业务面真实入站链（等同本人在群里 @ 它说这句）——白名单 / 存档 / 档位 / 出站五闸照常。
-    const leadText = el('textarea', { class: 'navx-textarea', rows: 2, placeholder: '跟领航员说一句——不指定猫，由它自己判断（等同群里 @ 它说这句）' });
-    const leadBtn = el('button', { class: 'btn', text: '交给领航员' });
-    const leadResult = el('pre', { class: 'navx-pre' });
+    // ── 领航员回复（Rushiera 2026-11-11 改）──
+    // 原「领航员输入」已撤——输入面另行设计。这里只留一块**产出位**：
+    // 后续由领航员汇总其他猫的工作、产出一份文字报告落在这一块。当前为空，不放任何提示。
+    const leadOut = el('pre', { class: 'navx-pre navx-leadout' });
     const leadCard = el('section', { class: 'navx-card navx-lead' },
-      cardHead(el, '领航员输入', el('span', { class: 'navx-count', text: '不选猫' })),
-      el('div', { class: 'navx-card-body' },
-        el('label', { class: 'navx-field' },
-          el('span', { text: '交给群里的领航员' }),
-          el('span', { class: 'navx-tip', text: '落到「回消息群」' })),
-        leadText,
-        el('div', { class: 'navx-row' },
-          el('span', { class: 'navx-grow' }),
-          leadBtn
-        ),
-        leadResult
-      )
+      cardHead(el, '领航员回复'),
+      el('div', { class: 'navx-card-body' }, leadOut)
     );
 
     // ── 对猫说话（Rushiera 2026-11-11 · 右栏下半）──
     // 猫会话改成只读映射（`?embed=1` 隐藏宿主输入区）之后，「给某只猫说一句」的入口落在这里：
     // 目标猫 = 猫条 / 右键选中的那只（state.cat），走单体 `POST /api/nav/send`（与群内 @ 同一条投递链）。
     const talkWho = el('span', { class: 'navx-count', text: '未选猫' });
-    const talkInput = el('input', { class: 'navx-input', placeholder: '对选中的猫说一句…（Enter 发送）' });
+    // Enter 换行、点「发送」才投递（Rushiera 2026-11-11）——多行输入用 textarea，不拦 Enter。
+    const talkInput = el('textarea', { class: 'navx-textarea navx-talkinput', rows: 2, placeholder: '对选中的猫说一句…（Enter 换行，点「发送」投递）' });
     const talkPause = el('button', { class: 'navx-mini', text: '停止', title: '中止这只猫当前回合（cat.pause——已生成内容保留，前文格式修复）' });
     const talkContinue = el('button', { class: 'navx-mini', text: '继续', title: '不追加消息，用当前前文再发一次（cat.continue——仅空闲受理，忙时排队）' });
     const talkBtn = el('button', { class: 'btn', text: '发送' });
@@ -273,6 +263,9 @@
       )
     );
     const leadCol = el('div', { class: 'navx-leadcol' }, leadCard, talkCard);
+
+    // 主区两栏之间的分隔条（Rushiera 2026-11-11）——拖它调左右宽度，双击复位默认比例。
+    const divider = el('div', { class: 'navx-divider', title: '拖动调宽度 · 双击复位' });
 
     // 一次性动作回执（整理重启等短回执）——投递卡撤掉后（Rushiera 2026-11-10）由这行承接；
     // 平时为空（`:empty` 不占版面），写完 6 秒自动清。
@@ -400,9 +393,9 @@
     );
 
     // ── 组装 ──
-    // 主区两栏（Rushiera 2026-11-11）：左 = 猫会话（内嵌猫页，降宽让出右侧），右 = 领航员输入（约 15%）；
-    // 生成能力 / 高级依次往下放；原 JSON 详情卡（「单猫详情」）沉在通栏最末。
-    const main = el('div', { class: 'navx-split' }, catLinkCard, leadCol);
+    // 主区两栏（Rushiera 2026-11-11）：左 = 猫会话（内嵌猫页），右 = 领航员回复 + 对猫说话（约 15%）；
+    // 两栏之间是分隔条（拖动调宽度，双击复位）；生成能力 / 高级依次往下放；原 JSON 详情卡（「单猫详情」）沉在通栏最末。
+    const main = el('div', { class: 'navx-split' }, catLinkCard, divider, leadCol);
     const stack = el('div', { class: 'navx-stack' }, main, genCard, advCard);
     const foot = el('div', { class: 'navx-foot' }, lineCard, activityCard, artCard, logCard, shotCard, detailCard);
 
@@ -417,7 +410,7 @@
     refs = {
       dot, heroMain, heroTitle, heroSub, toggle, refreshBtn, chatSelect, kindBar, kindNote,
       statIdle, statWatch, statBusy, statVip, statMode,
-      leadText, leadBtn, leadResult, notice: noticeBox, sendResult: noticeBox,
+      split: main, divider, leadOut, notice: noticeBox, sendResult: noticeBox,
       talkWho, talkInput, talkBtn, talkResult,
       talkPause, talkContinue,
       seg, segButtons, genFields, genTarget, genBtn, genResult,
@@ -494,20 +487,9 @@
       await refresh(false);
     });
 
-    // 领航员输入框（2026-11-10）——不选猫，走业务面真实入站链（等同群里本人 @ 它说这句）：
-    // 白名单 → 存档 → 档位 / @ 触发 → 出站五闸，一条链都不跳。
-    // 落群 = 单体的「回消息群」（activeChat）；为空时业务面取允许名单里的第一个群。
-    r.leadBtn.addEventListener('click', async () => {
-      const text = String(r.leadText.value || '').trim();
-      if (!text) { r.leadResult.textContent = '先写一句话。'; return; }
-      const chat = String((state.status && state.status.activeChat) || '');
-      r.leadBtn.disabled = true;
-      r.leadResult.textContent = '交给领航员…（等它跑完一轮，回复看群里 / 活动流）';
-      const result = await act('/api/biz/nav/lead', { text, chat });
-      r.leadBtn.disabled = false;
-      r.leadResult.textContent = formatLead(result);
-      await refresh(false);
-    });
+    // 主区分隔条（2026-11-11）——拖动调左右宽度，双击复位。
+    // 原「领航员输入」框已撤（输入面另行设计）——本卡改为「领航员回复」产出位，无输入控件。
+    bindDivider();
 
     // 对猫说话（2026-11-11）——目标 = 当前选中的猫（state.cat）；未选猫 / 空话直接回执，不静默。
     async function talkSubmit() {
@@ -529,11 +511,7 @@
       await refresh(false);
     }
     r.talkBtn.addEventListener('click', talkSubmit);
-    r.talkInput.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter') return;
-      event.preventDefault();
-      talkSubmit();
-    });
+    // Enter 走默认换行（多行输入）——投递只认「发送」按钮（Rushiera 2026-11-11）。
 
     // 停止 / 继续（2026-11-11）——猫页输入区被 embed 隐藏后，这两个动作搬到面板；
     // 语义与宿主 `#chatPause` / `#chatContinue` 一致，落点 `POST /api/nav/ctl` → `cat.pause` / `cat.continue`。
@@ -608,6 +586,71 @@
       const result = await act('/api/nav/ingress', { mode: 'live' });
       r.advModeOut.textContent = result.ok ? `mode=${result.mode} · allow=${JSON.stringify(result.allow)}` : `切换失败：${result.error}`;
       await refresh(false);
+    });
+  }
+
+  /**
+   * 主区分隔条——拖动调左右宽度（比例落 localStorage，刷新后保留）；双击复位默认比例。
+   * 窄屏（<1100px）由 CSS 单列回落接管，分隔条隐藏。
+   *
+   * @returns {void}
+   */
+  function bindDivider() {
+    const split = refs && refs.split;
+    const divider = refs && refs.divider;
+    if (!split || !divider) return;
+
+    /** 右栏最小宽（与 style.css `.navx-split` 的 minmax 下限一致）。 */
+    const RIGHT_MIN = 200;
+    /** 分隔条 6px + 两侧 grid gap 10px × 2。 */
+    const GUTTER = 26;
+    /** 左栏最小宽。 */
+    const LEFT_MIN = 260;
+    const KEY = 'navx.split.left';
+
+    // 恢复上次拖出来的比例（没存过就落回 CSS 默认 1fr : 15%）。
+    let saved = NaN;
+    try { saved = Number(localStorage.getItem(KEY)); } catch (error) { saved = NaN; }
+    if (Number.isFinite(saved) && saved > 0.1 && saved < 0.95) {
+      split.style.gridTemplateColumns = `minmax(0, ${(saved * 100).toFixed(2)}%) 6px minmax(${RIGHT_MIN}px, 1fr)`;
+    }
+
+    divider.addEventListener('dblclick', () => {
+      split.style.gridTemplateColumns = '';
+      try { localStorage.removeItem(KEY); } catch (error) { /* 存储不可用不阻断复位 */ }
+    });
+
+    divider.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      const leftCard = split.firstElementChild;
+      const rect = split.getBoundingClientRect();
+      const startX = event.clientX;
+      const startLeft = leftCard ? leftCard.getBoundingClientRect().width : rect.width * 0.85;
+      const span = Math.max(1, rect.width - GUTTER);
+      const maxLeft = Math.max(LEFT_MIN, span - RIGHT_MIN);
+      event.preventDefault();
+      try { divider.setPointerCapture(event.pointerId); } catch (error) { /* 无指针捕获也继续用普通事件 */ }
+      document.body.classList.add('navx-dragging');
+
+      /** 拖动中：左栏跟手，右栏吃剩余（min 200px）。 */
+      const onMove = (move) => {
+        const left = Math.max(LEFT_MIN, Math.min(maxLeft, startLeft + (move.clientX - startX)));
+        split.style.gridTemplateColumns = `minmax(0, ${Math.round(left)}px) 6px minmax(${RIGHT_MIN}px, 1fr)`;
+      };
+      /** 松手：比例落盘（左栏宽 / 两栏可用总宽），拆监听。 */
+      const onUp = () => {
+        divider.removeEventListener('pointermove', onMove);
+        divider.removeEventListener('pointerup', onUp);
+        divider.removeEventListener('pointercancel', onUp);
+        document.body.classList.remove('navx-dragging');
+        const now = split.firstElementChild ? split.firstElementChild.getBoundingClientRect().width : 0;
+        if (now > 0) {
+          try { localStorage.setItem(KEY, String(now / span)); } catch (error) { /* 存储不可用只影响持久化 */ }
+        }
+      };
+      divider.addEventListener('pointermove', onMove);
+      divider.addEventListener('pointerup', onUp);
+      divider.addEventListener('pointercancel', onUp);
     });
   }
 
@@ -706,18 +749,6 @@
     }
     if (!val('navx-image') && !val('navx-file') && !val('navx-url')) return { error: '要给一张图：路径 / file / 直链三选一。' };
     return { body: { image: val('navx-image'), file: val('navx-file'), url: val('navx-url') } };
-  }
-
-  /**
-   * 领航员输入回执 → 一段人话。
-   *
-   * @param {object} result `/api/biz/nav/lead` 回执
-   * @returns {string} 文本
-   */
-  function formatLead(result) {
-    if (!result) return '无回执。';
-    if (result.ok !== true) return `未受理：${result.error || '未知原因'}`;
-    return `已交给领航员（群 ${result.chat || '-'}）：${result.text || ''}\n这条按群消息算——回复在群里，进度看活动流。`;
   }
 
   // ── 2. 取数 ──────────────────────────────────────────────────────────────

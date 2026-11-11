@@ -259,23 +259,50 @@ main { flex: 1; overflow: hidden; display: flex; }
 /* ── 主区两栏 + 其下纵排（Rushiera 2026-11-11）+ 通栏 ── */
 .navx-stack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 
-/* 主区两栏（Rushiera 2026-11-11：左 猫会话 ≈85% · 右 领航员输入 ≈15%） */
+/* 主区两栏（Rushiera 2026-11-11：左 猫会话 · 右 领航员回复 + 对猫说话）
+   两栏宽度由中间分隔条拖动调整（比例由 navigator.js 写进内联 grid-template-columns）。 */
 .navx-split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(200px, 15%);
+  grid-template-columns: minmax(0, 1fr) 6px minmax(200px, 15%);
   gap: 10px;
   align-items: stretch;
   min-width: 0;
 }
-@media (max-width: 1100px) {
-  .navx-split { grid-template-columns: 1fr; }
+/* 分隔条（拖动调宽度 · 双击复位）：视觉一条 6px 细线；伪元素把热区向左右各扩 10px（正好吃掉两侧 gap） */
+.navx-divider {
+  position: relative;
+  align-self: stretch;
+  border-radius: 3px;
+  background: var(--line);
+  cursor: col-resize;
+  transition: background .12s;
+  touch-action: none;
 }
-/* 右栏上下两块（Rushiera 2026-11-11）：上 = 领航员输入（吃掉剩余高度）· 下 = 对猫说话（固定高） */
+.navx-divider::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -10px;
+  right: -10px;
+}
+.navx-divider:hover { background: var(--accent); }
+body.navx-dragging { cursor: col-resize; user-select: none; }
+body.navx-dragging .navx-catframe { pointer-events: none; }
+@media (max-width: 1100px) {
+  .navx-split { grid-template-columns: 1fr !important; }
+  .navx-divider { display: none; }
+}
+/* 右栏上下两块（Rushiera 2026-11-11）：上 = 领航员回复（吃掉剩余高度）· 下 = 对猫说话（固定高） */
 .navx-leadcol { display: flex; flex-direction: column; gap: 10px; min-height: 0; min-width: 0; }
-.navx-lead { flex: 1 1 auto; }
-.navx-lead .navx-card-body { flex: 1; }
-.navx-lead .navx-textarea { flex: 1 1 auto; min-height: 96px; }
+.navx-lead { flex: 1 1 auto; min-height: 0; }
+.navx-lead .navx-card-body { flex: 1; min-height: 0; }
+/* 领航员回复产出位——空着也要占满剩余高度（`.navx-pre:empty` 默认隐藏，这里按更高优先级覆盖） */
+.navx-pre.navx-leadout { display: block; flex: 1 1 auto; max-height: none; min-height: 0; overflow: auto; }
+.navx-lead .navx-pre:empty { display: block; }
 .navx-talk { flex: none; }
+/* 对猫说话：多行输入（Enter 换行，点「发送」才投递） */
+.navx-talkinput { resize: vertical; min-height: 46px; max-height: 180px; }
 .navx-notice {
   padding: 6px 11px;
   border: 1px solid var(--line);

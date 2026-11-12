@@ -66,7 +66,12 @@ node "%ROOT%\tools\open-startup-session.mjs"
 echo [4/4] starting monolith...
 rem [qqbotb-entry:cwd-pin] pin cwd to app\ -- never inherit the caller's cwd.
 cd /d "%APPDIR%" || exit /b 1
-start "" "%APPDIR%\node_modules\electron\dist\electron.exe" .
+rem [qqbotb-entry:debug-port] CDP for local harnesses (ACS). Loopback only.
+rem   Default 9222. Set QQBOTB_DEBUG_PORT=0 in the environment to disable.
+if not defined QQBOTB_DEBUG_PORT set "QQBOTB_DEBUG_PORT=9222"
+set "DEBUGARG="
+if not "%QQBOTB_DEBUG_PORT%"=="0" set "DEBUGARG=--remote-debugging-port=%QQBOTB_DEBUG_PORT%"
+start "" "%APPDIR%\node_modules\electron\dist\electron.exe" %DEBUGARG% .
 endlocal
 `;
 

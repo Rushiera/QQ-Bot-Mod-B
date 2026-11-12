@@ -759,7 +759,7 @@ export function stripMentions(entry) {
  * 2026-09-25 改版：四个档位读取的已读历史条数统一（store.historyCount，
  * 见 config.js），档位退化为纯粹的"触发方式开关"：
  *
- *   1 档 仅艾特    → 只有被艾特（或拍一拍我）才响应
+ *   1 档 仅艾特    → 只有被艾特才响应（拍一拍不算，2026-11-12）
  *   2 档 +关键词   → 命中关键词也响应
  *   3 档 +随机     → randomPercent% 概率响应
  *   4 档 全响应    → 任何消息都响应（兜底）
@@ -817,11 +817,11 @@ export function resolveContextTier({ triggerEntries = [], selfNickname = '', bot
   const rollValue = roll === null || roll === undefined ? Math.random() * 100 : Number(roll);
   const randomHit = rollValue < Math.max(0, Math.min(100, Number(c.randomPercent) || 0));
 
-  // 拍一拍 = 轻量召唤：触发批里有"拍了拍我"的事件时按 1 档响应（与被艾特同级）。
-  // 判定依据是 isPoke 标记 + 文本里"拍了拍 我"（后者兜底老存档里没有标记的记录）。
-  const pokeMe = (triggerEntries || []).some((e) => e?.isPoke && /拍了拍\s*我/.test(String(e?.text ?? '')));
-  if (pokeMe) {
-    return { tier: 1, count: historyCount(), reason: '拍了拍我', shouldRespond: true };
+  // 拍一拍不算召唤（2026-11-12 Rushiera 定）：只拍不给信息，读不出意图 → 不回应；
+  // 等对方真正发言（有信息）后按正常档位判定。触发批里全是拍一拍 → 明确不响应。
+  const pokes = (triggerEntries || []).filter((e) => e && e.isPoke);
+  if (pokes.length > 0 && pokes.length >= (triggerEntries || []).length) {
+    return { tier: 1, count: historyCount(), reason: '只有拍一拍（不含信息）', shouldRespond: false };
   }
 
   // 4 档：无条件响应（兜底）
@@ -867,7 +867,7 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null, 
   messages = messages.filter((m) => !exclude.has(m.id));
   // 撤回的消息不再发给大模型（用户撤回了就不该再被看到）
   messages = messages.filter((m) => !m.recalled);
-  // 拍一拍事件不进【已读信息】：它是即时召唤信号（已在触发批里出现过了），
+  // 拍一拍事件不进【已读信息】：它不携带信息（2026-11-12 起也不作召唤信号），
   // 历史里堆一排"[拍一拍] X 拍了拍 Y"只会教模型把拍一拍当聊天内容复读。
   messages = messages.filter((m) => !m.isPoke);
   // 屏蔽名单兜底过滤：屏蔽生效前已存档的历史消息，也不能再进提示词。
@@ -909,8 +909,9 @@ function triggerLabels(entry, ctx) {
   if (noteName && lower.includes(noteLower)) labels.push('提到我（备注名）');
   if (/[?？]$/.test(text.trim()) || /[吗呢]/.test(text)) labels.push('提问');
   if (text.startsWith('[引用 ')) labels.push('引用');
-  // 拍一拍：被拍的是我时标「拍我」（召唤信号），拍别人只标「拍一拍」（背景事件）
-  if (text.includes('[拍一拍]')) labels.push(/拍了拍\s*我/.test(text) ? '拍我' : '拍一拍');
+  // 拍一拍：不是召唤（2026-11-12）——只拍不给信息，读不出意图。标签只作背景，
+  // 提示模型别为它开口；真正要回应时等对方发言（有信息）后按正常档位判定。
+  if (text.includes('[拍一拍]')) labels.push(/拍了拍\s*我/.test(text) ? '拍我（不算招呼）' : '拍一拍');
   return labels;
 }
 

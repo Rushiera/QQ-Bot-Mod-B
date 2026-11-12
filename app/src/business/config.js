@@ -365,7 +365,7 @@ export const DEFAULT_CONFIG = {
     // 语义：不再"每条消息立刻进 LLM"，而是按节拍浏览群内容 —— 到点看一次该群未读，
     //   有新增才调 LLM，一次把这段时间的全部内容交给模型（含图片/媒体，工具该读的读），
     //   由模型自己决定接不接。从根本上避开"有人说话就要接"的尬聊。
-    //   @ / 拍一拍 立即触发（atMeImmediate）；私聊不走节拍（privateImmediate）。
+    //   @ 立即触发（atMeImmediate）；拍一拍不触发（pokeImmediate，默认 false）；私聊不走节拍（privateImmediate）。
     //   levels：档位表（毫秒），索引 0 = 基础档；模型可用 set_browse_rate 升档。
     //   holdMs：升档有效期 —— 期间该群有成功发言即顺延，到期自动降一档。
     //     （不用"群里静默"做回落信号：热群里消息停不下来，静默永不触发。）
@@ -376,6 +376,9 @@ export const DEFAULT_CONFIG = {
       levels: [240000, 120000, 60000],
       holdMs: 900000,
       atMeImmediate: true,
+      // 拍一拍不立即触发（2026-11-12 Rushiera 定）：只拍不给信息 = 读不出意图，
+      // 不回；等对方真正发言（有信息）后再按正常节拍判定。@ 仍走 atMeImmediate。
+      pokeImmediate: false,
       privateImmediate: true,
       sweepMs: 5000,
       // ── 静默补拍（2026-10-11）── [qqagent-browse-patch:config-browse-idle]
@@ -384,6 +387,19 @@ export const DEFAULT_CONFIG = {
       //   同样不要求模型必须回复 —— 看完不回是正常结束。
       //   0 / false = 关闭（只按节拍到点看）。
       idleMs: 60000
+    },
+    // ── 冷场首接抑制（2026-11-12）── [qqagent-coldstart-patch:config]
+    // 语义：群里只有一个人在说、还没人接上之前，bot 不当第一个接话的人。
+    //   判据与例外 → `cold-start.js` 的 analyzeTurn（纯函数，可单测）。
+    //   minSolo：同一人连发几条仍无人回应 → 破例（自说自话 / 求助没人应）。
+    //   windowMs：回看窗口（找"当前话头"）；gapMs：bot 发言后多久内算"对话延续"。
+    //   enabled=false → 关硬闸；soloWeight 作为信号第七因子在概率面兜底。
+    coldStart: {
+      enabled: true,
+      minSolo: 4,
+      windowMs: 1800000,
+      gapMs: 300000,
+      soloWeight: 0.2
     },
     // ── bot 指定限频（2026-10-10）── [qqagent-botguard-patch:config-botguard]
     // members：被指定为机器人的群友 QQ 号（记忆页「🤖 bot」开关写这里）。
@@ -437,7 +453,7 @@ export const DEFAULT_CONFIG = {
     },
     // ── 安静模式（2026-10-16）── [qqagent-quiet-patch:config-quiet]
     // chats：处于安静模式的群号清单（记忆页「🤫 安静」开关写这里）。
-    //   安静群"能不发言就不发言"：不参与闲聊，只有被 @ / 拍一拍 才回应；
+    //   安静群"能不发言就不发言"：不参与闲聊，只有被 @ 才回应（拍一拍不算，2026-11-12）；
     //   每 intervalMs（默认 6 小时）跑一次"只整理不发言"的记忆沉淀轮。
     //   存档与记忆功能不受影响（消息照常入库、归档与记忆整理照常）。
     //   enabled=false 完全关闭（群清单保留，下次打开即恢复）。

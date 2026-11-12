@@ -364,7 +364,7 @@ async function trySend(text, options = {}) {
   check('18b 加分后分数 = 86', getScore(KEY, T) === 86, String(getScore(KEY, T)));
   setRapport(KEY, T, 100);
 
-  // 18c 引用我 / 拍我 也算接话
+  // 18c 引用我算接话；拍一拍不算（拍一拍无信息，不视为有人接 · 2026-11-12 Rushiera 定）
   clearRapportWatch();
   noteRapportOutbound(KEY, T, {});
   const quoted = settleRapportWatch(KEY, [{ self: false, senderId: '20002', text: '[引用 R喵：[图片]] 哈哈' }], ctx);
@@ -372,7 +372,7 @@ async function trySend(text, options = {}) {
   clearRapportWatch();
   noteRapportOutbound(KEY, T, {});
   const poked = settleRapportWatch(KEY, [{ self: false, senderId: '20002', text: '[拍一拍] 甲 拍了拍 我', isPoke: true }], ctx);
-  check('18c 拍我 → 算接话', poked && poked.hit === true, JSON.stringify(poked));
+  check('18c 拍我 → 不算接话（拍一拍无信息，不视为有人接）', poked && poked.hit === false, JSON.stringify(poked));
 
   // 18d 主人豁免（watch.exemptUsers）：记不进去、也不结算
   clearRapportWatch();

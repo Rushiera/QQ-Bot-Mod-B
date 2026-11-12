@@ -79,7 +79,8 @@ export class ChatStore {
     const st = this.#state(chatKey);
     // 未读只计他人消息（与 unreadCount / peekUnread 口径一致）——
     // 曾经用 !m.read 把 self 也算进去，机器人自己的发言会把角标顶大。
-    const unread = st.messages.filter((m) => !m.read && !m.self).length;
+    // 拍一拍不计未读（2026-11-12）：无信息事件，不触发节拍、不占角标。
+    const unread = st.messages.filter((m) => !m.read && !m.self && !m.isPoke).length;
     const last = st.messages[st.messages.length - 1] || null;
     return { chatKey, total: st.messages.length, unread, lastTs: last?.ts ?? 0, lastText: last?.text ?? '' };
   }
@@ -100,7 +101,7 @@ export class ChatStore {
       read: false,
       reply: reply || null,
       media: Array.isArray(media) ? media : [],
-      // 拍一拍事件：可作触发批（resolveContextTier 按 1 档响应），但不进【已读信息】
+      // 拍一拍事件：只留痕 —— 不算未读、不作召唤、不立即触发、不进【已读信息】（2026-11-12）
       isPoke: Boolean(isPoke),
       // @ 判定标记（2026-09-26）：atMe 以 @ 段的 QQ 号为准 —— 文本包含匹配
       // 分不清"同名不同人"（群友 @ 的人与机器人重名时被误判为 @机器人）。
@@ -241,20 +242,23 @@ export class ChatStore {
    */
   lastUnreadTs(chatKey) {
     const st = this.#state(chatKey);
-    const unread = st.messages.filter((m) => !m.read && !m.self);
+    // 拍一拍不算"未读内容"（2026-11-12）：它不携带信息，不能单独触发静默补拍。
+    const unread = st.messages.filter((m) => !m.read && !m.self && !m.isPoke);
     const last = unread[unread.length - 1];
     return last ? (Number(last.ts) || 0) : 0;
   }
 
   unreadCount(chatKey) {
     const st = this.#state(chatKey);
-    return st.messages.filter((m) => !m.read && !m.self).length;
+    // 拍一拍不计未读（2026-11-12）：只有拍一拍时 unread=0 → 节拍不唤醒。
+    return st.messages.filter((m) => !m.read && !m.self && !m.isPoke).length;
   }
 
   /** 查看当前未读消息（不置已读），用于“等待中”会话的触发摘要。 */
   peekUnread(chatKey, limit = 3) {
     const st = this.#state(chatKey);
-    return st.messages.filter((m) => !m.read && !m.self).slice(0, Math.max(1, Number(limit) || 3));
+    // 拍一拍不进"等待中"触发摘要（2026-11-12）：无信息，不构成待回消息。
+    return st.messages.filter((m) => !m.read && !m.self && !m.isPoke).slice(0, Math.max(1, Number(limit) || 3));
   }
 
   /**

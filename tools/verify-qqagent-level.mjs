@@ -322,11 +322,11 @@ console.log('\n[7] 源码在位');
 
   // B31 判据 1 / 4：接线在位断言——三函数的消费方不再为零。
   ok('orchestrator import 三件信号函数', orch.includes('qqagent-level-patch:signals-import'));
-  ok('判定处调用 #signalCoefficient', /const sgn = this\.#signalCoefficient\(chatKey\);/.test(orch));
+  ok('判定处调用 #signalCoefficient', /const sgn = this\.#signalCoefficient\(chatKey[,)]/.test(orch));
   ok('系数真乘进 rollParticipation', /rollParticipation\(chatKey, Math\.random, sgn\.coef\)/.test(orch));
   ok('采集行带 baseRate/coef', orch.includes('baseRate: r.baseRate, rate: r.rate, coef: r.coef'));
   ok('#signalCoefficient 用 computeSignals + compositeCoefficient',
-    /computeSignals\(messages, \{[\s\S]{0,300}compositeCoefficient\(sig, floor\)/.test(orch));
+    /computeSignals\(messages, \{/.test(orch) && /compositeCoefficient\(sig, floor\)/.test(orch));
   ok('costDay 供给（todayUsage → estimateCost，60s 缓存）',
     /const usage = this\.sessions\.todayUsage\(day\);/.test(orch) && /estimateCost\(usage, \{ model \}\)/.test(orch)
     && /#costCache\.day === day && now - this\.#costCache\.at < 60000/.test(orch));

@@ -6,7 +6,8 @@
 // 内容交给模型，由模型自己决定接不接、接哪条。
 //
 // 档位：1 = 每 4 分钟（基础）· 2 = 每 2 分钟 · 3 = 每 1 分钟。
-// 模型可自行升档（工具 set_browse_rate）；@ / 拍一拍走立即触发，不受节拍约束。
+// 模型可自行升档（工具 set_browse_rate）；@ 走立即触发，不受节拍约束；
+// 拍一拍不触发（只拍不给信息，2026-11-12），等对方真正发言后再按节拍判定。
 //
 // 回落：升档只在 holdMs 内有效，期间该群有任何一次成功发言即顺延
 // （"还在参与" = 这波热度对它有价值）；到期自动降一档。
@@ -15,6 +16,8 @@
 //
 // 状态是**运行时短期态**（不落盘）：重启回基础档 —— 少看少说是安全的失败方向。
 import { getConfig, commandMuteTier } from './config.js';
+// 冷场首接配置（只读阈值，用于提示词纪律的条数口径）——[qqagent-coldstart-patch:browse-rate-import]
+import { coldStartCfg } from './cold-start.js';
 
 const FALLBACK_LEVELS = [240000, 120000, 60000];
 const FALLBACK_HOLD_MS = 900000;
@@ -151,6 +154,12 @@ export function browseHint(chatKey, { atMe = false } = {}) {
       + '，你自己调快的，约 ' + leftMin + ' 分钟后自动降回来）。节拍快 = 群里正热，'
       + '但你的发言额度没变 —— 越热越要省着说：一次把话说完就会撞上配额墙，宁可少说、留着后面接。');
   }
-  if (atMe) lines.push('这一拍里有 @ 你 / 拍了拍你的消息 —— 那是点名找你，要回应。');
+  // 接话顺位纪律（[qqagent-coldstart-patch:browse-hint] · 2026-11-12）：
+  // 入场面已按「冷场单人独白」硬拦；这条管放行之后的"别抢话"——模型看到了也别急着接。
+  const cs = coldStartCfg(getConfig().engage?.coldStart);
+  lines.push('冷场不抢第一个接：群里只有一个人在说、还没人接的时候，等别人接上再参与；'
+    + '但如果同一个人连发 ' + cs.minSolo + ' 条以上还没人理，可以接一句（给人兜底，不是常规）。'
+    + '拍一拍不算说话，不因为它开口。');
+  if (atMe) lines.push('这一拍里有 @ 你的消息 —— 那是点名找你，要回应。');
   return '\n\n' + lines.join('\n');
 }

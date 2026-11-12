@@ -19,6 +19,10 @@
 //   hourFactor 深夜（23-07 点）×0.5，其余 1。
 //   costFactor 当日成本越高越省（>100 元 ×0.7，>50 元 ×0.85）。
 //   missFactor 连续没被接话的拍数（每拍 -0.05，下限 0.5）。
+//   soloFactor 冷场首接（2026-11-12）：群里只有一个人在说、还没人接上 → ×soloWeight
+//              （默认 0.2）；同一人连发够多或已有第二人接上 → 1。与硬闸 analyzeTurn 同源。
+
+import { analyzeTurn } from './cold-start.js';
 
 /** 单条消息是否"像在提问"（不区分谁发的）。 */
 function looksLikeAsk(text) {
@@ -67,14 +71,28 @@ export function computeSignals(messages, env = {}) {
   const miss = Math.max(0, Number(env.missStreak) || 0);
   const missFactor = Math.max(0.5, 1 - miss * 0.05);
 
+  // 第七因子 · 冷场首接（2026-11-12）：与硬闸同源（cold-start.analyzeTurn）。
+  // 硬闸开着时 hold 的拍根本走不到这里；硬闸关闭（coldStart.enabled=false）时它是概率兜底。
+  const turn = analyzeTurn(list, {
+    now: Number.isFinite(Number(env.now)) ? Number(env.now) : Date.now(),
+    windowMs: env.windowMs,
+    gapMs: env.gapMs,
+    minSolo: env.minSolo
+  });
+  const soloWeight = Number(env.soloWeight);
+  const soloFactor = turn.hold
+    ? Math.min(1, Math.max(0.05, Number.isFinite(soloWeight) && soloWeight > 0 ? soloWeight : 0.2))
+    : 1;
+
   return {
     total, self, at, ask, share, atRate, askDensity,
-    shareFactor, atFactor, askFactor, hourFactor, costFactor, missFactor
+    shareFactor, atFactor, askFactor, hourFactor, costFactor, missFactor,
+    soloFactor, soloCount: turn.solo, soloReason: turn.reason
   };
 }
 
 /**
- * 乘性合成：几何平均（六项等权），下限 floor。
+ * 乘性合成：几何平均（六项等权），下限 floor；第七因子（冷场首接）在外层单独乘。
  *
  * floor 取值按**实测量级**定（B31 判据 3）：六因子几何平均的最坏组合
  * （share 0.5 · hour 0.5 · cost 0.7 · miss 0.5，at / ask 取 1）= 0.666；
@@ -96,7 +114,12 @@ export function compositeCoefficient(sig, floor = 0.65) {
   const prod = f.reduce((a, b) => a * b, 1);
   const geo = Math.pow(prod, 1 / f.length);
   const lo = Number.isFinite(Number(floor)) ? Number(floor) : 0.15;
-  return Math.min(1.15, Math.max(lo, geo));
+  const base = Math.min(1.15, Math.max(lo, geo));
+  // 第七因子（冷场首接）单独乘在结果上：不参与几何平均 —— 等权会被其余六项稀释，
+  // 压完再被 floor 兜回去，等于没压。冷场是「这一拍基本不该开口」，不是微调。
+  const solo = Number(sig && sig.soloFactor);
+  const s = Number.isFinite(solo) && solo > 0 ? Math.min(1, solo) : 1;
+  return Math.min(1.15, Math.max(0.05, base * s));
 }
 
 /** 采集用的一行摘要（写进 engage-metrics，字段短便于 grep）。 */
@@ -110,6 +133,8 @@ export function signalSummary(sig, coef) {
     hourFactor: sig.hourFactor,
     costFactor: sig.costFactor,
     missFactor: sig.missFactor,
+    soloFactor: sig.soloFactor,
+    solo: sig.soloCount,
     coef: Math.round(Number(coef) * 1000) / 1000
   };
 }

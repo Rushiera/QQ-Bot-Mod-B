@@ -109,7 +109,7 @@ export function levelHint(chatKey) {
   const p = paramsFor(chatKey);
   if (p.organizeOnly) {
     return '\n\n【发言档位】本群是冰封档（' + p.level + '/' + p.levelCount + '）：默认不参与闲聊，'
-      + '只有被 @ / 拍一拍 点名时才回应；系统会定时做一次"只整理不发言"的记忆沉淀（存档与记忆照常）。'
+      + '只有被 @ 点名时才回应（拍一拍不算，不因为它开口）；系统会定时做一次"只整理不发言"的记忆沉淀（存档与记忆照常）。'
       + '被点名时正常回应即可，其余时候安静看就好。';
   }
   if (p.rate >= 1) return '';

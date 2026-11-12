@@ -345,11 +345,10 @@ export function settleRapportWatch(chatKey, entries, ctx = {}) {
   return { settled: true, hit, userId: rec.userId, delta: r ? r.delta : 0, score: r ? r.after : null };
 }
 
-/** 这批消息里有没有人明确指向我（@ / 引用 / 拍一拍）。 */
+/** 这批消息里有没有人明确指向我（@ / 引用）。拍一拍不算（2026-11-12：无信息，不构成回应）。 */
 function pointsAtMe(m, { selfId = '', selfNickname = '', botName = '' } = {}) {
   if (!m || m.self) return false;
   if (m.atMe === true) return true;
-  if (m.isPoke && /拍了拍\s*我/.test(String(m.text ?? ''))) return true;
   const r = m.reply;
   // 引用我（[qqbotb-b33:reply-structured] · 2026-10-30）——
   // 判定键是**被引用者的 QQ 号**：结构化归档件由 app.js ingestMessage 写入，

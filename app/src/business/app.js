@@ -1085,9 +1085,9 @@ export function createApp({ log = console.log, eventSource = null } = {}) {
     const text = operatorId === targetId
       ? `[拍一拍] ${opWithId} 拍了拍自己`
       : `[拍一拍] ${opWithId} 拍了拍 ${tgtWithId}`;
-    // 拍一拍是"轻量召唤"信号：作为触发批发给模型（isPoke 标记让档位判定
-    // 按 1 档响应），但**不进【已读信息】历史**——buildPastState 会跳过 isPoke，
-    // 存档里只留一条轻量记录（聊天记录页仍可见，模型历史里不出现）。
+    // 拍一拍不是召唤（2026-11-12 Rushiera 定）：只拍不给信息，读不出意图 → 不回。
+    // 照常入库留痕（聊天记录页可见），但**不计未读、不立即触发、不进【已读信息】**——
+    // buildPastState 跳过 isPoke；等对方真正发言（有信息）后按正常节拍判定。
     const entry = store.appendIncoming(chatKeyNow, {
       mid: null,
       ts: event.time ? Math.round(Number(event.time) * 1000) : Date.now(),

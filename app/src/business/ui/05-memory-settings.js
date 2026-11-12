@@ -519,7 +519,7 @@ function openMemberImpressModal(chatKey, member) {
  * [qqagent-quiet-patch:ui-toggle-fn]
  *
  * 写进 config.engage.quiet.chats —— 该群"能不发言就不发言"：不参与闲聊，
- * 只有被 @ / 拍一拍 才回应；每 6 小时跑一次"只整理不发言"的记忆沉淀轮。
+ * 只有被 @ 才回应（拍一拍不算，2026-11-12）；每 6 小时跑一次"只整理不发言"的记忆沉淀轮。
  * 存档与记忆功能不受影响（消息照常入库、归档与记忆整理照常）。
  */
 /**

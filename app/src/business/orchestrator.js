@@ -68,6 +68,8 @@ import { record as recordEngage } from './engage-metrics.js';
 // 客观信号（六因子乘法修正）——[qqagent-level-patch:signals-import]
 // 2026-11-01 B31 甲案接线：此前三函数零消费方，改 enabled 是空操作。
 import { computeSignals, compositeCoefficient, signalSummary } from './engage-signals.js';
+// 冷场首接抑制（群里只有一个人在说、还没人接上 → 不当第一个接话的）——[qqagent-coldstart-patch:orchestrator-import]
+import { analyzeTurn, coldStartCfg, holdSummary } from './cold-start.js';
 // 节拍巡检的诊断必须能进日志文件 —— console 在 GUI 外壳（无控制台窗口）里看不见，
 // 巡检抛错会被 setInterval 的 catch 吞成"静默不工作"（判例：缺 decayBrowse 导入）。
 // [qqagent-browse-patch:orchestrator-logger-import]
@@ -292,15 +294,18 @@ export class Orchestrator {
     // ── 浏览节拍（[qqagent-browse-patch:orchestrator-onincoming]）──
     // 节拍模式下不再"逐条判定 + 立即唤醒"：消息只入库（保持未读），等节拍到点
     // 一次性交给模型。例外（立即触发，不等节拍）：私聊（1v1 本来就是发给它的）、
-    // 被 @ / 拍了拍（点名找你）。指令禁言期内不走节拍 —— 回 1 档语义。
+    // 被 @（点名找你）。拍一拍不触发（2026-11-12：只拍不给信息）。指令禁言期内不走节拍 —— 回 1 档语义。
     if (browseEnabled() && !browseMuted(chatKey)) {
       this.#ensureBrowseLoop();
       const isPrivate = String(chatKey).startsWith('private:');
       const browseCfg = getConfig().engage?.browse || {};
       const atMe = entry ? entry.atMe === true : false;
       const pokeMe = entry ? entry.isPoke === true : false;
+      // 拍一拍不立即触发（2026-11-12 Rushiera 定）：只拍不给信息 = 读不出意图，不回；
+      // 等对方真正发言（有信息）后按正常节拍判定。默认关，pokeImmediate=true 恢复旧行为。
+      const pokeImmediate = browseCfg.pokeImmediate === true;
       const immediate = (isPrivate && browseCfg.privateImmediate !== false)
-        || (!isPrivate && browseCfg.atMeImmediate !== false && (atMe || pokeMe));
+        || (!isPrivate && browseCfg.atMeImmediate !== false && (atMe || (pokeMe && pokeImmediate)));
       if (!immediate) {
         this.#noteBrowsePending(chatKey);
         return;
@@ -767,8 +772,8 @@ export class Orchestrator {
       selfNickname: String(rapportPersona.selfNickname || rapportPersona.botName || ''),
       botName: String(rapportPersona.botName || '')
     };
-    const atMeThisRound = (triggerEntries || []).some((m) => m
-      && (m.atMe === true || (m.isPoke && /拍了拍\s*我/.test(String(m.text ?? '')))));
+    // 被点名 = 只有真 @（拍一拍不算，2026-11-12）：拍一拍无信息，不计入"话落地了"。
+    const atMeThisRound = (triggerEntries || []).some((m) => m && m.atMe === true);
     const rapportTargetName = botLast ? String(botLast.senderName || '') : '';
     try {
       const settled = settleRapportWatch(chatKey, triggerEntries, rapportWatchCtx);
@@ -1163,9 +1168,8 @@ export class Orchestrator {
     // 浏览节拍提示（[qqagent-browse-patch:orchestrator-hint-def]）—— 与配额同段：
     // 都是"本轮动态状态"，追加在用户消息末尾（不打断缓存前缀）。
     // 升档时强调"额度没变、越热越要省着说" —— 节拍快 ≠ 能多说。
-    // 本轮是否被点名（@ 或拍一拍）——【群节奏】与【发言档位】共用同一判定。
-    const atMeRound = (triggerEntries || []).some((m) => m
-      && (m.atMe === true || (m.isPoke && /拍了拍\s*我/.test(String(m.text ?? '')))));
+    // 本轮是否被点名（只有真 @；拍一拍不算，2026-11-12）——【群节奏】与【发言档位】共用同一判定。
+    const atMeRound = (triggerEntries || []).some((m) => m && m.atMe === true);
     const browseLine = (() => {
       try {
         return browseHint(chatKey, { atMe: atMeRound });
@@ -1178,8 +1182,9 @@ export class Orchestrator {
     })();
     // 发言档位提示（[qqagent-level-patch:orchestrator-hint-def]）—— 与配额同段：
     // 冰封档已由 quietHint 覆盖，两者互斥（有 quietLine 就不再加 levelLine）。
-    // 🔴 点名轮不施加档位提示（Rushiera 2026-11-07 裁定）：被 @ / 拍一拍 就必须照常回，
+    // 🔴 点名轮不施加档位提示（Rushiera 2026-11-07 裁定）：被 @ 就必须照常回，
     // 冰封档也一样——档位只管「没被叫到时接不接」，不能稀释「点名必须回」这一条。
+    // 拍一拍不算点名（2026-11-12：只拍不给信息，不回应）。
     const levelLine = (() => {
       if (atMeRound) return '';
       try { return quietLine ? '' : levelHint(chatKey); } catch { return ''; }
@@ -2173,7 +2178,7 @@ export class Orchestrator {
    *
    * @returns {{enabled:boolean, coef:number, sig:object|null}}
    */
-  #signalCoefficient(chatKey) {
+  #signalCoefficient(chatKey, cold = null) {
     let cfg;
     try { cfg = getConfig().engage?.signals || {}; } catch { return { enabled: false, coef: 1, sig: null }; }
     if (cfg.enabled !== true) return { enabled: false, coef: 1, sig: null };
@@ -2181,10 +2186,19 @@ export class Orchestrator {
     try {
       let messages = [];
       try { messages = this.store.recent(chatKey, { limit: 80 }) || []; } catch { messages = []; }
+      // 冷场首接（第七因子）参数：硬闸只决定"看不看"，因子决定"看了之后的概率"——
+      // 硬闸关闭时因子仍在（概率兜底），所以这里不按 enabled 短路。
+      let coldCfg = cold;
+      if (!coldCfg) { try { coldCfg = coldStartCfg(getConfig().engage?.coldStart); } catch { coldCfg = null; } }
       const sig = computeSignals(messages, {
         hour: new Date().getHours(),
         costDay: this.#costDay(),
-        missStreak: this.missStreak.get(chatKey) || 0
+        missStreak: this.missStreak.get(chatKey) || 0,
+        now: Date.now(),
+        windowMs: coldCfg && coldCfg.windowMs,
+        gapMs: coldCfg && coldCfg.gapMs,
+        minSolo: coldCfg && coldCfg.minSolo,
+        soloWeight: coldCfg && coldCfg.soloWeight
       });
       return { enabled: true, coef: compositeCoefficient(sig, floor), sig };
     } catch (e) {
@@ -2231,6 +2245,9 @@ export class Orchestrator {
   #browseTick() {
     if (!browseEnabled() || this.paused || this.aborted) return;
     const now = Date.now();
+    // 冷场首接配置：每拍取一次（配置在内存，读的是当前生效值）；取不到就不拦。
+    let cold = { enabled: false, minSolo: 4, windowMs: 1800000, gapMs: 300000, soloWeight: 0.2 };
+    try { cold = coldStartCfg(getConfig().engage?.coldStart); } catch { /* 配置异常 → 不启用 */ }
     for (const chatKey of [...this.browseNextAt.keys()]) {
       // 升档有效期到期 → 降一档，并按新节拍重排（本拍不顺延处理）。
       const decay = decayBrowse(chatKey, now);
@@ -2269,6 +2286,24 @@ export class Orchestrator {
         continue;
       }
       if (unread <= 0) continue;   // 没人发言 → 不调 LLM
+      // ── 冷场首接抑制（[qqagent-coldstart-patch:browse-tick]）──
+      // 群里只有一个人在说、还没人接上之前，不当第一个接话的（拍一拍不算发言）。
+      // 例外：同一人连发 minSolo 条仍无人回应 / 话头已被第二人接上 / bot 刚说完话的延续。
+      // 命中 hold：不 wake、不推进已读（消息留到下一拍或对方再说）；同一批记一次补拍，
+      // 避免同一批每 60 秒重判一遍刷日志。位置在档位判定之前 —— 这是"该不该看"，
+      // 档位是"看了之后要不要入场"，两层正交，先判前者。
+      if (!quiet && cold.enabled) {
+        let recentForTurn = [];
+        try { recentForTurn = this.store.recent(chatKey, { limit: 60 }) || []; } catch { recentForTurn = []; }
+        const turn = analyzeTurn(recentForTurn, cold);
+        if (turn.hold) {
+          try { recordEngage({ chat: chatKey, event: 'hold', ...holdSummary(turn), unread }); } catch { /* 采集是旁路 */ }
+          if (idle) markIdleFired(chatKey, lastUnreadTs);
+          logger.info('engage', chatKey + ' 冷场首接抑制（单人独白 ' + turn.solo + ' 条 · 未达 '
+            + cold.minSolo + ' 条 · 无第二人接话）—— ' + unread + ' 条留存，等有人接上或对方再说');
+          continue;
+        }
+      }
       // ── 发言档位：参与率判定（[qqagent-level-patch:browse-tick-gate]）──
       // 有未读、到点，还要过一道"这一拍要不要入场"。未命中时**不 wake、不推进已读、
       // 不记静默补拍** —— 这批消息留在未读里等下一拍，内容一条不丢。
@@ -2278,7 +2313,7 @@ export class Orchestrator {
         // ── 客观信号接线（[qqagent-level-patch:signals-wiring] · B31 甲案）──
         // 档位 rate 只是"这个群爱说多少"的静态意愿；这一拍合不合适由六因子乘法修正。
         // 系数乘在 rate 上（rollParticipation 内部做），全开/冰封两端不受影响。
-        const sgn = this.#signalCoefficient(chatKey);
+        const sgn = this.#signalCoefficient(chatKey, cold);
         const r = rollParticipation(chatKey, Math.random, sgn.coef);
         try {
           recordEngage({ chat: chatKey, event: 'roll', level: p.level, baseRate: r.baseRate, rate: r.rate, coef: r.coef, roll: r.roll, hit: r.participate, unread, idle });
